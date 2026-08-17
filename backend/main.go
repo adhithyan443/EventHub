@@ -1,7 +1,15 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/adhithyan443/EventHub/backend/config"
+)
 
 func main() {
-	fmt.Println("EventHub backend started")
+
+	cfg := config.Load()
+
+	fmt.Printf("EventHub backend started on port %s\n", cfg.ServerPort)
+	fmt.Printf("Enviroment: %s\n", cfg.AppEnv)
 }
