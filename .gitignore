@@ -1,0 +1,27 @@
+# Environment variables
+.env
+.env.*
+
+# Go
+bin/
+tmp/
+*.exe
+*.test
+coverage.out
+coverage.html
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
