@@ -1,20 +1,54 @@
 package main
 
 import (
-	"fmt"
+	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/config"
+	"github.com/adhithyan443/EventHub/backend/internal/database"
+	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
+	"github.com/joho/godotenv"
 )
 
 func main() {
 
-	cfg := config.Load()
-	router := setupRouter()
+	logger := appLogger.New()
 
-	fmt.Printf("EventHub backend started on port %s\n", cfg.ServerPort)
-	fmt.Printf("Enviroment: %s\n", cfg.AppEnv)
-
-	if err := router.Run(":" + cfg.ServerPort); err != nil{
-		fmt.Printf("server failed to start: %v \n",err)
+	if err := godotenv.Load("../.env"); err != nil {
+		logger.Warn(" .env file not found, using environment variables")
 	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("configuration failed", "error", err)
+		return
+	}
+
+	db, err := database.Connect(cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("database connection failed", "error", err)
+		return
+	}
+
+	logger.Info("database connected successfully")
+
+	if err := database.Migrate(db); err != nil {
+		logger.Error("database migration failed", "error", err)
+		return
+	}
+
+	logger.Info("database migration completed")
+
+	router := setupRouter(logger)
+
+	logger.Info(
+		"EventHub backend started",
+		"port", cfg.ServerPort,
+		"environment", cfg.AppEnv,
+	)
+
+	if err := router.Run(":" + cfg.ServerPort); err != nil {
+		logger.Error("server failed to start", "error", err)
+	}
+
+	_ = slog.Default()
 }
