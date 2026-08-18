@@ -31,6 +31,13 @@ func main() {
 
 	logger.Info("database connected successfully")
 
+	if err := database.Migrate(db); err != nil {
+		logger.Error("database migration failed", "error", err)
+		return
+	}
+
+	logger.Info("database migration completed")
+
 	router := setupRouter(logger)
 
 	logger.Info(
@@ -42,6 +49,6 @@ func main() {
 	if err := router.Run(":" + cfg.ServerPort); err != nil {
 		logger.Error("server failed to start", "error", err)
 	}
-	_ = db
+
 	_ = slog.Default()
 }
