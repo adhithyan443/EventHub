@@ -28,9 +28,9 @@ func NewUnauthorizedError(message string) *AppError {
 
 func NewForbiddenError(message string) *AppError {
 	return &AppError{
-		Code:       "NOT_FOUND",
+		Code:       "FORBIDDEN",
 		Message:    message,
-		HTTPStatus: 404,
+		HTTPStatus: 403,
 	}
 }
 

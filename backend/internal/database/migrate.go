@@ -7,7 +7,7 @@ import (
 
 func Migrate(db *gorm.DB) error {
 	return db.AutoMigrate(
-		
+
 		&models.UserModel{},
 		&models.RefreshTokenModel{},
 		&models.PasswordResetTokenModel{},

@@ -86,7 +86,7 @@ func modelToUser(model *models.UserModel) domain.User {
 		Phone:        model.Phone,
 		PasswordHash: model.PasswordHash,
 		Role:         model.Role,
-		Status:        model.Status,
+		Status:       model.Status,
 		ProfileImage: model.ProfileImage,
 		CreatedAt:    model.CreatedAt,
 		UpdatedAt:    model.UpdatedAt,
