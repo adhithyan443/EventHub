@@ -12,19 +12,15 @@ type RefreshTokenRepository struct {
 }
 
 func NewRefreshTokenRepository(db *gorm.DB) *RefreshTokenRepository {
-	return &RefreshTokenRepository{db: db}
+	return &RefreshTokenRepository{
+		db: db,
+	}
 }
 
 func (r *RefreshTokenRepository) Create(token *domain.RefreshToken) error {
 	model := refreshTokenToModel(token)
 
-	if err := r.db.Create(&model).Error; err != nil {
-		return err
-	}
-
-	*token = modelToRefreshToken(&model)
-
-	return nil
+	return r.db.Create(&model).Error
 }
 
 func (r *RefreshTokenRepository) FindByTokenHash(hash string) (*domain.RefreshToken, error) {

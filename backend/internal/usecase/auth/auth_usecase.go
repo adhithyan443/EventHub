@@ -1,7 +1,12 @@
 package auth
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -14,17 +19,23 @@ import (
 )
 
 type AuthUsecase struct {
-	userRepo   domain.UserRepository
-	JWTService *token.JWTService
+	userRepo         domain.UserRepository
+	refreshTokenRepo domain.RefreshTokenRepository
+	jwtService       *token.JWTService
+	logger           *slog.Logger
 }
 
 func NewAuthUsecase(
 	userRepo domain.UserRepository,
+	refreshTokenRepo domain.RefreshTokenRepository,
 	jwtService *token.JWTService,
+	logger *slog.Logger,
 ) *AuthUsecase {
 	return &AuthUsecase{
-		userRepo:   userRepo,
-		JWTService: jwtService,
+		userRepo:         userRepo,
+		refreshTokenRepo: refreshTokenRepo,
+		jwtService:       jwtService,
+		logger:           logger,
 	}
 }
 
@@ -38,6 +49,21 @@ type RegisterInput struct {
 type LoginInput struct {
 	Email    string
 	Password string
+}
+
+func generateRefreshToken() (string, error) {
+	tokenBytes := make([]byte, 32)
+
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", err
+	}
+
+	return base64.RawURLEncoding.EncodeToString(tokenBytes), nil
+}
+
+func hashRefreshToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }
 
 func (u *AuthUsecase) Register(input RegisterInput) (*domain.User, error) {
@@ -101,37 +127,133 @@ func (u *AuthUsecase) Register(input RegisterInput) (*domain.User, error) {
 	return user, nil
 }
 
-func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, error) {
+func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, string, error) {
 
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 
 	if input.Email == "" || input.Password == "" {
-		return nil, "", appErrors.NewValidationError("email and password are required")
+		return nil, "", "", appErrors.NewValidationError("email and password are required")
 	}
 
 	user, err := u.userRepo.FindByEmail(input.Email)
 	if err != nil {
-		return nil, "", appErrors.NewUnauthorizedError("invalid email or password")
+		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
 	}
 
 	if user.Status != "ACTIVE" {
-		return nil, "", appErrors.NewUnauthorizedError("user account is not active")
+		return nil, "", "", appErrors.NewUnauthorizedError("user account is not active")
 	}
 	if err := bcrypt.CompareHashAndPassword(
 		[]byte(user.PasswordHash),
 		[]byte(input.Password),
 	); err != nil {
-		return nil, "", appErrors.NewUnauthorizedError("invalid email or password")
+		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
 	}
 
-	accessToken, err := u.JWTService.GenerateAccessToken(
+	accessToken, err := u.jwtService.GenerateAccessToken(
 		user.ID,
 		user.Role,
 	)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 
-	return user, accessToken, nil
+	rawRefreshToken, err := generateRefreshToken()
+	if err != nil {
+		return nil, "", "", err
+	}
 
+	refreshToken := &domain.RefreshToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: hashRefreshToken(rawRefreshToken),
+		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
+		CreatedAt: time.Now(),
+	}
+
+	if err := u.refreshTokenRepo.Create(refreshToken); err != nil {
+		return nil, "", "", err
+	}
+
+	u.logger.Info(
+		"user_login_success",
+		"user_id", user.ID,
+	)
+
+	return user, accessToken, rawRefreshToken, nil
+
+}
+
+type RefreshTokenInput struct {
+	RefreshToken string
+}
+
+func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, error) {
+	input.RefreshToken = strings.TrimSpace(input.RefreshToken)
+
+	if input.RefreshToken == "" {
+		return "", "", appErrors.NewValidationError("refresh token is required")
+	}
+
+	tokenHash := hashRefreshToken(input.RefreshToken)
+
+	storedToken, err := u.refreshTokenRepo.FindByTokenHash(tokenHash)
+	if err != nil {
+		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+	}
+
+	if storedToken.RevokedAt != nil {
+		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+	}
+
+	if time.Now().After(storedToken.ExpiresAt) {
+		return "", "", appErrors.NewUnauthorizedError("refresh token expired")
+	}
+
+	user, err := u.userRepo.FindByID(storedToken.UserID)
+	if err != nil {
+		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+	}
+
+	if user.Status != "ACTIVE" {
+		return "", "", appErrors.NewUnauthorizedError("user account is not active")
+	}
+
+	accessToken, err := u.jwtService.GenerateAccessToken(
+		user.ID,
+		user.Role,
+	)
+
+	if err != nil {
+		return "", "", err
+	}
+
+	if err := u.refreshTokenRepo.Revoke(storedToken.ID); err != nil {
+		return "", "", err
+	}
+	newRefreshToken, err := generateRefreshToken()
+	if err != nil {
+		return "", "", err
+	}
+
+	now := time.Now()
+
+	newToken := &domain.RefreshToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: hashRefreshToken(newRefreshToken),
+		ExpiresAt: now.Add(7 * 24 * time.Hour),
+		CreatedAt: now,
+	}
+
+	if err := u.refreshTokenRepo.Create(newToken); err != nil {
+		return "", "", err
+	}
+
+	u.logger.Info(
+		"refresh_token_rotated",
+		"user_id", user.ID,
+	)
+
+	return accessToken, newRefreshToken, nil
 }
