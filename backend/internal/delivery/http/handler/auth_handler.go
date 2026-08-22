@@ -77,7 +77,7 @@ func (h *AuthHandler) Login(ctx *gin.Context) {
 		return
 	}
 
-	user, accessToken, err := h.authUsecase.Login(auth.LoginInput{
+	user, accessToken, refreshToken, err := h.authUsecase.Login(auth.LoginInput{
 		Email:    req.Email,
 		Password: req.Password,
 	})
@@ -88,8 +88,9 @@ func (h *AuthHandler) Login(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{
-		"message":      "login successful",
-		"access_token": accessToken,
+		"message":       "login successful",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
 		"user": gin.H{
 			"id":       user.ID,
 			"fullName": user.FullName,
@@ -98,5 +99,37 @@ func (h *AuthHandler) Login(ctx *gin.Context) {
 			"role":     user.Role,
 			"status":   user.Status,
 		},
+	})
+}
+
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken" binding:"required"`
+}
+
+func (h *AuthHandler) RefreshToken(ctx *gin.Context) {
+	var req refreshTokenRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	accessToken, refreshToken, err := h.authUsecase.RefreshToken(
+		auth.RefreshTokenInput{
+			RefreshToken: req.RefreshToken,
+		},
+	)
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
 	})
 }
