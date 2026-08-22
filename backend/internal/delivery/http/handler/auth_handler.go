@@ -59,3 +59,44 @@ func (h *AuthHandler) Register(ctx *gin.Context) {
 		},
 	})
 }
+
+type loginRequest struct {
+	Email    string `json:"email" binding:"required,email"`
+	Password string `json:"password",binding:"required"`
+}
+
+func (h *AuthHandler) Login(ctx *gin.Context) {
+
+	var req loginRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	user, accessToken, err := h.authUsecase.Login(auth.LoginInput{
+		Email:    req.Email,
+		Password: req.Password,
+	})
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message":      "login successful",
+		"access_token": accessToken,
+		"user": gin.H{
+			"id":       user.ID,
+			"fullName": user.FullName,
+			"email":    user.Email,
+			"phone":    user.Phone,
+			"role":     user.Role,
+			"status":   user.Status,
+		},
+	})
+}

@@ -7,18 +7,24 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
+	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 type AuthUsecase struct {
-	userRepo domain.UserRepository
+	userRepo   domain.UserRepository
+	JWTService *token.JWTService
 }
 
-func NewAuthUsecase(userRepo domain.UserRepository) *AuthUsecase {
+func NewAuthUsecase(
+	userRepo domain.UserRepository,
+	jwtService *token.JWTService,
+) *AuthUsecase {
 	return &AuthUsecase{
-		userRepo: userRepo,
+		userRepo:   userRepo,
+		JWTService: jwtService,
 	}
 }
 
@@ -29,10 +35,10 @@ type RegisterInput struct {
 	Phone    string
 }
 
-// type LoginInput struct{
-// 	Email string
-// 	Password string
-// }
+type LoginInput struct {
+	Email    string
+	Password string
+}
 
 func (u *AuthUsecase) Register(input RegisterInput) (*domain.User, error) {
 
@@ -95,21 +101,37 @@ func (u *AuthUsecase) Register(input RegisterInput) (*domain.User, error) {
 	return user, nil
 }
 
-// func (u *AuthUsecase) Login(email, password string)(error){
+func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, error) {
 
-// 	email = strings.ToLower(strings.TrimSpace(email));
-// 	password = strings.TrimSpace(password)
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 
-// 	user,err := u.userRepo.FindByEmail(email);
+	if input.Email == "" || input.Password == "" {
+		return nil, "", appErrors.NewValidationError("email and password are required")
+	}
 
-// 	if err != nil {
-// 		return appErrors.NewValidationError("invalid email or password")
-// 	}
+	user, err := u.userRepo.FindByEmail(input.Email)
+	if err != nil {
+		return nil, "", appErrors.NewUnauthorizedError("invalid email or password")
+	}
 
-// 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash),[]byte(password))
+	if user.Status != "ACTIVE" {
+		return nil, "", appErrors.NewUnauthorizedError("user account is not active")
+	}
+	if err := bcrypt.CompareHashAndPassword(
+		[]byte(user.PasswordHash),
+		[]byte(input.Password),
+	); err != nil {
+		return nil, "", appErrors.NewUnauthorizedError("invalid email or password")
+	}
 
-// 	if err != nil{
-// 		return appErrors.NewValidationError("invalid password")
-// 	}
+	accessToken, err := u.JWTService.GenerateAccessToken(
+		user.ID,
+		user.Role,
+	)
+	if err != nil {
+		return nil, "", err
+	}
 
-// }
+	return user, accessToken, nil
+
+}

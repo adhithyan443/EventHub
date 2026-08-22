@@ -9,6 +9,7 @@ type Config struct {
 	ServerPort  string
 	AppEnv      string
 	DatabaseURL string
+	JWTSecret   string
 }
 
 func Load() (Config, error) {
@@ -18,10 +19,16 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	jwtSecret, err := requiredEnv("JWT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
 		DatabaseURL: databaseURL,
+		JWTSecret:   jwtSecret,
 	}, nil
 }
 
