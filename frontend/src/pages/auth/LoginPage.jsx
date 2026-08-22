@@ -3,6 +3,7 @@ import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
 import Button from "../../components/ui/Button";
 import GoogleIcon from "../../components/ui/GoogleIcon";
+import { Link } from "react-router-dom";
 
 export default function LoginPage() {
     const [form, setForm] = useState({ email: "", password: "" });
@@ -31,7 +32,10 @@ export default function LoginPage() {
     }
 
     return (
-        <AuthLayout>
+        <AuthLayout
+            title={<>Discover.<br />Book.<br />Experience.</>}
+            description="Find amazing events, book your tickets, and create unforgettable experiences with EventHub."
+        >
             <div className="bg-white rounded-lg shadow p-8 w-full max-w-md flex flex-col gap-6">
                 <div>
                     <h2 className="font-display text-2xl font-semibold text-ink">
@@ -82,9 +86,9 @@ export default function LoginPage() {
 
                 <p className="text-center text-sm text-ink/60">
                     Don't have an account?{" "}
-                    <a href="/register" className="text-primary font-semibold">
+                    <Link to="/register" className="text-primary font-semibold">
                         Create an account
-                    </a>
+                    </Link>
                 </p>
             </div>
         </AuthLayout>
