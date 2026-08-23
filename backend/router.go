@@ -37,6 +37,7 @@ func setupRouter(
 	auth.POST("/register", authHandler.Register)
 	auth.POST("/login", authHandler.Login)
 	auth.POST("/refresh-token", authHandler.RefreshToken)
+	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
 
 	protected := api.Group("/protected")
 	protected.Use(middleware.Auth(jwtService))

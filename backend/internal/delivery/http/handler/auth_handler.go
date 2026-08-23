@@ -3,8 +3,10 @@ package handler
 import (
 	"net/http"
 
+	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 type AuthHandler struct {
@@ -62,7 +64,7 @@ func (h *AuthHandler) Register(ctx *gin.Context) {
 
 type loginRequest struct {
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password",binding:"required"`
+	Password string `json:"password" binding:"required"`
 }
 
 func (h *AuthHandler) Login(ctx *gin.Context) {
@@ -131,5 +133,47 @@ func (h *AuthHandler) RefreshToken(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
+	})
+}
+
+type logoutRequest struct {
+	RefreshToken string `json:"refreshToken" binding:"required"`
+}
+
+func (h *AuthHandler) Logout(ctx *gin.Context) {
+	var req logoutRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	userIDvalue, exists := ctx.Get("user_id")
+	if !exists {
+		ctx.Error(appErrors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+
+	userID, ok := userIDvalue.(uuid.UUID)
+	if !ok {
+		ctx.Error(appErrors.NewUnauthorizedError("invalid user identity"))
+		return
+	}
+
+	if err := h.authUsecase.Logout(
+		userID,
+		auth.LogoutInput{
+			RefreshToken: req.RefreshToken,
+		},
+	); err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "logout successful",
 	})
 }

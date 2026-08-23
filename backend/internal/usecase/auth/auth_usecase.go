@@ -257,3 +257,42 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 
 	return accessToken, newRefreshToken, nil
 }
+
+type LogoutInput struct {
+	RefreshToken string
+}
+
+func (u *AuthUsecase) Logout(userID uuid.UUID, input LogoutInput) error {
+	input.RefreshToken = strings.TrimSpace(input.RefreshToken)
+
+	if input.RefreshToken == "" {
+		return appErrors.NewValidationError("refresh token is required")
+	}
+
+	tokenHash := hashRefreshToken(input.RefreshToken)
+
+	storedToken, err := u.refreshTokenRepo.FindByTokenHash(tokenHash)
+	if err != nil {
+		return appErrors.NewUnauthorizedError("invalid refresh token")
+	}
+
+	if storedToken.UserID != userID {
+		return appErrors.NewUnauthorizedError("invalid refresh token")
+	}
+
+	if storedToken.RevokedAt != nil { // Prevent logging out an already revoked session.
+		return appErrors.NewUnauthorizedError("invalid refresh token")
+	}
+
+	if err := u.refreshTokenRepo.Revoke(storedToken.ID); err != nil {
+		return err
+	}
+
+	u.logger.Info(
+		"user_logout_success",
+		"user_id", userID,
+		"refresh_token_id", storedToken.ID,
+	)
+
+	return nil
+}
