@@ -39,18 +39,33 @@ func (s *SMTPEmailService) SendOTP(to string, otp string) error {
 		s.host,
 	)
 
-	subject := "Your EventHub verification code"
+	subject := "EventHub - Verify Your Email Address"
 
-	body := fmt.Sprintf(
-		"Your EventHub verification code is: %s\n\nThis code will expire in 10 minutes.",
-		otp,
-	)
+	body := fmt.Sprintf(`Hello,
+
+Thank you for registering with EventHub!
+
+To complete your registration and verify your email address, please use the following verification code:
+
+%s
+
+This verification code is valid for 10 minutes.
+
+For your security, please do not share this code with anyone. EventHub will never ask you for your verification code.
+
+If you did not create an EventHub account, you can safely ignore this email.
+
+Best regards,
+The EventHub Team
+`, otp)
 
 	message := []byte(
 		fmt.Sprintf(
-			"From: %s\r\n"+
+			"From: EventHub <%s>\r\n"+
 				"To: %s\r\n"+
 				"Subject: %s\r\n"+
+				"MIME-Version: 1.0\r\n"+
+				"Content-Type: text/plain; charset=UTF-8\r\n"+
 				"\r\n"+
 				"%s",
 			s.from,
