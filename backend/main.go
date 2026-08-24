@@ -8,6 +8,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
+	"github.com/adhithyan443/EventHub/backend/internal/service/email"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/joho/godotenv"
@@ -45,14 +46,22 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	txManagerRepo := repository.NewTransactionManager(db)
+	txManager := repository.NewTransactionManager(db)
 
+	emailService := email.NewSMTPEmailService(
+		cfg.SMTHost,
+		cfg.SMTPPort,
+		cfg.SMTPUsername,
+		cfg.SMTPPassword,
+		cfg.SMTPFrom,
+	)
 	authUsecase := auth.NewAuthUsecase(
 		userRepo,
 		pendingRegistrationRepo,
 		refreshTokenRepo,
 		jwtService,
-		txManagerRepo,
+		txManager,
+		emailService,
 		logger,
 	)
 

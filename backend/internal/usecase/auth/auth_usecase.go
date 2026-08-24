@@ -24,6 +24,7 @@ type AuthUsecase struct {
 	refreshTokenRepo        domain.RefreshTokenRepository
 	jwtService              *token.JWTService
 	txManager               domain.TransactionManager
+	emailService            domain.EmailService
 	logger                  *slog.Logger
 }
 
@@ -33,6 +34,7 @@ func NewAuthUsecase(
 	refreshTokenRepo domain.RefreshTokenRepository,
 	jwtService *token.JWTService,
 	txManager domain.TransactionManager,
+	emailService domain.EmailService,
 	logger *slog.Logger,
 ) *AuthUsecase {
 	return &AuthUsecase{
@@ -41,6 +43,7 @@ func NewAuthUsecase(
 		pendingRegistrationRepo: pendingRegistrationRepo,
 		jwtService:              jwtService,
 		txManager:               txManager,
+		emailService:            emailService,
 		logger:                  logger,
 	}
 }
@@ -123,7 +126,7 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 
 		otpHash := hashOTP(otp)
 
-		u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
+		// u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
 
 		now := time.Now()
 
@@ -138,6 +141,20 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
 			return err
 		}
+
+		if err := u.emailService.SendOTP(input.Email, otp); err != nil {
+			u.logger.Error(
+				"otp_email_send_failed",
+				"email", input.Email,
+				"error", err,
+			)
+			return err
+		}
+
+		u.logger.Info(
+			"otp_email_sent",
+			"email", input.Email,
+		)
 
 		u.logger.Info(
 			"registration_verification_renewed",
@@ -157,7 +174,7 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 	}
 
 	otpHash := hashOTP(otp)
-	u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
+	// u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
 
 	now := time.Now()
 
@@ -177,6 +194,20 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 	if err := u.pendingRegistrationRepo.Create(pendingRegistration); err != nil {
 		return err
 	}
+
+	if err := u.emailService.SendOTP(input.Email, otp); err != nil {
+		u.logger.Error(
+			"otp_email_send_failed",
+			"email", input.Email,
+			"error", err,
+		)
+		return err
+	}
+
+	u.logger.Info(
+		"otp_email_sent",
+		"email", input.Email,
+	)
 
 	u.logger.Info(
 		"registration_verification_created",
