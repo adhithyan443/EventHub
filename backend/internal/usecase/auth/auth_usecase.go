@@ -23,15 +23,24 @@ type AuthUsecase struct {
 	pendingRegistrationRepo domain.PendingRegistrationRepository
 	refreshTokenRepo        domain.RefreshTokenRepository
 	jwtService              *token.JWTService
+	txManager               domain.TransactionManager
 	logger                  *slog.Logger
 }
 
-func NewAuthUsecase(userRepo domain.UserRepository, pendingRegistrationRepo domain.PendingRegistrationRepository, refreshTokenRepo domain.RefreshTokenRepository, jwtService *token.JWTService, logger *slog.Logger) *AuthUsecase {
+func NewAuthUsecase(
+	userRepo domain.UserRepository,
+	pendingRegistrationRepo domain.PendingRegistrationRepository,
+	refreshTokenRepo domain.RefreshTokenRepository,
+	jwtService *token.JWTService,
+	txManager domain.TransactionManager,
+	logger *slog.Logger,
+) *AuthUsecase {
 	return &AuthUsecase{
 		userRepo:                userRepo,
 		refreshTokenRepo:        refreshTokenRepo,
 		pendingRegistrationRepo: pendingRegistrationRepo,
 		jwtService:              jwtService,
+		txManager:               txManager,
 		logger:                  logger,
 	}
 }
@@ -412,17 +421,27 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 		UpdatedAt:    time.Now(),
 	}
 
-	if err := u.userRepo.Create(newUser); err != nil {
-		return nil, err
-	}
+	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
 
-	if err := u.pendingRegistrationRepo.Delete(pendingRegistration.ID); err != nil{
+		if err := tx.UserRepository().Create(newUser); err != nil {
+			return err
+		}
+
+		if err := tx.PendingRegistrationRepository().Delete(pendingRegistration.ID); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
 		u.logger.Error(
-			"pending_registration_cleanup_failed",
+			"user_registration_verification_failed",
 			"registration_id", pendingRegistration.ID,
-			"user_id", newUser.ID,
-			"error",err,
+			"error", err,
 		)
+
+		return nil, err
 	}
 
 	u.logger.Info(
@@ -430,5 +449,5 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 		"user_id", newUser.ID,
 	)
 
-	return newUser,nil
+	return newUser, nil
 }

@@ -45,15 +45,16 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	
+	txManagerRepo := repository.NewTransactionManager(db)
+
 	authUsecase := auth.NewAuthUsecase(
 		userRepo,
 		pendingRegistrationRepo,
 		refreshTokenRepo,
 		jwtService,
+		txManagerRepo,
 		logger,
 	)
-
 
 	authHandler := handler.NewAuthHandler(authUsecase)
 
