@@ -9,6 +9,7 @@ import GoogleIcon from "../../components/ui/GoogleIcon";
 import { Link } from "react-router-dom";
 
 export default function RegisterPage() {
+    // const navigate = useNavigate();
     const [form, setForm] = useState({
         fullName: "",
         email: "",
@@ -42,6 +43,7 @@ export default function RegisterPage() {
         if (Object.keys(newErrors).length === 0) {
             console.log("Would submit:", form);
         }
+        // navigate("/verify-otp")
     }
 
     return (
@@ -106,7 +108,9 @@ export default function RegisterPage() {
                         I agree to the <a href="/terms" className="text-primary font-medium">Terms of Service</a> and{" "}
                         <a href="/privacy" className="text-primary font-medium">Privacy Policy</a>.
                     </Checkbox>
-                    <Button type="submit">Create Account</Button>
+                    
+                        <Button type="submit">Create Account</Button>
+                    
                 </form>
 
                 <div className="flex items-center gap-4">
