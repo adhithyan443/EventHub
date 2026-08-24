@@ -35,6 +35,7 @@ func setupRouter(
 
 	auth := api.Group("/auth")
 	auth.POST("/register", authHandler.Register)
+	auth.POST("/verify-otp", authHandler.VerifyOTP)
 	auth.POST("/login", authHandler.Login)
 	auth.POST("/refresh-token", authHandler.RefreshToken)
 	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)

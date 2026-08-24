@@ -44,7 +44,17 @@ func main() {
 
 	userRepo := repository.NewUserRepository(db)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
-	authUsecase := auth.NewAuthUsecase(userRepo, refreshTokenRepo, jwtService, logger)
+	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
+	
+	authUsecase := auth.NewAuthUsecase(
+		userRepo,
+		pendingRegistrationRepo,
+		refreshTokenRepo,
+		jwtService,
+		logger,
+	)
+
+
 	authHandler := handler.NewAuthHandler(authUsecase)
 
 	logger.Info("database migration completed")

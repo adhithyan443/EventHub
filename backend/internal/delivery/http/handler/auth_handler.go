@@ -37,7 +37,7 @@ func (h *AuthHandler) Register(ctx *gin.Context) {
 		return
 	}
 
-	user, err := h.authUsecase.Register(auth.RegisterInput{
+	err := h.authUsecase.Register(auth.RegisterInput{
 		FullName: req.FullName,
 		Email:    req.Email,
 		Password: req.Password,
@@ -49,17 +49,11 @@ func (h *AuthHandler) Register(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusCreated, gin.H{
-		"message": "user registered successfully",
-		"user": gin.H{
-			"id":       user.ID,
-			"fullName": user.FullName,
-			"email":    user.Email,
-			"phone":    user.Phone,
-			"role":     user.Role,
-			"status":   user.Status,
-		},
-	})
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "verification OTP sent",
+		"email":   req.Email,
+	},
+	)
 }
 
 type loginRequest struct {
@@ -175,5 +169,44 @@ func (h *AuthHandler) Logout(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"message": "logout successful",
+	})
+}
+
+type verifyOTPRequest struct {
+	Email string `json:"email" binding:"required,email"`
+	OTP   string `json:"otp" binding:"required,len=6"`
+}
+
+func (h *AuthHandler) VerifyOTP(ctx *gin.Context) {
+	var req verifyOTPRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	user, err := h.authUsecase.VerifyOTP(auth.VerifyOTPInput{
+		Email: req.Email,
+		OTP:   req.OTP,
+	})
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "registration verified successfully",
+		"user": gin.H{
+			"id":       user.ID,
+			"fullName": user.FullName,
+			"email":    user.Email,
+			"phone":    user.Phone,
+			"role":     user.Role,
+			"status":   user.Status,
+		},
 	})
 }
