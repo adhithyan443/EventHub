@@ -10,6 +10,12 @@ type Config struct {
 	AppEnv      string
 	DatabaseURL string
 	JWTSecret   string
+
+	SMTHost      string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
 }
 
 func Load() (Config, error) {
@@ -24,11 +30,42 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	smtpHost, err := requiredEnv("SMTP_HOST")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpPort, err := requiredEnv("SMTP_PORT")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpUsername, err := requiredEnv("SMTP_USERNAME")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpPassword, err := requiredEnv("SMTP_PASSWORD")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpFrom, err := requiredEnv("SMTP_FROM")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
 		DatabaseURL: databaseURL,
 		JWTSecret:   jwtSecret,
+
+		SMTHost:      smtpHost,
+		SMTPPort:     smtpPort,
+		SMTPUsername: smtpUsername,
+		SMTPPassword: smtpPassword,
+		SMTPFrom:     smtpFrom,
 	}, nil
 }
 

@@ -19,23 +19,32 @@ import (
 )
 
 type AuthUsecase struct {
-	userRepo         domain.UserRepository
-	refreshTokenRepo domain.RefreshTokenRepository
-	jwtService       *token.JWTService
-	logger           *slog.Logger
+	userRepo                domain.UserRepository
+	pendingRegistrationRepo domain.PendingRegistrationRepository
+	refreshTokenRepo        domain.RefreshTokenRepository
+	jwtService              *token.JWTService
+	txManager               domain.TransactionManager
+	emailService            domain.EmailService
+	logger                  *slog.Logger
 }
 
 func NewAuthUsecase(
 	userRepo domain.UserRepository,
+	pendingRegistrationRepo domain.PendingRegistrationRepository,
 	refreshTokenRepo domain.RefreshTokenRepository,
 	jwtService *token.JWTService,
+	txManager domain.TransactionManager,
+	emailService domain.EmailService,
 	logger *slog.Logger,
 ) *AuthUsecase {
 	return &AuthUsecase{
-		userRepo:         userRepo,
-		refreshTokenRepo: refreshTokenRepo,
-		jwtService:       jwtService,
-		logger:           logger,
+		userRepo:                userRepo,
+		refreshTokenRepo:        refreshTokenRepo,
+		pendingRegistrationRepo: pendingRegistrationRepo,
+		jwtService:              jwtService,
+		txManager:               txManager,
+		emailService:            emailService,
+		logger:                  logger,
 	}
 }
 
@@ -66,36 +75,36 @@ func hashRefreshToken(token string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func (u *AuthUsecase) Register(input RegisterInput) (*domain.User, error) {
+func (u *AuthUsecase) Register(input RegisterInput) error {
 
 	input.FullName = strings.TrimSpace(input.FullName)
 	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
 	input.Phone = strings.TrimSpace(input.Phone)
 
 	if input.FullName == "" {
-		return nil, appErrors.NewValidationError("full name is required")
+		return appErrors.NewValidationError("full name is required")
 	}
 
 	if input.Email == "" {
-		return nil, appErrors.NewValidationError("email is required")
+		return appErrors.NewValidationError("email is required")
 	}
 
 	if input.Password == "" {
-		return nil, appErrors.NewValidationError("password is required")
+		return appErrors.NewValidationError("password is required")
 	}
 
 	if input.Phone == "" {
-		return nil, appErrors.NewValidationError("phone is required")
+		return appErrors.NewValidationError("phone is required")
 	}
 
 	existingUser, err := u.userRepo.FindByEmail(input.Email)
 
 	if err == nil && existingUser != nil {
-		return nil, appErrors.NewConflictError("email already exists")
+		return appErrors.NewConflictError("email already exists")
 	}
 
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
+		return err
 	}
 
 	passwordHash, err := bcrypt.GenerateFromPassword(
@@ -103,28 +112,109 @@ func (u *AuthUsecase) Register(input RegisterInput) (*domain.User, error) {
 		bcrypt.DefaultCost,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
+
+	pendingRegistration, err := u.pendingRegistrationRepo.FindByEmail(input.Email)
+
+	if err == nil && pendingRegistration != nil {
+
+		otp, err := generateOTP()
+		if err != nil {
+			return err
+		}
+
+		otpHash := hashOTP(otp)
+
+		// u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
+
+		now := time.Now()
+
+		pendingRegistration.FullName = input.FullName
+		pendingRegistration.Phone = input.Phone
+		pendingRegistration.PasswordHash = string(passwordHash)
+		pendingRegistration.OTPHash = otpHash
+		pendingRegistration.OTPExpiresAt = now.Add(10 * time.Minute)
+		pendingRegistration.OTPAttempts = 0
+		pendingRegistration.UpdatedAt = now
+
+		if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
+			return err
+		}
+
+		if err := u.emailService.SendOTP(input.Email, otp); err != nil {
+			u.logger.Error(
+				"otp_email_send_failed",
+				"email", input.Email,
+				"error", err,
+			)
+			return err
+		}
+
+		u.logger.Info(
+			"otp_email_sent",
+			"email", input.Email,
+		)
+
+		u.logger.Info(
+			"registration_verification_renewed",
+			"registration_id", pendingRegistration.ID,
+		)
+
+		return nil
+	}
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	otp, err := generateOTP()
+	if err != nil {
+		return err
+	}
+
+	otpHash := hashOTP(otp)
+	// u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
 
 	now := time.Now()
 
-	user := &domain.User{
+	pendingRegistration = &domain.PendingRegistration{
 		ID:           uuid.New(),
 		FullName:     input.FullName,
 		Email:        input.Email,
 		Phone:        input.Phone,
 		PasswordHash: string(passwordHash),
-		Role:         "Customer",
-		Status:       "ACTIVE",
+		OTPHash:      otpHash,
+		OTPExpiresAt: now.Add(10 * time.Minute),
+		OTPAttempts:  0,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
 
-	if err := u.userRepo.Create(user); err != nil {
-		return nil, err
+	if err := u.pendingRegistrationRepo.Create(pendingRegistration); err != nil {
+		return err
 	}
 
-	return user, nil
+	if err := u.emailService.SendOTP(input.Email, otp); err != nil {
+		u.logger.Error(
+			"otp_email_send_failed",
+			"email", input.Email,
+			"error", err,
+		)
+		return err
+	}
+
+	u.logger.Info(
+		"otp_email_sent",
+		"email", input.Email,
+	)
+
+	u.logger.Info(
+		"registration_verification_created",
+		"registration_id", pendingRegistration.ID,
+	)
+
+	return nil
 }
 
 func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, string, error) {
@@ -295,4 +385,100 @@ func (u *AuthUsecase) Logout(userID uuid.UUID, input LogoutInput) error {
 	)
 
 	return nil
+}
+
+const maxOTPAttempts = 5
+
+type VerifyOTPInput struct {
+	Email string
+	OTP   string
+}
+
+func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
+
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	input.OTP = strings.TrimSpace(input.OTP)
+
+	if input.Email == "" {
+		return nil, appErrors.NewValidationError("email is required")
+	}
+
+	if input.OTP == "" {
+		return nil, appErrors.NewValidationError("otp is required")
+	}
+
+	pendingRegistration, err := u.pendingRegistrationRepo.FindByEmail(input.Email)
+	if err != nil {
+		return nil, appErrors.NewValidationError("invalid or expired verification code")
+	}
+
+	if pendingRegistration.OTPAttempts >= maxOTPAttempts {
+		return nil, appErrors.NewValidationError("invalid or expired verification code")
+	}
+
+	if time.Now().After(pendingRegistration.OTPExpiresAt) {
+		return nil, appErrors.NewValidationError("invalid or expired verification code")
+	}
+
+	submittedOTPHash := hashOTP(input.OTP)
+
+	if submittedOTPHash != pendingRegistration.OTPHash {
+
+		pendingRegistration.OTPAttempts += 1
+		pendingRegistration.UpdatedAt = time.Now()
+
+		if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
+			return nil, err
+		}
+
+		u.logger.Warn(
+			"otp_verification_failed",
+			"registration_id", pendingRegistration.ID,
+			"attempts", pendingRegistration.OTPAttempts,
+		)
+		return nil, appErrors.NewValidationError("invalid or expired verification code")
+
+	}
+
+	newUser := &domain.User{
+		ID:           uuid.New(),
+		FullName:     pendingRegistration.FullName,
+		Email:        pendingRegistration.Email,
+		Phone:        pendingRegistration.Phone,
+		PasswordHash: pendingRegistration.PasswordHash,
+		Role:         "CUSTOMER",
+		Status:       "ACTIVE",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
+	}
+
+	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+
+		if err := tx.UserRepository().Create(newUser); err != nil {
+			return err
+		}
+
+		if err := tx.PendingRegistrationRepository().Delete(pendingRegistration.ID); err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		u.logger.Error(
+			"user_registration_verification_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	u.logger.Info(
+		"user_registration_verified",
+		"user_id", newUser.ID,
+	)
+
+	return newUser, nil
 }
