@@ -248,7 +248,6 @@ type resetPasswordRequest struct {
 
 func (h *AuthHandler) ResetPassword(ctx *gin.Context) {
 	var req resetPasswordRequest
-	
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{
@@ -270,5 +269,39 @@ func (h *AuthHandler) ResetPassword(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"message": "password has been reset successfully",
+	})
+}
+
+func (h *AuthHandler) GoogleLogin(ctx *gin.Context) {
+	state := "eventhub-google-login"
+
+	authURL := h.authUsecase.GetGoogleAuthURL(state)
+
+	ctx.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
+func (h *AuthHandler) GoogleCallback(ctx *gin.Context) {
+	code := ctx.Query("code")
+
+	user, accessToken, refreshToken, err :=
+		h.authUsecase.HandleGoogleCallback(code)
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message":       "google login successful",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"user": gin.H{
+			"id":       user.ID,
+			"fullName": user.FullName,
+			"email":    user.Email,
+			"phone":    user.Phone,
+			"role":     user.Role,
+			"status":   user.Status,
+		},
 	})
 }

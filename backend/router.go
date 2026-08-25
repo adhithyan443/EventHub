@@ -41,9 +41,11 @@ func setupRouter(
 	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
 	auth.POST("/forgot-password", authHandler.ForgotPassword)
 	auth.POST("/reset-password", authHandler.ResetPassword)
+	auth.GET("/google", authHandler.GoogleLogin)
+	auth.GET("/google/callback", authHandler.GoogleCallback)
 
 	protected := api.Group("/protected")
-	
+
 	protected.Use(middleware.Auth(jwtService))
 
 	protected.GET("/test", func(ctx *gin.Context) {
