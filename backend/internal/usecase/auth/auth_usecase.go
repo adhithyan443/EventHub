@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+
 	"strings"
 	"time"
 
@@ -540,6 +541,86 @@ func (u *AuthUsecase) ForgotPassword(input ForgotPasswordInput) error {
 
 	u.logger.Info(
 		"password_reset_requested",
+		"user_id", user.ID,
+	)
+
+	return nil
+}
+
+type ResetPasswordInput struct {
+	Token       string
+	NewPassword string
+}
+
+func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
+	input.Token = strings.TrimSpace(input.Token)
+
+	if input.Token == "" {
+		return appErrors.NewValidationError("reset token is required")
+	}
+
+	if input.NewPassword == "" {
+		return appErrors.NewValidationError("new password is required")
+	}
+
+	if len(input.NewPassword) < 8 {
+		return appErrors.NewValidationError("password must be at least 8 characters")
+	}
+
+	tokenHash := hashPasswordResetToken(input.Token)
+
+	resetToken, err := u.passwordResetTokenRepo.FindByTokenHash(tokenHash)
+	if err != nil {
+		return appErrors.NewValidationError("invalid or expired reset token")
+	}
+
+	if resetToken.UsedAt != nil {
+		return appErrors.NewValidationError("invalid or expired reset token")
+	}
+
+	if time.Now().After(resetToken.ExpiresAt) {
+		return appErrors.NewValidationError("invalid or expired reset token")
+	}
+
+	user, err := u.userRepo.FindByID(resetToken.UserID)
+	if err != nil {
+		return err
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(input.NewPassword),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		return err
+	}
+
+	user.PasswordHash = string(passwordHash)
+	user.UpdatedAt = time.Now()
+
+	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+		if err := tx.UserRepository().Update(user); err != nil {
+			return err
+		}
+
+		if err := tx.PasswordResetTokenRepository().MarkUsed(resetToken.ID); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		u.logger.Error(
+			"password_reset_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
+
+		return err
+	}
+
+	u.logger.Info(
+		"password_reset_completed",
 		"user_id", user.ID,
 	)
 

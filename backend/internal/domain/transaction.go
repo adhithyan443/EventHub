@@ -7,4 +7,5 @@ type TransactionManager interface {
 type TransactionRepositories interface {
 	UserRepository() UserRepository
 	PendingRegistrationRepository() PendingRegistrationRepository
+	PasswordResetTokenRepository() PasswordResetTokenRepository
 }

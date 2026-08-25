@@ -215,13 +215,13 @@ type forgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
 
-func(h *AuthHandler) ForgotPassword(ctx *gin.Context){
+func (h *AuthHandler) ForgotPassword(ctx *gin.Context) {
 
 	var req forgotPasswordRequest
 
-	if err := ctx.ShouldBindJSON(&req); err != nil{
-		ctx.JSON(http.StatusBadRequest,gin.H{
-			"code": "VALIDATION_ERROR",
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
 			"message": "invalid request data",
 		})
 		return
@@ -237,6 +237,38 @@ func(h *AuthHandler) ForgotPassword(ctx *gin.Context){
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{
-		"message" : "If the mail is registered, a password reset link has been sent",
+		"message": "If the mail is registered, a password reset link has been sent",
+	})
+}
+
+type resetPasswordRequest struct {
+	Token       string `json:"token" binding:"required"`
+	NewPassword string `json:"newPassword" binding:"required,min=8"`
+}
+
+func (h *AuthHandler) ResetPassword(ctx *gin.Context) {
+	var req resetPasswordRequest
+	
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	err := h.authUsecase.ResetPassword(auth.ResetPasswordInput{
+		Token:       req.Token,
+		NewPassword: req.NewPassword,
+	})
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "password has been reset successfully",
 	})
 }

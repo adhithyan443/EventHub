@@ -40,6 +40,7 @@ func setupRouter(
 	auth.POST("/refresh-token", authHandler.RefreshToken)
 	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
 	auth.POST("/forgot-password", authHandler.ForgotPassword)
+	auth.POST("/reset-password", authHandler.ResetPassword)
 
 	protected := api.Group("/protected")
 	
