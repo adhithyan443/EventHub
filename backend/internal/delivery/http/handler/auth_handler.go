@@ -210,3 +210,33 @@ func (h *AuthHandler) VerifyOTP(ctx *gin.Context) {
 		},
 	})
 }
+
+type forgotPasswordRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+func(h *AuthHandler) ForgotPassword(ctx *gin.Context){
+
+	var req forgotPasswordRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil{
+		ctx.JSON(http.StatusBadRequest,gin.H{
+			"code": "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	err := h.authUsecase.ForgotPassword(auth.ForgotPasswordInput{
+		Email: req.Email,
+	})
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message" : "If the mail is registered, a password reset link has been sent",
+	})
+}

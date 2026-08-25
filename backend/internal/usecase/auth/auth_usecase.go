@@ -22,6 +22,7 @@ type AuthUsecase struct {
 	userRepo                domain.UserRepository
 	pendingRegistrationRepo domain.PendingRegistrationRepository
 	refreshTokenRepo        domain.RefreshTokenRepository
+	passwordResetTokenRepo  domain.PasswordResetTokenRepository
 	jwtService              *token.JWTService
 	txManager               domain.TransactionManager
 	emailService            domain.EmailService
@@ -32,6 +33,7 @@ func NewAuthUsecase(
 	userRepo domain.UserRepository,
 	pendingRegistrationRepo domain.PendingRegistrationRepository,
 	refreshTokenRepo domain.RefreshTokenRepository,
+	passwordResetTokenRepo domain.PasswordResetTokenRepository,
 	jwtService *token.JWTService,
 	txManager domain.TransactionManager,
 	emailService domain.EmailService,
@@ -41,6 +43,7 @@ func NewAuthUsecase(
 		userRepo:                userRepo,
 		refreshTokenRepo:        refreshTokenRepo,
 		pendingRegistrationRepo: pendingRegistrationRepo,
+		passwordResetTokenRepo:  passwordResetTokenRepo,
 		jwtService:              jwtService,
 		txManager:               txManager,
 		emailService:            emailService,
@@ -481,4 +484,64 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 	)
 
 	return newUser, nil
+}
+
+type ForgotPasswordInput struct {
+	Email string
+}
+
+func (u *AuthUsecase) ForgotPassword(input ForgotPasswordInput) error {
+
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+
+	if input.Email == "" {
+		return appErrors.NewValidationError("email is required")
+	}
+
+	user, err := u.userRepo.FindByEmail(input.Email)
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil //This is called account enumeration protection.
+		}
+
+		return err
+	}
+
+	resetToken, err := generatePasswordResetToken()
+	if err != nil {
+		return err
+	}
+
+	tokenHash := hashPasswordResetToken(resetToken)
+
+	now := time.Now()
+
+	passwordResetToken := &domain.PasswordResetToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: now.Add(15 * time.Minute),
+		CreatedAt: now,
+	}
+
+	if err := u.passwordResetTokenRepo.Create(passwordResetToken); err != nil {
+		return err
+	}
+
+	if err := u.emailService.SendPasswordResetEmail(user.Email, resetToken); err != nil {
+		u.logger.Error(
+			"password_reset_email_send_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	u.logger.Info(
+		"password_reset_requested",
+		"user_id", user.ID,
+	)
+
+	return nil
 }

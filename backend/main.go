@@ -47,6 +47,7 @@ func main() {
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
 	txManager := repository.NewTransactionManager(db)
+	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	emailService := email.NewSMTPEmailService(
 		cfg.SMTHost,
@@ -54,11 +55,13 @@ func main() {
 		cfg.SMTPUsername,
 		cfg.SMTPPassword,
 		cfg.SMTPFrom,
+		cfg.FrontendURL,
 	)
 	authUsecase := auth.NewAuthUsecase(
 		userRepo,
 		pendingRegistrationRepo,
 		refreshTokenRepo,
+		passwordResetTokenRepo,
 		jwtService,
 		txManager,
 		emailService,

@@ -39,8 +39,10 @@ func setupRouter(
 	auth.POST("/login", authHandler.Login)
 	auth.POST("/refresh-token", authHandler.RefreshToken)
 	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
+	auth.POST("/forgot-password", authHandler.ForgotPassword)
 
 	protected := api.Group("/protected")
+	
 	protected.Use(middleware.Auth(jwtService))
 
 	protected.GET("/test", func(ctx *gin.Context) {
