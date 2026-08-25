@@ -22,6 +22,7 @@ func (m *TransactionManager) WithinTransaction(
 		txRepos := &transactionRepositories{
 			userRepo:                NewUserRepository(txDB),
 			pendingRegistrationRepo: NewPendingRegistrationRepository(txDB),
+			passwordResetTokenRepo:  NewPasswordResetTokenRepository(txDB),
 		}
 
 		return fn(txRepos)
@@ -31,6 +32,7 @@ func (m *TransactionManager) WithinTransaction(
 type transactionRepositories struct {
 	userRepo                *UserRepository
 	pendingRegistrationRepo *PendingRegistrationRepository
+	passwordResetTokenRepo  domain.PasswordResetTokenRepository
 }
 
 func (r *transactionRepositories) UserRepository() domain.UserRepository {
@@ -39,4 +41,8 @@ func (r *transactionRepositories) UserRepository() domain.UserRepository {
 
 func (r *transactionRepositories) PendingRegistrationRepository() domain.PendingRegistrationRepository {
 	return r.pendingRegistrationRepo
+}
+
+func (r *transactionRepositories) PasswordResetTokenRepository() domain.PasswordResetTokenRepository {
+	return r.passwordResetTokenRepo
 }

@@ -10,6 +10,7 @@ type Config struct {
 	AppEnv      string
 	DatabaseURL string
 	JWTSecret   string
+	FrontendURL string
 
 	SMTHost      string
 	SMTPPort     string
@@ -60,6 +61,7 @@ func Load() (Config, error) {
 		AppEnv:      getEnv("APP_ENV", "development"),
 		DatabaseURL: databaseURL,
 		JWTSecret:   jwtSecret,
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
 		SMTHost:      smtpHost,
 		SMTPPort:     smtpPort,

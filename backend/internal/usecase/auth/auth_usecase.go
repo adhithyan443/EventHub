@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"log/slog"
+
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ type AuthUsecase struct {
 	userRepo                domain.UserRepository
 	pendingRegistrationRepo domain.PendingRegistrationRepository
 	refreshTokenRepo        domain.RefreshTokenRepository
+	passwordResetTokenRepo  domain.PasswordResetTokenRepository
 	jwtService              *token.JWTService
 	txManager               domain.TransactionManager
 	emailService            domain.EmailService
@@ -32,6 +34,7 @@ func NewAuthUsecase(
 	userRepo domain.UserRepository,
 	pendingRegistrationRepo domain.PendingRegistrationRepository,
 	refreshTokenRepo domain.RefreshTokenRepository,
+	passwordResetTokenRepo domain.PasswordResetTokenRepository,
 	jwtService *token.JWTService,
 	txManager domain.TransactionManager,
 	emailService domain.EmailService,
@@ -41,6 +44,7 @@ func NewAuthUsecase(
 		userRepo:                userRepo,
 		refreshTokenRepo:        refreshTokenRepo,
 		pendingRegistrationRepo: pendingRegistrationRepo,
+		passwordResetTokenRepo:  passwordResetTokenRepo,
 		jwtService:              jwtService,
 		txManager:               txManager,
 		emailService:            emailService,
@@ -91,6 +95,12 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 
 	if input.Password == "" {
 		return appErrors.NewValidationError("password is required")
+	}
+
+	if !validatePassword(input.Password) {
+		return appErrors.NewValidationError(
+			"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+		)
 	}
 
 	if input.Phone == "" {
@@ -481,4 +491,146 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 	)
 
 	return newUser, nil
+}
+
+type ForgotPasswordInput struct {
+	Email string
+}
+
+func (u *AuthUsecase) ForgotPassword(input ForgotPasswordInput) error {
+
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+
+	if input.Email == "" {
+		return appErrors.NewValidationError("email is required")
+	}
+
+	user, err := u.userRepo.FindByEmail(input.Email)
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil //This is called account enumeration protection.
+		}
+
+		return err
+	}
+
+	resetToken, err := generatePasswordResetToken()
+	if err != nil {
+		return err
+	}
+
+	tokenHash := hashPasswordResetToken(resetToken)
+
+	now := time.Now()
+
+	passwordResetToken := &domain.PasswordResetToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: tokenHash,
+		ExpiresAt: now.Add(15 * time.Minute),
+		CreatedAt: now,
+	}
+
+	if err := u.passwordResetTokenRepo.Create(passwordResetToken); err != nil {
+		return err
+	}
+
+	if err := u.emailService.SendPasswordResetEmail(user.Email, resetToken); err != nil {
+		u.logger.Error(
+			"password_reset_email_send_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	u.logger.Info(
+		"password_reset_requested",
+		"user_id", user.ID,
+	)
+
+	return nil
+}
+
+type ResetPasswordInput struct {
+	Token       string
+	NewPassword string
+}
+
+func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
+	input.Token = strings.TrimSpace(input.Token)
+
+	if input.Token == "" {
+		return appErrors.NewValidationError("reset token is required")
+	}
+
+	if input.NewPassword == "" {
+		return appErrors.NewValidationError("new password is required")
+	}
+
+	if !validatePassword(input.NewPassword) {
+	return appErrors.NewValidationError(
+		"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+	)
+}
+
+	tokenHash := hashPasswordResetToken(input.Token)
+
+	resetToken, err := u.passwordResetTokenRepo.FindByTokenHash(tokenHash)
+	if err != nil {
+		return appErrors.NewValidationError("invalid or expired reset token")
+	}
+
+	if resetToken.UsedAt != nil {
+		return appErrors.NewValidationError("invalid or expired reset token")
+	}
+
+	if time.Now().After(resetToken.ExpiresAt) {
+		return appErrors.NewValidationError("invalid or expired reset token")
+	}
+
+	user, err := u.userRepo.FindByID(resetToken.UserID)
+	if err != nil {
+		return err
+	}
+
+	passwordHash, err := bcrypt.GenerateFromPassword(
+		[]byte(input.NewPassword),
+		bcrypt.DefaultCost,
+	)
+	if err != nil {
+		return err
+	}
+
+	user.PasswordHash = string(passwordHash)
+	user.UpdatedAt = time.Now()
+
+	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+		if err := tx.UserRepository().Update(user); err != nil {
+			return err
+		}
+
+		if err := tx.PasswordResetTokenRepository().MarkUsed(resetToken.ID); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		u.logger.Error(
+			"password_reset_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
+
+		return err
+	}
+
+	u.logger.Info(
+		"password_reset_completed",
+		"user_id", user.ID,
+	)
+
+	return nil
 }
