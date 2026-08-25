@@ -97,6 +97,12 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return appErrors.NewValidationError("password is required")
 	}
 
+	if !validatePassword(input.Password) {
+		return appErrors.NewValidationError(
+			"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+		)
+	}
+
 	if input.Phone == "" {
 		return appErrors.NewValidationError("phone is required")
 	}
@@ -563,9 +569,11 @@ func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
 		return appErrors.NewValidationError("new password is required")
 	}
 
-	if len(input.NewPassword) < 8 {
-		return appErrors.NewValidationError("password must be at least 8 characters")
-	}
+	if !validatePassword(input.NewPassword) {
+	return appErrors.NewValidationError(
+		"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+	)
+}
 
 	tokenHash := hashPasswordResetToken(input.Token)
 
