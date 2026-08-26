@@ -8,6 +8,8 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
+	"github.com/adhithyan443/EventHub/backend/internal/service/email"
+	"github.com/adhithyan443/EventHub/backend/internal/service/google"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/joho/godotenv"
@@ -43,7 +45,37 @@ func main() {
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
 	userRepo := repository.NewUserRepository(db)
-	authUsecase := auth.NewAuthUsecase(userRepo, jwtService)
+	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
+	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
+	txManager := repository.NewTransactionManager(db)
+	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
+
+	googleOAuthService := google.NewGoogleOAuthService(
+		cfg.GoogleClientID,
+		cfg.GoogleClientSecret,
+		cfg.GoogleRedirectURL,
+	)
+
+	emailService := email.NewSMTPEmailService(
+		cfg.SMTPHost,
+		cfg.SMTPPort,
+		cfg.SMTPUsername,
+		cfg.SMTPPassword,
+		cfg.SMTPFrom,
+		cfg.FrontendURL,
+	)
+	authUsecase := auth.NewAuthUsecase(
+		userRepo,
+		pendingRegistrationRepo,
+		refreshTokenRepo,
+		passwordResetTokenRepo,
+		jwtService,
+		txManager,
+		emailService,
+		googleOAuthService,
+		logger,
+	)
+
 	authHandler := handler.NewAuthHandler(authUsecase)
 
 	logger.Info("database migration completed")

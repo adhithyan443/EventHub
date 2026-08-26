@@ -10,6 +10,17 @@ type Config struct {
 	AppEnv      string
 	DatabaseURL string
 	JWTSecret   string
+	FrontendURL string
+
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	SMTPFrom     string
+
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
 }
 
 func Load() (Config, error) {
@@ -24,11 +35,62 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	smtpHost, err := requiredEnv("SMTP_HOST")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpPort, err := requiredEnv("SMTP_PORT")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpUsername, err := requiredEnv("SMTP_USERNAME")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpPassword, err := requiredEnv("SMTP_PASSWORD")
+	if err != nil {
+		return Config{}, err
+	}
+
+	smtpFrom, err := requiredEnv("SMTP_FROM")
+	if err != nil {
+		return Config{}, err
+	}
+
+	googleClientID, err := requiredEnv("GOOGLE_CLIENT_ID")
+	if err != nil {
+		return Config{}, err
+	}
+
+	googleClientSecret, err := requiredEnv("GOOGLE_CLIENT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+
+	googleRedirectURL, err := requiredEnv("GOOGLE_REDIRECT_URL")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
 		DatabaseURL: databaseURL,
 		JWTSecret:   jwtSecret,
+		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
+
+		SMTPHost:     smtpHost,
+		SMTPPort:     smtpPort,
+		SMTPUsername: smtpUsername,
+		SMTPPassword: smtpPassword,
+		SMTPFrom:     smtpFrom,
+
+		GoogleClientID: googleClientID,
+		GoogleClientSecret: googleClientSecret,
+		GoogleRedirectURL: googleRedirectURL,
 	}, nil
 }
 
