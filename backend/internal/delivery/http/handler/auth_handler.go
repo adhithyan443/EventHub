@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"net/http"
 
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
@@ -273,7 +274,25 @@ func (h *AuthHandler) ResetPassword(ctx *gin.Context) {
 }
 
 func (h *AuthHandler) GoogleLogin(ctx *gin.Context) {
-	state := "eventhub-google-login"
+	state, err := generateOAuthStatae()
+
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{
+			"code":    "INTERNAL_ERROR",
+			"message": "failed to start google authentication",
+		})
+		return
+	}
+
+	ctx.SetCookie(
+		"oauth_state",
+		state,
+		300,
+		"/",
+		"",
+		false,
+		true,
+	)
 
 	authURL := h.authUsecase.GetGoogleAuthURL(state)
 
@@ -281,6 +300,41 @@ func (h *AuthHandler) GoogleLogin(ctx *gin.Context) {
 }
 
 func (h *AuthHandler) GoogleCallback(ctx *gin.Context) {
+
+	expectedState, err := ctx.Cookie("oauth_state")
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "invalid google authentication state",
+		})
+		return
+	}
+
+	returnedState := ctx.Query("state")
+
+	if returnedState == "" || subtle.ConstantTimeCompare(
+		[]byte(returnedState),
+		[]byte(expectedState),
+	) != 1 {
+
+		ctx.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "invalid google authentication state",
+		})
+
+		return
+	}
+
+	ctx.SetCookie( //Deleting the cookie after verify
+		"oauth_state",
+		"",
+		-1,
+		"/",
+		"",
+		false,
+		true,
+	)
+
 	code := ctx.Query("code")
 
 	user, accessToken, refreshToken, err :=
