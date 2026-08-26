@@ -27,6 +27,7 @@ type AuthUsecase struct {
 	jwtService              *token.JWTService
 	txManager               domain.TransactionManager
 	emailService            domain.EmailService
+	googleOAuthService      domain.GoogleOAuthService
 	logger                  *slog.Logger
 }
 
@@ -38,6 +39,7 @@ func NewAuthUsecase(
 	jwtService *token.JWTService,
 	txManager domain.TransactionManager,
 	emailService domain.EmailService,
+	googleOAuthService domain.GoogleOAuthService,
 	logger *slog.Logger,
 ) *AuthUsecase {
 	return &AuthUsecase{
@@ -48,6 +50,7 @@ func NewAuthUsecase(
 		jwtService:              jwtService,
 		txManager:               txManager,
 		emailService:            emailService,
+		googleOAuthService:      googleOAuthService,
 		logger:                  logger,
 	}
 }
@@ -250,28 +253,8 @@ func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, string, err
 		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
 	}
 
-	accessToken, err := u.jwtService.GenerateAccessToken(
-		user.ID,
-		user.Role,
-	)
+	accessToken, rawRefreshToken, err := u.generateAuthTokens(user)
 	if err != nil {
-		return nil, "", "", err
-	}
-
-	rawRefreshToken, err := generateRefreshToken()
-	if err != nil {
-		return nil, "", "", err
-	}
-
-	refreshToken := &domain.RefreshToken{
-		ID:        uuid.New(),
-		UserID:    user.ID,
-		TokenHash: hashRefreshToken(rawRefreshToken),
-		ExpiresAt: time.Now().Add(7 * 24 * time.Hour),
-		CreatedAt: time.Now(),
-	}
-
-	if err := u.refreshTokenRepo.Create(refreshToken); err != nil {
 		return nil, "", "", err
 	}
 
@@ -570,10 +553,10 @@ func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
 	}
 
 	if !validatePassword(input.NewPassword) {
-	return appErrors.NewValidationError(
-		"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
-	)
-}
+		return appErrors.NewValidationError(
+			"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+		)
+	}
 
 	tokenHash := hashPasswordResetToken(input.Token)
 
@@ -633,4 +616,123 @@ func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
 	)
 
 	return nil
+}
+
+func (u *AuthUsecase) GetGoogleAuthURL(state string) string {
+	return u.googleOAuthService.GetAuthURL(state)
+}
+
+func (u *AuthUsecase) HandleGoogleCallback(
+	code string,
+) (*domain.User, string, string, error) {
+
+	code = strings.TrimSpace(code)
+
+	if code == "" {
+		return nil, "", "", appErrors.NewValidationError(
+			"google authorization code is required",
+		)
+	}
+
+	googleUser, err := u.googleOAuthService.GetUser(code)
+	if err != nil {
+		u.logger.Error(
+			"google_oauth_failed",
+			"error", err,
+		)
+
+		return nil, "", "", appErrors.NewUnauthorizedError(
+			"google authentication failed",
+		)
+	}
+
+	email := strings.ToLower(
+		strings.TrimSpace(googleUser.Email),
+	)
+
+	if email == "" {
+		return nil, "", "", appErrors.NewValidationError(
+			"google account email is required",
+		)
+	}
+
+	user, err := u.userRepo.FindByEmail(email)
+
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, "", "", err
+		}
+
+		now := time.Now()
+
+		user = &domain.User{
+			ID:           uuid.New(),
+			FullName:     strings.TrimSpace(googleUser.Name),
+			Email:        email,
+			ProfileImage: googleUser.AvatarURL,
+			Role:         "CUSTOMER",
+			Status:       "ACTIVE",
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+
+		if err := u.userRepo.Create(user); err != nil {
+			return nil, "", "", err
+		}
+
+		u.logger.Info(
+			"google_oauth_user_created",
+			"user_id", user.ID,
+		)
+	}
+
+	if user.Status != "ACTIVE" {
+		return nil, "", "", appErrors.NewUnauthorizedError(
+			"user account is not active",
+		)
+	}
+
+	accessToken, rawRefreshToken, err := u.generateAuthTokens(user)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	u.logger.Info(
+		"google_oauth_login_success",
+		"user_id", user.ID,
+	)
+
+	return user, accessToken, rawRefreshToken, nil
+}
+func (u *AuthUsecase) generateAuthTokens(
+	user *domain.User,
+) (string, string, error) {
+	accessToken, err := u.jwtService.GenerateAccessToken(
+		user.ID,
+		user.Role,
+	)
+	if err != nil {
+		return "", "", err
+	}
+
+	rawRefreshToken, err := generateRefreshToken()
+	if err != nil {
+		return "", "", err
+	}
+
+	now := time.Now()
+
+	refreshToken := &domain.RefreshToken{
+		ID:        uuid.New(),
+		UserID:    user.ID,
+		TokenHash: hashRefreshToken(rawRefreshToken),
+		ExpiresAt: now.Add(7 * 24 * time.Hour),
+		CreatedAt: now,
+	}
+
+	if err := u.refreshTokenRepo.Create(refreshToken); err != nil {
+		return "", "", err
+	}
+
+	return accessToken, rawRefreshToken, nil
 }

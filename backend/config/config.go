@@ -12,11 +12,15 @@ type Config struct {
 	JWTSecret   string
 	FrontendURL string
 
-	SMTHost      string
+	SMTPHost     string
 	SMTPPort     string
 	SMTPUsername string
 	SMTPPassword string
 	SMTPFrom     string
+
+	GoogleClientID     string
+	GoogleClientSecret string
+	GoogleRedirectURL  string
 }
 
 func Load() (Config, error) {
@@ -56,6 +60,21 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	googleClientID, err := requiredEnv("GOOGLE_CLIENT_ID")
+	if err != nil {
+		return Config{}, err
+	}
+
+	googleClientSecret, err := requiredEnv("GOOGLE_CLIENT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+
+	googleRedirectURL, err := requiredEnv("GOOGLE_REDIRECT_URL")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
@@ -63,11 +82,15 @@ func Load() (Config, error) {
 		JWTSecret:   jwtSecret,
 		FrontendURL: getEnv("FRONTEND_URL", "http://localhost:5173"),
 
-		SMTHost:      smtpHost,
+		SMTPHost:     smtpHost,
 		SMTPPort:     smtpPort,
 		SMTPUsername: smtpUsername,
 		SMTPPassword: smtpPassword,
 		SMTPFrom:     smtpFrom,
+
+		GoogleClientID: googleClientID,
+		GoogleClientSecret: googleClientSecret,
+		GoogleRedirectURL: googleRedirectURL,
 	}, nil
 }
 

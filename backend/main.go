@@ -9,6 +9,7 @@ import (
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
+	"github.com/adhithyan443/EventHub/backend/internal/service/google"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/joho/godotenv"
@@ -49,8 +50,14 @@ func main() {
 	txManager := repository.NewTransactionManager(db)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
+	googleOAuthService := google.NewGoogleOAuthService(
+		cfg.GoogleClientID,
+		cfg.GoogleClientSecret,
+		cfg.GoogleRedirectURL,
+	)
+
 	emailService := email.NewSMTPEmailService(
-		cfg.SMTHost,
+		cfg.SMTPHost,
 		cfg.SMTPPort,
 		cfg.SMTPUsername,
 		cfg.SMTPPassword,
@@ -65,6 +72,7 @@ func main() {
 		jwtService,
 		txManager,
 		emailService,
+		googleOAuthService,
 		logger,
 	)
 

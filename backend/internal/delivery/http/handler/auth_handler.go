@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"net/http"
 
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
@@ -248,7 +249,6 @@ type resetPasswordRequest struct {
 
 func (h *AuthHandler) ResetPassword(ctx *gin.Context) {
 	var req resetPasswordRequest
-	
 
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{
@@ -270,5 +270,92 @@ func (h *AuthHandler) ResetPassword(ctx *gin.Context) {
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"message": "password has been reset successfully",
+	})
+}
+
+func (h *AuthHandler) GoogleLogin(ctx *gin.Context) {
+	state, err := generateOAuthStatae()
+
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{
+			"code":    "INTERNAL_ERROR",
+			"message": "failed to start google authentication",
+		})
+		return
+	}
+
+	ctx.SetCookie(
+		"oauth_state",
+		state,
+		300,
+		"/",
+		"",
+		false,
+		true,
+	)
+
+	authURL := h.authUsecase.GetGoogleAuthURL(state)
+
+	ctx.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
+func (h *AuthHandler) GoogleCallback(ctx *gin.Context) {
+
+	expectedState, err := ctx.Cookie("oauth_state")
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "invalid google authentication state",
+		})
+		return
+	}
+
+	returnedState := ctx.Query("state")
+
+	if returnedState == "" || subtle.ConstantTimeCompare(
+		[]byte(returnedState),
+		[]byte(expectedState),
+	) != 1 {
+
+		ctx.JSON(http.StatusUnauthorized, gin.H{
+			"code":    "UNAUTHORIZED",
+			"message": "invalid google authentication state",
+		})
+
+		return
+	}
+
+	ctx.SetCookie( //Deleting the cookie after verify
+		"oauth_state",
+		"",
+		-1,
+		"/",
+		"",
+		false,
+		true,
+	)
+
+	code := ctx.Query("code")
+
+	user, accessToken, refreshToken, err :=
+		h.authUsecase.HandleGoogleCallback(code)
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message":       "google login successful",
+		"access_token":  accessToken,
+		"refresh_token": refreshToken,
+		"user": gin.H{
+			"id":       user.ID,
+			"fullName": user.FullName,
+			"email":    user.Email,
+			"phone":    user.Phone,
+			"role":     user.Role,
+			"status":   user.Status,
+		},
 	})
 }
