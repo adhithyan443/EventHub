@@ -3,15 +3,30 @@ import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
 import Button from "../../components/ui/Button";
 import GoogleIcon from "../../components/ui/GoogleIcon";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { login, startGoogleLogin } from "../../api/authApi";
+import useAuthStore from "../../store/authStore";
+// import apiClient from "../../api/client";
 
 export default function LoginPage() {
     const [form, setForm] = useState({ email: "", password: "" });
     const [errors, setErrors] = useState({});
 
+    const navigate = useNavigate();
+
+    const setAuth = useAuthStore((state) => state.setAuth);
+
     function handleChange(e) {
         const { name, value } = e.target;
+
         setForm((prev) => ({ ...prev, [name]: value }));
+
+
+        setErrors((prev) => ({
+            ...prev,
+            [name]: "",
+            general: "",
+        }));
     }
 
     function validate() {
@@ -21,15 +36,74 @@ export default function LoginPage() {
         return newErrors;
     }
 
-    function handleSubmit(e) {
+    async function handleSubmit(e) {
+        //  console.log("SIGN IN CLICKED"); // DEBUG
         e.preventDefault();
         const newErrors = validate();
         setErrors(newErrors);
-        if (Object.keys(newErrors).length === 0) {
-            console.log("Would submit:", form);
-            // Step 6 will replace this with the real API call
+
+        if (Object.keys(newErrors).length > 0) {
+            return
+        }
+
+        try {
+
+            const response = await login(form);
+            console.log("Login successful:", response);
+
+            setAuth(
+                response.user,
+                response.access_token,
+                response.refresh_token,
+            );
+            // await testProtectedAPI();
+
+            switch (response.user.role) {
+                case "ADMIN":
+                    navigate("/admin");
+                    break;
+
+                case "ORGANIZER":
+                    navigate("/organizer");
+                    break;
+
+                case "CUSTOMER":
+                    navigate("/");
+                    break;
+
+                default:
+                    setErrors({
+                        general: "Invalid user role.",
+                    });
+            }
+
+
+        } catch (error) {
+            console.error("Login failed failed:", error);
+
+            const message =
+                error.response?.data?.message ||
+                "Login failed. Please check your credentials and try again.";
+
+            setErrors({
+                general: message,
+            });
         }
     }
+
+
+
+    // async function testProtectedAPI() {
+    //     try {
+    //         const response = await apiClient.get("/protected/test");
+
+    //         console.log("Protected API response After login", response.data);
+    //     } catch (error) {
+    //         console.error("Protected API failed:", error);
+    //     }
+    // }
+
+
 
     return (
         <AuthLayout
@@ -45,6 +119,12 @@ export default function LoginPage() {
                         Sign in to continue to EventHub.
                     </p>
                 </div>
+
+                {errors.general && (
+                    <p className="text-sm text-red-500 text-center">
+                        {errors.general}
+                    </p>
+                )}
 
                 <form onSubmit={handleSubmit} className="flex flex-col gap-6">
                     <Input
@@ -78,7 +158,7 @@ export default function LoginPage() {
                     <div className="flex-1 h-px bg-border" />
                 </div>
 
-                <Button variant="outline" icon={<GoogleIcon />}>
+                <Button variant="outline" icon={<GoogleIcon />} onClick={startGoogleLogin}>
                     Continue with Google
                 </Button>
 

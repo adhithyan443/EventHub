@@ -736,3 +736,16 @@ func (u *AuthUsecase) generateAuthTokens(
 
 	return accessToken, rawRefreshToken, nil
 }
+
+
+func(u *AuthUsecase) GetCurrentUser(userID uuid.UUID)(*domain.User,error){
+	user,err := u.userRepo.FindByID(userID)
+	if err != nil {
+		return nil,appErrors.NewUnauthorizedError("user not found")
+	}
+
+	if user.Status != "ACTIVE"{
+		return nil,appErrors.NewUnauthorizedError("user account is not active")
+	}
+	return user,nil
+}

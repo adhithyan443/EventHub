@@ -17,7 +17,14 @@ import (
 
 func main() {
 
-	logger := appLogger.New()
+	logger, closeLog, err := appLogger.New("app.log")
+	if err != nil {
+		slog.Error("Failed to initialize logger", "error", err)
+		return
+	}
+	defer closeLog()
+
+	slog.SetDefault(logger)
 
 	if err := godotenv.Load("../.env"); err != nil {
 		logger.Warn(" .env file not found, using environment variables")
@@ -76,7 +83,7 @@ func main() {
 		logger,
 	)
 
-	authHandler := handler.NewAuthHandler(authUsecase)
+	authHandler := handler.NewAuthHandler(authUsecase, cfg.FrontendURL)
 
 	logger.Info("database migration completed")
 

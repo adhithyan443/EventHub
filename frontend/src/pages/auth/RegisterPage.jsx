@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { startGoogleLogin } from "../../api/authApi";
 import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
 import PasswordInput from "../../components/ui/PasswordInput";
@@ -6,10 +8,12 @@ import PasswordStrength from "../../components/ui/PasswordStrength";
 import Checkbox from "../../components/ui/Checkbox";
 import Button from "../../components/ui/Button";
 import GoogleIcon from "../../components/ui/GoogleIcon";
-import { Link } from "react-router-dom";
+
+import { register } from "../../api/authApi";
 
 export default function RegisterPage() {
-    // const navigate = useNavigate();
+    const navigate = useNavigate();
+
     const [form, setForm] = useState({
         fullName: "",
         email: "",
@@ -18,43 +22,115 @@ export default function RegisterPage() {
         confirmPassword: "",
         agree: false,
     });
+
+    
+
     const [errors, setErrors] = useState({});
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     function handleChange(e) {
         const { name, value, type, checked } = e.target;
-        setForm((prev) => ({ ...prev, [name]: type === "checkbox" ? checked : value }));
+
+        setForm((prev) => ({
+            ...prev,
+            [name]: type === "checkbox" ? checked : value,
+        }));
     }
 
     function validate() {
         const newErrors = {};
-        if (!form.fullName.trim()) newErrors.fullName = "Full name is required";
-        if (!form.email.trim()) newErrors.email = "Email is required";
-        if (!form.phone.trim()) newErrors.phone = "Phone number is required";
-        if (!form.password) newErrors.password = "Password is required";
-        if (form.confirmPassword !== form.password) newErrors.confirmPassword = "Passwords do not match";
-        if (!form.agree) newErrors.agree = "You must agree to the Terms and Privacy Policy";
+
+        if (!form.fullName.trim()) {
+            newErrors.fullName = "Full name is required";
+        }
+
+        if (!form.email.trim()) {
+            newErrors.email = "Email is required";
+        }
+
+        if (!form.phone.trim()) {
+            newErrors.phone = "Phone number is required";
+        }
+
+        if (!form.password) {
+            newErrors.password = "Password is required";
+        }
+
+        if (form.confirmPassword !== form.password) {
+            newErrors.confirmPassword = "Passwords do not match";
+        }
+
+        if (!form.agree) {
+            newErrors.agree =
+                "You must agree to the Terms and Privacy Policy";
+        }
+
         return newErrors;
     }
 
-    function handleSubmit(e) {
+    async function handleSubmit(e) {
         e.preventDefault();
+
         const newErrors = validate();
         setErrors(newErrors);
-        if (Object.keys(newErrors).length === 0) {
-            console.log("Would submit:", form);
+
+        if (Object.keys(newErrors).length > 0) {
+            return;
         }
-        // navigate("/verify-otp")
+
+        setIsSubmitting(true);
+
+        try {
+            await register({
+                fullName: form.fullName,
+                email: form.email,
+                phone: form.phone,
+                password: form.password,
+            });
+
+            navigate("/verify-otp", {
+                state: {
+                    email: form.email,
+                },
+            });
+        } catch (error) {
+            console.error("Registration failed:", error);
+
+            const message =
+                error.response?.data?.message ||
+                "Registration failed. Please try again.";
+
+            setErrors({
+                submit: message,
+            });
+        } finally {
+            setIsSubmitting(false);
+        }
     }
+
+
+    
 
     return (
         <AuthLayout
-            title={<>Discover. Book.<br />Experience.</>}
+            title={
+                <>
+                    Discover. Book.
+                    <br />
+                    Experience.
+                </>
+            }
             description="Create your account and start discovering amazing events."
         >
             <div className="bg-white rounded-lg shadow p-8 w-full max-w-md flex flex-col gap-6">
                 <div>
-                    <h2 className="font-display text-2xl font-semibold text-ink">Create your account</h2>
-                    <p className="text-ink/60 text-sm mt-1">Join EventHub and start discovering amazing events.</p>
+                    <h2 className="font-display text-2xl font-semibold text-ink">
+                        Create your account
+                    </h2>
+
+                    <p className="text-ink/60 text-sm mt-1">
+                        Join EventHub and start discovering amazing events.
+                    </p>
                 </div>
 
                 <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -66,6 +142,7 @@ export default function RegisterPage() {
                         onChange={handleChange}
                         error={errors.fullName}
                     />
+
                     <Input
                         label="Email Address"
                         name="email"
@@ -75,6 +152,7 @@ export default function RegisterPage() {
                         onChange={handleChange}
                         error={errors.email}
                     />
+
                     <Input
                         label="Phone Number"
                         name="phone"
@@ -85,6 +163,7 @@ export default function RegisterPage() {
                         onChange={handleChange}
                         error={errors.phone}
                     />
+
                     <div>
                         <PasswordInput
                             label="Password"
@@ -94,8 +173,10 @@ export default function RegisterPage() {
                             onChange={handleChange}
                             error={errors.password}
                         />
+
                         <PasswordStrength password={form.password} />
                     </div>
+
                     <PasswordInput
                         label="Confirm Password"
                         name="confirmPassword"
@@ -104,27 +185,61 @@ export default function RegisterPage() {
                         onChange={handleChange}
                         error={errors.confirmPassword}
                     />
-                    <Checkbox name="agree" checked={form.agree} onChange={handleChange} error={errors.agree}>
-                        I agree to the <a href="/terms" className="text-primary font-medium">Terms of Service</a> and{" "}
-                        <a href="/privacy" className="text-primary font-medium">Privacy Policy</a>.
+
+                    <Checkbox
+                        name="agree"
+                        checked={form.agree}
+                        onChange={handleChange}
+                        error={errors.agree}
+                    >
+                        I agree to the{" "}
+                        <a
+                            href="/terms"
+                            className="text-primary font-medium"
+                        >
+                            Terms of Service
+                        </a>{" "}
+                        and{" "}
+                        <a
+                            href="/privacy"
+                            className="text-primary font-medium"
+                        >
+                            Privacy Policy
+                        </a>
+                        .
                     </Checkbox>
-                    
-                        <Button type="submit">Create Account</Button>
-                    
+
+                    {errors.submit && (
+                        <p className="text-sm text-red-500">
+                            {errors.submit}
+                        </p>
+                    )}
+
+                    <Button type="submit" disabled={isSubmitting}>
+                        {isSubmitting ? "Creating Account..." : "Create Account"}
+                    </Button>
                 </form>
 
                 <div className="flex items-center gap-4">
                     <div className="flex-1 h-px bg-border" />
-                    <span className="text-xs font-medium tracking-wider text-ink/60 uppercase">OR</span>
+
+                    <span className="text-xs font-medium tracking-wider text-ink/60 uppercase">
+                        OR
+                    </span>
+
                     <div className="flex-1 h-px bg-border" />
                 </div>
 
-                <Button variant="outline" icon={<GoogleIcon />}>
+                <Button variant="outline" icon={<GoogleIcon />}  onClick={startGoogleLogin}>
                     Continue with Google
                 </Button>
 
                 <p className="text-center text-sm text-ink/60">
-                    Already have an account? <Link to="/login" className="text-primary font-semibold">
+                    Already have an account?{" "}
+                    <Link
+                        to="/login"
+                        className="text-primary font-semibold"
+                    >
                         Sign in
                     </Link>
                 </p>
