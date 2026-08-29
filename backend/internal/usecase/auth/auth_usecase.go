@@ -92,8 +92,20 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return appErrors.NewValidationError("full name is required")
 	}
 
+	if !validateFullName(input.FullName) {
+		return appErrors.NewValidationError(
+			"full name must contain only letters and spaces",
+		)
+	}
+
 	if input.Email == "" {
 		return appErrors.NewValidationError("email is required")
+	}
+
+	if !validateEmail(input.Email) {
+		return appErrors.NewValidationError(
+			"invalid email address",
+		)
 	}
 
 	if input.Password == "" {
@@ -102,12 +114,18 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 
 	if !validatePassword(input.Password) {
 		return appErrors.NewValidationError(
-			"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+			"password must be 8-72 characters and contain uppercase, lowercase, number, and special character",
 		)
 	}
 
 	if input.Phone == "" {
 		return appErrors.NewValidationError("phone is required")
+	}
+
+	if !validatePhone(input.Phone) {
+		return appErrors.NewValidationError(
+			"phone number must be a valid 10-digit Indian mobile number",
+		)
 	}
 
 	existingUser, err := u.userRepo.FindByEmail(input.Email)

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { startGoogleLogin } from "../../api/authApi";
+
+import { startGoogleLogin, register } from "../../api/authApi";
+
 import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
 import PasswordInput from "../../components/ui/PasswordInput";
@@ -9,7 +11,12 @@ import Checkbox from "../../components/ui/Checkbox";
 import Button from "../../components/ui/Button";
 import GoogleIcon from "../../components/ui/GoogleIcon";
 
-import { register } from "../../api/authApi";
+import {
+    validateFullName,
+    validateEmail,
+    validatePhone,
+    validatePassword,
+} from "../../utils/validation";
 
 export default function RegisterPage() {
     const navigate = useNavigate();
@@ -23,8 +30,6 @@ export default function RegisterPage() {
         agree: false,
     });
 
-    
-
     const [errors, setErrors] = useState({});
     const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -35,28 +40,42 @@ export default function RegisterPage() {
             ...prev,
             [name]: type === "checkbox" ? checked : value,
         }));
+
+        // Clear field error when user starts correcting it
+        setErrors((prev) => ({
+            ...prev,
+            [name]: "",
+            submit: "",
+        }));
     }
 
-    function validate() {
+    function validateForm() {
         const newErrors = {};
 
-        if (!form.fullName.trim()) {
-            newErrors.fullName = "Full name is required";
+        const nameError = validateFullName(form.fullName);
+        const emailError = validateEmail(form.email);
+        const phoneError = validatePhone(form.phone);
+        const passwordError = validatePassword(form.password);
+
+        if (nameError) {
+            newErrors.fullName = nameError;
         }
 
-        if (!form.email.trim()) {
-            newErrors.email = "Email is required";
+        if (emailError) {
+            newErrors.email = emailError;
         }
 
-        if (!form.phone.trim()) {
-            newErrors.phone = "Phone number is required";
+        if (phoneError) {
+            newErrors.phone = phoneError;
         }
 
-        if (!form.password) {
-            newErrors.password = "Password is required";
+        if (passwordError) {
+            newErrors.password = passwordError;
         }
 
-        if (form.confirmPassword !== form.password) {
+        if (!form.confirmPassword) {
+            newErrors.confirmPassword = "Please confirm your password";
+        } else if (form.confirmPassword !== form.password) {
             newErrors.confirmPassword = "Passwords do not match";
         }
 
@@ -65,16 +84,17 @@ export default function RegisterPage() {
                 "You must agree to the Terms and Privacy Policy";
         }
 
-        return newErrors;
+        setErrors(newErrors);
+
+        return Object.keys(newErrors).length === 0;
     }
 
     async function handleSubmit(e) {
         e.preventDefault();
 
-        const newErrors = validate();
-        setErrors(newErrors);
+        const isValid = validateForm();
 
-        if (Object.keys(newErrors).length > 0) {
+        if (!isValid) {
             return;
         }
 
@@ -82,15 +102,16 @@ export default function RegisterPage() {
 
         try {
             await register({
-                fullName: form.fullName,
-                email: form.email,
-                phone: form.phone,
+                fullName: form.fullName.trim(),
+                email: form.email.trim().toLowerCase(),
+                phone: form.phone.trim(),
                 password: form.password,
             });
 
             navigate("/verify-otp", {
+                replace: true,
                 state: {
-                    email: form.email,
+                    email: form.email.trim().toLowerCase(),
                 },
             });
         } catch (error) {
@@ -107,9 +128,6 @@ export default function RegisterPage() {
             setIsSubmitting(false);
         }
     }
-
-
-    
 
     return (
         <AuthLayout
@@ -133,7 +151,12 @@ export default function RegisterPage() {
                     </p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                <form
+                    onSubmit={handleSubmit}
+                    className="flex flex-col gap-4"
+                    noValidate
+                >
+                    {/* Full Name */}
                     <Input
                         label="Full Name"
                         name="fullName"
@@ -143,6 +166,7 @@ export default function RegisterPage() {
                         error={errors.fullName}
                     />
 
+                    {/* Email */}
                     <Input
                         label="Email Address"
                         name="email"
@@ -153,6 +177,7 @@ export default function RegisterPage() {
                         error={errors.email}
                     />
 
+                    {/* Phone */}
                     <Input
                         label="Phone Number"
                         name="phone"
@@ -164,6 +189,7 @@ export default function RegisterPage() {
                         error={errors.phone}
                     />
 
+                    {/* Password */}
                     <div>
                         <PasswordInput
                             label="Password"
@@ -177,6 +203,7 @@ export default function RegisterPage() {
                         <PasswordStrength password={form.password} />
                     </div>
 
+                    {/* Confirm Password */}
                     <PasswordInput
                         label="Confirm Password"
                         name="confirmPassword"
@@ -186,6 +213,7 @@ export default function RegisterPage() {
                         error={errors.confirmPassword}
                     />
 
+                    {/* Terms */}
                     <Checkbox
                         name="agree"
                         checked={form.agree}
@@ -209,17 +237,25 @@ export default function RegisterPage() {
                         .
                     </Checkbox>
 
+                    {/* Server Error */}
                     {errors.submit && (
                         <p className="text-sm text-red-500">
                             {errors.submit}
                         </p>
                     )}
 
-                    <Button type="submit" disabled={isSubmitting}>
-                        {isSubmitting ? "Creating Account..." : "Create Account"}
+                    {/* Submit */}
+                    <Button
+                        type="submit"
+                        disabled={isSubmitting}
+                    >
+                        {isSubmitting
+                            ? "Creating Account..."
+                            : "Create Account"}
                     </Button>
                 </form>
 
+                {/* Divider */}
                 <div className="flex items-center gap-4">
                     <div className="flex-1 h-px bg-border" />
 
@@ -230,10 +266,16 @@ export default function RegisterPage() {
                     <div className="flex-1 h-px bg-border" />
                 </div>
 
-                <Button variant="outline" icon={<GoogleIcon />}  onClick={startGoogleLogin}>
+                {/* Google Login */}
+                <Button
+                    variant="outline"
+                    icon={<GoogleIcon />}
+                    onClick={startGoogleLogin}
+                >
                     Continue with Google
                 </Button>
 
+                {/* Login */}
                 <p className="text-center text-sm text-ink/60">
                     Already have an account?{" "}
                     <Link
