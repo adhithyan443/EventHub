@@ -7,6 +7,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -19,6 +20,29 @@ func setupRouter(
 	router := gin.New()
 
 	router.Use(
+		
+		cors.New(cors.Config{
+			AllowOrigins: []string{
+				"http://127.0.0.1:5173",
+				"http://localhost:5173",
+			},
+			AllowMethods: []string{
+				"GET",
+				"POST",
+				"PUT",
+				"PATCH",
+				"DELETE",
+				"OPTIONS",
+			},
+			AllowHeaders: []string{
+				"Origin",
+				"Content-Type",
+				"Accept",
+				"Authorization",
+			},
+			AllowCredentials: true,
+		}),
+
 		middleware.RequestID(),
 		middleware.Logger(logger),
 		middleware.Recovery(logger),
@@ -36,13 +60,19 @@ func setupRouter(
 	auth := api.Group("/auth")
 	auth.POST("/register", authHandler.Register)
 	auth.POST("/verify-otp", authHandler.VerifyOTP)
+	auth.POST("/resend-otp", authHandler.ResendOTP)
+
 	auth.POST("/login", authHandler.Login)
 	auth.POST("/refresh-token", authHandler.RefreshToken)
 	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
+
 	auth.POST("/forgot-password", authHandler.ForgotPassword)
 	auth.POST("/reset-password", authHandler.ResetPassword)
+
 	auth.GET("/google", authHandler.GoogleLogin)
 	auth.GET("/google/callback", authHandler.GoogleCallback)
+	
+	auth.GET("/me", middleware.Auth(jwtService), authHandler.Me)
 
 	protected := api.Group("/protected")
 

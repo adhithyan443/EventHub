@@ -92,8 +92,20 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return appErrors.NewValidationError("full name is required")
 	}
 
+	if !validateFullName(input.FullName) {
+		return appErrors.NewValidationError(
+			"full name must contain only letters and spaces",
+		)
+	}
+
 	if input.Email == "" {
 		return appErrors.NewValidationError("email is required")
+	}
+
+	if !validateEmail(input.Email) {
+		return appErrors.NewValidationError(
+			"invalid email address",
+		)
 	}
 
 	if input.Password == "" {
@@ -102,7 +114,7 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 
 	if !validatePassword(input.Password) {
 		return appErrors.NewValidationError(
-			"password must be at least 8 characters and contain uppercase, lowercase, number, and special character",
+			"password must be 8-72 characters and contain uppercase, lowercase, number, and special character",
 		)
 	}
 
@@ -110,10 +122,26 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return appErrors.NewValidationError("phone is required")
 	}
 
+	if !validatePhone(input.Phone) {
+		return appErrors.NewValidationError(
+			"phone number must be a valid 10-digit Indian mobile number",
+		)
+	}
+
 	existingUser, err := u.userRepo.FindByEmail(input.Email)
 
 	if err == nil && existingUser != nil {
 		return appErrors.NewConflictError("email already exists")
+	}
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	existingUserByPhone, err := u.userRepo.FindByPhone(input.Phone)
+
+	if err == nil && existingUserByPhone != nil {
+		return appErrors.NewConflictError("phone number already exists")
 	}
 
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -476,6 +504,79 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 	return newUser, nil
 }
 
+type ResendOTPInput struct {
+	Email string
+}
+
+func (u *AuthUsecase) ResendOTP(input ResendOTPInput) error {
+
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+
+	if input.Email == "" {
+		return appErrors.NewValidationError("email is required")
+	}
+
+	pendingRegistration, err := u.pendingRegistrationRepo.FindByEmail(input.Email)
+
+	if err != nil {
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return appErrors.NewValidationError(
+				"registration not found or already verified",
+			)
+		}
+
+		return err
+	}
+
+	otp, err := generateOTP()
+	if err != nil {
+		u.logger.Error(
+			"otp_generation_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	otpHash := hashOTP(otp)
+
+	now := time.Now()
+
+	pendingRegistration.OTPHash = otpHash
+
+	pendingRegistration.OTPExpiresAt = now.Add(10 * time.Minute)
+
+	pendingRegistration.OTPAttempts = 0
+
+	pendingRegistration.UpdatedAt = now
+
+	if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
+		u.logger.Error(
+			"otp_resend_update_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	if err := u.emailService.SendOTP(input.Email, otp); err != nil {
+		u.logger.Error(
+			"otp_resend_email_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	u.logger.Info(
+		"otp_resent",
+		"registration_id", pendingRegistration.ID,
+	)
+
+	return nil
+}
+
 type ForgotPasswordInput struct {
 	Email string
 }
@@ -735,4 +836,16 @@ func (u *AuthUsecase) generateAuthTokens(
 	}
 
 	return accessToken, rawRefreshToken, nil
+}
+
+func (u *AuthUsecase) GetCurrentUser(userID uuid.UUID) (*domain.User, error) {
+	user, err := u.userRepo.FindByID(userID)
+	if err != nil {
+		return nil, appErrors.NewUnauthorizedError("user not found")
+	}
+
+	if user.Status != "ACTIVE" {
+		return nil, appErrors.NewUnauthorizedError("user account is not active")
+	}
+	return user, nil
 }

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
@@ -12,11 +13,13 @@ import (
 
 type AuthHandler struct {
 	authUsecase *auth.AuthUsecase
+	frontendURL string
 }
 
-func NewAuthHandler(authUsecase *auth.AuthUsecase) *AuthHandler {
+func NewAuthHandler(authUsecase *auth.AuthUsecase, frontendURL string) *AuthHandler {
 	return &AuthHandler{
 		authUsecase: authUsecase,
+		frontendURL: frontendURL,
 	}
 }
 
@@ -212,6 +215,36 @@ func (h *AuthHandler) VerifyOTP(ctx *gin.Context) {
 	})
 }
 
+type resendOTPRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+func (h *AuthHandler) ResendOTP(ctx *gin.Context) {
+
+	var req resendOTPRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	err := h.authUsecase.ResendOTP(auth.ResendOTPInput{
+		Email: req.Email,
+	})
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "verification OTP resent successfully",
+	})
+}
+
 type forgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }
@@ -337,7 +370,7 @@ func (h *AuthHandler) GoogleCallback(ctx *gin.Context) {
 
 	code := ctx.Query("code")
 
-	user, accessToken, refreshToken, err :=
+	_, accessToken, refreshToken, err :=
 		h.authUsecase.HandleGoogleCallback(code)
 
 	if err != nil {
@@ -345,17 +378,61 @@ func (h *AuthHandler) GoogleCallback(ctx *gin.Context) {
 		return
 	}
 
+	// ctx.JSON(http.StatusOK, gin.H{
+	// 	"message":       "google login successful",
+	// 	"access_token":  accessToken,
+	// 	"refresh_token": refreshToken,
+	// 	"user": gin.H{
+	// 		"id":       user.ID,
+	// 		"fullName": user.FullName,
+	// 		"email":    user.Email,
+	// 		"phone":    user.Phone,
+	// 		"role":     user.Role,
+	// 		"status":   user.Status,
+	// 	},
+	// })
+
+	ctx.Redirect(
+		http.StatusTemporaryRedirect,
+		fmt.Sprintf(
+			"%s/oauth/callback?access_token=%s&refresh_token=%s",
+			h.frontendURL,
+			accessToken,
+			refreshToken,
+		),
+	)
+}
+
+func (h *AuthHandler) Me(ctx *gin.Context) {
+
+	userIDvalue, exists := ctx.Get("user_id")
+
+	if !exists {
+		ctx.Error(appErrors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+
+	userID, ok := userIDvalue.(uuid.UUID)
+	if !ok {
+		ctx.Error(appErrors.NewUnauthorizedError("invalid user identity"))
+		return
+	}
+
+	user, err := h.authUsecase.GetCurrentUser(userID)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
 	ctx.JSON(http.StatusOK, gin.H{
-		"message":       "google login successful",
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
 		"user": gin.H{
-			"id":       user.ID,
-			"fullName": user.FullName,
-			"email":    user.Email,
-			"phone":    user.Phone,
-			"role":     user.Role,
-			"status":   user.Status,
+			"id":           user.ID,
+			"fullName":     user.FullName,
+			"email":        user.Email,
+			"phone":        user.Phone,
+			"profileImage": user.ProfileImage,
+			"role":         user.Role,
+			"status":       user.Status,
 		},
 	})
 }
