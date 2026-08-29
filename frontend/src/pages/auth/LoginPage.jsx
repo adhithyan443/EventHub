@@ -145,6 +145,16 @@ export default function LoginPage() {
                         onChange={handleChange}
                         error={errors.password}
                     />
+
+                    <div className="flex justify-end">
+                        <Link
+                            to="/forgot-password"
+                            className="text-sm text-primary font-medium"
+                        >
+                            Forgot Password?
+                        </Link>
+                    </div>
+
                     <Button type="submit">Sign In</Button>
                 </form>
 

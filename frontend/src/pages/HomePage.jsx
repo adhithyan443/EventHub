@@ -10,20 +10,15 @@ export default function HomePage() {
     const user = useAuthStore((state) => state.user);
 
     async function handleLogout() {
-        try {
-            // Call backend logout API.
+        try {        
             await logout();
-
-            // Clear authentication data from Zustand.
+         
             clearAuth();
 
-            // Redirect user to login page.
             navigate("/login", { replace: true });
         } catch (error) {
             console.error("Logout failed:", error);
-
-            // Even if the backend request fails,
-            // clear the local authentication state.
+           
             clearAuth();
             navigate("/login", { replace: true });
         }
