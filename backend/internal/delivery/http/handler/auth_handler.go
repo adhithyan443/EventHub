@@ -215,6 +215,36 @@ func (h *AuthHandler) VerifyOTP(ctx *gin.Context) {
 	})
 }
 
+type resendOTPRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+func (h *AuthHandler) ResendOTP(ctx *gin.Context) {
+
+	var req resendOTPRequest
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "invalid request data",
+		})
+		return
+	}
+
+	err := h.authUsecase.ResendOTP(auth.ResendOTPInput{
+		Email: req.Email,
+	})
+
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"message": "verification OTP resent successfully",
+	})
+}
+
 type forgotPasswordRequest struct {
 	Email string `json:"email" binding:"required,email"`
 }

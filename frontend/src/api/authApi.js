@@ -10,6 +10,13 @@ export const verifyOTP = async (data) => {
     return response.data
 }
 
+export const resendOTP = async (email) => {
+    const response = await apiClient.post("/auth/resend-otp", {
+        email
+    });
+
+    return response.data;
+}
 
 export const login = async (data) => {
     const response = await apiClient.post("/auth/login", data);

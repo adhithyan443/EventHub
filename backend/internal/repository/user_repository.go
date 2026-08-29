@@ -63,6 +63,20 @@ func (r *UserRepository) Update(user *domain.User) error {
 	return nil
 }
 
+func (r *UserRepository) FindByPhone(phone string) (*domain.User, error) {
+	var model models.UserModel
+
+	if err := r.db.
+		Where("phone = ?", phone).
+		First(&model).Error; err != nil {
+		return nil, err
+	}
+
+	user := modelToUser(&model)
+
+	return &user, nil
+}
+
 func userToModel(user *domain.User) models.UserModel {
 	return models.UserModel{
 		ID:           user.ID,

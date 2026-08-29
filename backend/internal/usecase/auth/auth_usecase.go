@@ -120,6 +120,16 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return err
 	}
 
+	existingUserByPhone, err := u.userRepo.FindByPhone(input.Phone)
+
+	if err == nil && existingUserByPhone != nil {
+		return appErrors.NewConflictError("phone number already exists")
+	}
+
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
 	passwordHash, err := bcrypt.GenerateFromPassword(
 		[]byte(input.Password),
 		bcrypt.DefaultCost,
@@ -476,6 +486,79 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 	return newUser, nil
 }
 
+type ResendOTPInput struct {
+	Email string
+}
+
+func (u *AuthUsecase) ResendOTP(input ResendOTPInput) error {
+
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+
+	if input.Email == "" {
+		return appErrors.NewValidationError("email is required")
+	}
+
+	pendingRegistration, err := u.pendingRegistrationRepo.FindByEmail(input.Email)
+
+	if err != nil {
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return appErrors.NewValidationError(
+				"registration not found or already verified",
+			)
+		}
+
+		return err
+	}
+
+	otp, err := generateOTP()
+	if err != nil {
+		u.logger.Error(
+			"otp_generation_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	otpHash := hashOTP(otp)
+
+	now := time.Now()
+
+	pendingRegistration.OTPHash = otpHash
+
+	pendingRegistration.OTPExpiresAt = now.Add(10 * time.Minute)
+
+	pendingRegistration.OTPAttempts = 0
+
+	pendingRegistration.UpdatedAt = now
+
+	if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
+		u.logger.Error(
+			"otp_resend_update_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	if err := u.emailService.SendOTP(input.Email, otp); err != nil {
+		u.logger.Error(
+			"otp_resend_email_failed",
+			"registration_id", pendingRegistration.ID,
+			"error", err,
+		)
+		return err
+	}
+
+	u.logger.Info(
+		"otp_resent",
+		"registration_id", pendingRegistration.ID,
+	)
+
+	return nil
+}
+
 type ForgotPasswordInput struct {
 	Email string
 }
@@ -737,15 +820,14 @@ func (u *AuthUsecase) generateAuthTokens(
 	return accessToken, rawRefreshToken, nil
 }
 
-
-func(u *AuthUsecase) GetCurrentUser(userID uuid.UUID)(*domain.User,error){
-	user,err := u.userRepo.FindByID(userID)
+func (u *AuthUsecase) GetCurrentUser(userID uuid.UUID) (*domain.User, error) {
+	user, err := u.userRepo.FindByID(userID)
 	if err != nil {
-		return nil,appErrors.NewUnauthorizedError("user not found")
+		return nil, appErrors.NewUnauthorizedError("user not found")
 	}
 
-	if user.Status != "ACTIVE"{
-		return nil,appErrors.NewUnauthorizedError("user account is not active")
+	if user.Status != "ACTIVE" {
+		return nil, appErrors.NewUnauthorizedError("user account is not active")
 	}
-	return user,nil
+	return user, nil
 }

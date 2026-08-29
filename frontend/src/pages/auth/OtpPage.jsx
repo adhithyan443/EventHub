@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { Link, useLocation, useNavigate } from "react-router-dom"; 
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import AuthLayout from "../../components/layout/AuthLayout";
 import OtpInput from "../../components/ui/OtpInput";
 import Button from "../../components/ui/Button";
-import { verifyOTP } from "../../api/authApi"; 
+import { verifyOTP, resendOTP } from "../../api/authApi";
 
 function formatTime(s) {
     const m = String(Math.floor(s / 60)).padStart(2, "0");
@@ -16,10 +16,13 @@ export default function OtpPage() {
     const [error, setError] = useState("");
     const [secondsLeft, setSecondsLeft] = useState(45);
 
-    const location = useLocation(); 
-    const navigate = useNavigate(); 
+    const [isResending, setIsResending] = useState(false);
+    const [resendError, setResendError] = useState("");
 
-    const email = location.state?.email; 
+    const location = useLocation();
+    const navigate = useNavigate();
+
+    const email = location.state?.email;
 
     useEffect(() => {
         if (!email) {
@@ -30,10 +33,10 @@ export default function OtpPage() {
 
     const maskedEmail = email
         ? email.replace(
-              /^(.{1,2})(.*)(@.*)$/,
-              (_, start, middle, domain) =>
-                  `${start}${"*".repeat(Math.min(middle.length, 5))}${domain}`
-          )
+            /^(.{1,2})(.*)(@.*)$/,
+            (_, start, middle, domain) =>
+                `${start}${"*".repeat(Math.min(middle.length, 5))}${domain}`
+        )
         : "";
 
     useEffect(() => {
@@ -47,32 +50,37 @@ export default function OtpPage() {
         return () => clearInterval(timer);
     }, [secondsLeft]);
 
-    async function handleSubmit(e) { 
+    async function handleSubmit(e) {
         e.preventDefault();
+
+        console.log("VERIFY OTP REQUEST:", {
+            email,
+            otp: code,
+        });
 
         if (code.length < 6) {
             setError("Enter the full 6-digit code");
             return;
         }
 
-        if (!email) { 
+        if (!email) {
             setError("Email address is missing. Please register again.");
             return;
         }
 
         setError("");
 
-        try { 
+        try {
             await verifyOTP({
                 email,
-                otp: code, 
+                otp: code,
             });
 
-            navigate("/login", { 
+            navigate("/login", {
                 replace: true,
             });
-        } catch (error) { 
-            console.error("OTP verification failed:", error); 
+        } catch (error) {
+            console.error("OTP verification failed:", error);
 
             const message =
                 error.response?.data?.message ||
@@ -82,11 +90,35 @@ export default function OtpPage() {
         }
     }
 
-    function handleResend() {
-        console.log("Would resend code");
-        setSecondsLeft(45);
-    }
+    async function handleResend() {
+        // Prevent multiple requests while the API request is running
+        if (isResending || secondsLeft > 0) {
+            return;
+        }
 
+        setIsResending(true);
+        setResendError("");
+
+        try {
+
+            const response = await resendOTP(email);
+
+            console.log("OTP resent successfully:", response);
+
+
+            setSecondsLeft(45);
+        } catch (error) {
+            console.error("Resend OTP failed:", error);
+
+            const message =
+                error.response?.data?.message ||
+                "Failed to resend OTP. Please try again.";
+
+            setResendError(message);
+        } finally {
+            setIsResending(false);
+        }
+    }
     return (
         <AuthLayout
             title={
@@ -146,19 +178,26 @@ export default function OtpPage() {
                     <div className="flex flex-col gap-4">
                         <p className="text-center text-sm text-ink/60">
                             Didn't receive the code?{" "}
-                            {secondsLeft > 0 ? (
-                                <span className="text-ink/40">
-                                    Resend code in {formatTime(secondsLeft)}
-                                </span>
-                            ) : (
-                                <button
-                                    onClick={handleResend}
-                                    className="text-primary font-semibold"
-                                >
-                                    Resend code
-                                </button>
-                            )}
+                            <button
+                                type="button"
+                                onClick={handleResend}
+                                disabled={secondsLeft > 0 || isResending}
+                                className="text-primary font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isResending
+                                    ? "Sending..."
+                                    : secondsLeft > 0
+                                        ? `Resend OTP in ${formatTime(secondsLeft)}`
+                                        : "Resend OTP"
+                                }
+                            </button>
                         </p>
+
+                        {resendError && (
+                            <p className="text-sm text-red-500 text-center">
+                                {resendError}
+                            </p>
+                        )}
 
                         <div className="border-t border-border pt-4 flex justify-center">
                             <Link
