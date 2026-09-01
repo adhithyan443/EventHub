@@ -26,7 +26,7 @@ func Auth(jwtService *token.JWTService) gin.HandlerFunc {
 		if len(parts) != 2 || parts[0] != "Bearer" {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"code":    "UNAUTHORIZED",
-				"message": "invalid authorized header",
+				"message": "invalid authorization header",
 			})
 			return
 		}
@@ -62,7 +62,7 @@ func Auth(jwtService *token.JWTService) gin.HandlerFunc {
 		if !ok {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"code":    "UNAUTHORIZED",
-				"message": "Invalid token",
+				"message": "invalid token",
 			})
 			return
 		}

@@ -8,14 +8,25 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
+	"github.com/adhithyan443/EventHub/backend/internal/service/email"
+	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
+	"github.com/adhithyan443/EventHub/backend/internal/service/google"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/joho/godotenv"
 )
 
 func main() {
 
-	logger := appLogger.New()
+	logger, closeLog, err := appLogger.New("app.log")
+	if err != nil {
+		slog.Error("Failed to initialize logger", "error", err)
+		return
+	}
+	defer closeLog()
+
+	slog.SetDefault(logger)
 
 	if err := godotenv.Load("../.env"); err != nil {
 		logger.Warn(" .env file not found, using environment variables")
@@ -43,12 +54,68 @@ func main() {
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
 	userRepo := repository.NewUserRepository(db)
-	authUsecase := auth.NewAuthUsecase(userRepo, jwtService)
-	authHandler := handler.NewAuthHandler(authUsecase)
+	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
+	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
+	txManager := repository.NewTransactionManager(db)
+	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
+
+	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
+	if err != nil {
+		logger.Error(
+			"encryption_service_initialization_failed",
+			"error", err,
+		)
+		return
+	}
+
+	googleOAuthService := google.NewGoogleOAuthService(
+		cfg.GoogleClientID,
+		cfg.GoogleClientSecret,
+		cfg.GoogleRedirectURL,
+	)
+
+	emailService := email.NewSMTPEmailService(
+		cfg.SMTPHost,
+		cfg.SMTPPort,
+		cfg.SMTPUsername,
+		cfg.SMTPPassword,
+		cfg.SMTPFrom,
+		cfg.FrontendURL,
+	)
+	authUsecase := auth.NewAuthUsecase(
+		userRepo,
+		pendingRegistrationRepo,
+		refreshTokenRepo,
+		passwordResetTokenRepo,
+		jwtService,
+		txManager,
+		emailService,
+		googleOAuthService,
+		logger,
+	)
+
+	authHandler := handler.NewAuthHandler(authUsecase, cfg.FrontendURL)
+
+	// organizerApplicationRepo
+	organizerApplicationRepo := repository.NewOrganizerApplicationRepository(
+		db,
+		logger,
+	)
+
+	organizerApplicationUsecase := organizer.NewApplicationUsecase(
+		organizerApplicationRepo,
+		encryptionService,
+		logger,
+	)
+
+	organizerApplicationHandler := handler.NewOrganizerApplicationHandler(
+		organizerApplicationUsecase,
+		logger,
+	)
 
 	logger.Info("database migration completed")
 
-	router := setupRouter(logger, authHandler, jwtService)
+	router := setupRouter(logger, authHandler, organizerApplicationHandler, jwtService)
 
 	logger.Info(
 		"EventHub backend started",
