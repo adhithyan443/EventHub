@@ -28,29 +28,10 @@ func NewOrganizerApplicationRepository(
 func (r *OrganizerApplicationRepository) Create(
 	application *domain.OrganizerApplication,
 ) error {
-	model := &models.OrganizerApplicationModel{
-		ID:                      application.ID,
-		UserID:                  application.UserID,
-		BusinessName:            application.BusinessName,
-		BusinessType:            application.BusinessType,
-		Description:             application.Description,
-		Phone:                   application.Phone,
-		Website:                 application.Website,
-		GSTNumber:               application.GSTNumber,
-		PANNumber:               application.PANNumber,
-		BankName:                application.BankName,
-		AccountHolderName:       application.AccountHolderName,
-		AccountNumberEncrypted:  application.AccountNumberEncrypted,
-		IFSCCode:                application.IFSCCode,
-		LogoURL:                 application.LogoURL,
-		VerificationDocumentURL: application.VerificationDocumentURL,
-		Status:                  application.Status,
-		RejectionReason:         application.RejectionReason,
-		CreatedAt:               application.CreatedAt,
-		UpdatedAt:               application.UpdatedAt,
-	}
 
-	if err := r.db.Create(model).Error; err != nil {
+	model := organizerApplicationToModel(application)
+
+	if err := r.db.Create(&model).Error; err != nil {
 		r.logger.Error(
 			"organizer_application_create_failed",
 			"user_id", application.UserID,
@@ -59,6 +40,8 @@ func (r *OrganizerApplicationRepository) Create(
 
 		return err
 	}
+
+	*application = *modelToOrganizerApplication(&model)
 
 	r.logger.Info(
 		"organizer_application_created",
@@ -72,6 +55,7 @@ func (r *OrganizerApplicationRepository) Create(
 func (r *OrganizerApplicationRepository) FindByUserID(
 	userID uuid.UUID,
 ) (*domain.OrganizerApplication, error) {
+
 	var model models.OrganizerApplicationModel
 
 	err := r.db.
@@ -92,33 +76,14 @@ func (r *OrganizerApplicationRepository) FindByUserID(
 		return nil, err
 	}
 
-	return toOrganizerApplicationDomain(&model), nil
+	return modelToOrganizerApplication(&model), nil
 }
 
 func (r *OrganizerApplicationRepository) Update(
 	application *domain.OrganizerApplication,
 ) error {
-	model := &models.OrganizerApplicationModel{
-		ID:                      application.ID,
-		UserID:                  application.UserID,
-		BusinessName:            application.BusinessName,
-		BusinessType:            application.BusinessType,
-		Description:             application.Description,
-		Phone:                   application.Phone,
-		Website:                 application.Website,
-		GSTNumber:               application.GSTNumber,
-		PANNumber:               application.PANNumber,
-		BankName:                application.BankName,
-		AccountHolderName:       application.AccountHolderName,
-		AccountNumberEncrypted:  application.AccountNumberEncrypted,
-		IFSCCode:                application.IFSCCode,
-		LogoURL:                 application.LogoURL,
-		VerificationDocumentURL: application.VerificationDocumentURL,
-		Status:                  application.Status,
-		RejectionReason:         application.RejectionReason,
-		CreatedAt:               application.CreatedAt,
-		UpdatedAt:               application.UpdatedAt,
-	}
+
+	model := organizerApplicationToModel(application)
 
 	result := r.db.
 		Model(&models.OrganizerApplicationModel{}).
@@ -146,6 +111,23 @@ func (r *OrganizerApplicationRepository) Update(
 		return gorm.ErrRecordNotFound
 	}
 
+	// Reload the updated record.
+	var updatedModel models.OrganizerApplicationModel
+
+	if err := r.db.
+		Where("id = ?", application.ID).
+		First(&updatedModel).Error; err != nil {
+		r.logger.Error(
+			"organizer_application_reload_failed",
+			"application_id", application.ID,
+			"error", err,
+		)
+
+		return err
+	}
+
+	*application = *modelToOrganizerApplication(&updatedModel)
+
 	r.logger.Info(
 		"organizer_application_updated",
 		"application_id", application.ID,
@@ -155,9 +137,37 @@ func (r *OrganizerApplicationRepository) Update(
 	return nil
 }
 
-func toOrganizerApplicationDomain(
+func organizerApplicationToModel(
+	application *domain.OrganizerApplication,
+) models.OrganizerApplicationModel {
+
+	return models.OrganizerApplicationModel{
+		ID:                      application.ID,
+		UserID:                  application.UserID,
+		BusinessName:            application.BusinessName,
+		BusinessType:            application.BusinessType,
+		Description:             application.Description,
+		Phone:                   application.Phone,
+		Website:                 application.Website,
+		BankName:                application.BankName,
+		AccountHolderName:       application.AccountHolderName,
+		AccountNumberEncrypted:  application.AccountNumberEncrypted,
+		IFSCCode:                application.IFSCCode,
+		GSTNumber:               application.GSTNumber,
+		PANNumber:               application.PANNumber,
+		LogoURL:                 application.LogoURL,
+		VerificationDocumentURL: application.VerificationDocumentURL,
+		Status:                  string(application.Status),
+		RejectionReason:         application.RejectionReason,
+		CreatedAt:               application.CreatedAt,
+		UpdatedAt:               application.UpdatedAt,
+	}
+}
+
+func modelToOrganizerApplication(
 	model *models.OrganizerApplicationModel,
 ) *domain.OrganizerApplication {
+
 	return &domain.OrganizerApplication{
 		ID:                      model.ID,
 		UserID:                  model.UserID,
@@ -166,15 +176,15 @@ func toOrganizerApplicationDomain(
 		Description:             model.Description,
 		Phone:                   model.Phone,
 		Website:                 model.Website,
-		GSTNumber:               model.GSTNumber,
-		PANNumber:               model.PANNumber,
 		BankName:                model.BankName,
 		AccountHolderName:       model.AccountHolderName,
 		AccountNumberEncrypted:  model.AccountNumberEncrypted,
 		IFSCCode:                model.IFSCCode,
+		GSTNumber:               model.GSTNumber,
+		PANNumber:               model.PANNumber,
 		LogoURL:                 model.LogoURL,
 		VerificationDocumentURL: model.VerificationDocumentURL,
-		Status:                  model.Status,
+		Status:                  domain.ApplicationStatus(model.Status),
 		RejectionReason:         model.RejectionReason,
 		CreatedAt:               model.CreatedAt,
 		UpdatedAt:               model.UpdatedAt,

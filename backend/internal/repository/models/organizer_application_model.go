@@ -13,9 +13,9 @@ type OrganizerApplicationModel struct {
 	BusinessName string `gorm:"type:varchar(255);not null"`
 	BusinessType string `gorm:"type:varchar(100);not null"`
 	Description  string `gorm:"type:text;not null"`
+	Phone        string `gorm:"type:varchar(30);not null"`
+	Website      string `gorm:"type:varchar(500)"`
 
-	Phone     string `gorm:"type:varchar(20);not null"`
-	Website   string `gorm:"type:varchar(500)"`
 	GSTNumber string `gorm:"type:varchar(50)"`
 	PANNumber string `gorm:"type:varchar(20);not null"`
 
@@ -24,8 +24,8 @@ type OrganizerApplicationModel struct {
 	AccountNumberEncrypted string `gorm:"type:text;not null"`
 	IFSCCode               string `gorm:"type:varchar(20);not null"`
 
-	LogoURL                 string `gorm:"type:varchar(500)"`
-	VerificationDocumentURL string `gorm:"type:varchar(500)"`
+	LogoURL                 string `gorm:"type:varchar(1000)"`
+	VerificationDocumentURL string `gorm:"type:varchar(1000);not null"`
 
 	Status          string `gorm:"type:varchar(30);not null;index"`
 	RejectionReason string `gorm:"type:text"`
