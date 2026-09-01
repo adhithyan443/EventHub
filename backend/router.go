@@ -20,7 +20,7 @@ func setupRouter(
 	router := gin.New()
 
 	router.Use(
-		
+
 		cors.New(cors.Config{
 			AllowOrigins: []string{
 				"http://127.0.0.1:5173",
@@ -71,7 +71,7 @@ func setupRouter(
 
 	auth.GET("/google", authHandler.GoogleLogin)
 	auth.GET("/google/callback", authHandler.GoogleCallback)
-	
+
 	auth.GET("/me", middleware.Auth(jwtService), authHandler.Me)
 
 	protected := api.Group("/protected")
@@ -88,6 +88,26 @@ func setupRouter(
 			"role":    role,
 		})
 	})
+
+	protected.GET(
+		"/admin-test",
+		middleware.RequireRole("ADMIN"),
+		func(ctx *gin.Context) {
+			ctx.JSON(http.StatusOK, gin.H{
+				"message": "admin access granted",
+			})
+		},
+	)
+
+	protected.GET(
+		"/organizer-test",
+		middleware.RequireRole("ORGANIZER"),
+		func(ctx *gin.Context) {
+			ctx.JSON(http.StatusOK, gin.H{
+				"message": "organizer access granted",
+			})
+		},
+	)
 
 	return router
 }
