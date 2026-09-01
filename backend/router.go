@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
@@ -16,6 +17,12 @@ func setupRouter(
 	authHandler *handler.AuthHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
+
+	rateLimiter := middleware.NewRateLimiter(
+		5,
+		time.Minute,
+		logger,
+	)
 
 	router := gin.New()
 
@@ -58,15 +65,39 @@ func setupRouter(
 	api := router.Group("/api/v1")
 
 	auth := api.Group("/auth")
-	auth.POST("/register", authHandler.Register)
-	auth.POST("/verify-otp", authHandler.VerifyOTP)
-	auth.POST("/resend-otp", authHandler.ResendOTP)
+	auth.POST(
+		"/register",
+		rateLimiter.Middleware(),
+		authHandler.Register,
+	)
 
-	auth.POST("/login", authHandler.Login)
+	auth.POST(
+		"/verify-otp",
+		rateLimiter.Middleware(),
+		authHandler.VerifyOTP,
+	)
+
+	auth.POST(
+		"/resend-otp",
+		rateLimiter.Middleware(),
+		authHandler.ResendOTP,
+	)
+
+	auth.POST(
+		"/login",
+		rateLimiter.Middleware(),
+		authHandler.Login,
+	)
+
 	auth.POST("/refresh-token", authHandler.RefreshToken)
 	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
 
-	auth.POST("/forgot-password", authHandler.ForgotPassword)
+	auth.POST(
+		"/forgot-password",
+		rateLimiter.Middleware(),
+		authHandler.ForgotPassword,
+	)
+
 	auth.POST("/reset-password", authHandler.ResetPassword)
 
 	auth.GET("/google", authHandler.GoogleLogin)
