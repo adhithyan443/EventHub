@@ -12,5 +12,12 @@ func Migrate(db *gorm.DB) error {
 		&models.RefreshTokenModel{},
 		&models.PasswordResetTokenModel{},
 		&models.PendingRegistrationModel{},
+
+		&models.OrganizerApplicationModel{},
+
+		&models.OrganizerModel{},
+		&models.OrganizerProfileModel{},
+		&models.OrganizerAddressModel{},
+		&models.OrganizerBankAccountModel{},
 	)
 }

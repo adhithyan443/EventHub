@@ -8,4 +8,10 @@ type TransactionRepositories interface {
 	UserRepository() UserRepository
 	PendingRegistrationRepository() PendingRegistrationRepository
 	PasswordResetTokenRepository() PasswordResetTokenRepository
+
+	OrganizerApplicationRepository() OrganizerApplicationRepository
+	OrganizerRepository() OrganizerRepository
+	OrganizerProfileRepository() OrganizerProfileRepository
+	OrganizerAddressRepository() OrganizerAddressRepository
+	OrganizerBankAccountRepository() OrganizerBankAccountRepository
 }

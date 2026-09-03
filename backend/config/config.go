@@ -21,16 +21,22 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURL  string
+
+	EncryptionKey string
 }
 
 func Load() (Config, error) {
-
 	databaseURL, err := requiredEnv("DATABASE_URL")
 	if err != nil {
 		return Config{}, err
 	}
 
 	jwtSecret, err := requiredEnv("JWT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+
+	encryptionKey, err := requiredEnv("ENCRYPTION_KEY")
 	if err != nil {
 		return Config{}, err
 	}
@@ -88,9 +94,11 @@ func Load() (Config, error) {
 		SMTPPassword: smtpPassword,
 		SMTPFrom:     smtpFrom,
 
-		GoogleClientID: googleClientID,
+		GoogleClientID:     googleClientID,
 		GoogleClientSecret: googleClientSecret,
-		GoogleRedirectURL: googleRedirectURL,
+		GoogleRedirectURL:  googleRedirectURL,
+
+		EncryptionKey: encryptionKey,
 	}, nil
 }
 

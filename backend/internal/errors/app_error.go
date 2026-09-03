@@ -41,3 +41,11 @@ func NewConflictError(message string) *AppError {
 		HTTPStatus: 409,
 	}
 }
+
+func NewNotFoundError(message string) *AppError {
+	return &AppError{
+		Code:       "NOT_FOUND",
+		Message:    message,
+		HTTPStatus: 404,
+	}
+}

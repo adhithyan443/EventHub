@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
@@ -14,25 +15,25 @@ import (
 func setupRouter(
 	logger *slog.Logger,
 	authHandler *handler.AuthHandler,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
-
 	router := gin.New()
 
+	// Global middleware.
 	router.Use(
-		
 		cors.New(cors.Config{
 			AllowOrigins: []string{
-				"http://127.0.0.1:5173",
 				"http://localhost:5173",
+				"http://127.0.0.1:5173",
 			},
 			AllowMethods: []string{
-				"GET",
-				"POST",
-				"PUT",
-				"PATCH",
-				"DELETE",
-				"OPTIONS",
+				http.MethodGet,
+				http.MethodPost,
+				http.MethodPut,
+				http.MethodPatch,
+				http.MethodDelete,
+				http.MethodOptions,
 			},
 			AllowHeaders: []string{
 				"Origin",
@@ -42,52 +43,152 @@ func setupRouter(
 			},
 			AllowCredentials: true,
 		}),
-
 		middleware.RequestID(),
 		middleware.Logger(logger),
 		middleware.Recovery(logger),
 		middleware.ErrorHandler(),
 	)
 
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
+	registerHealthRoutes(router)
+	registerAuthRoutes(router, authHandler, jwtService, logger)
+	registerOrganizerRoutes(router, organizerApplicationHandler, jwtService)
+	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
+
+	return router
+}
+
+func registerHealthRoutes(router *gin.Engine) {
+	router.GET("/health", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{
 			"status": "ok",
 		})
 	})
+}
+
+func registerAuthRoutes(
+	router *gin.Engine,
+	authHandler *handler.AuthHandler,
+	jwtService *token.JWTService,
+	logger *slog.Logger,
+) {
+	rateLimiter := middleware.NewRateLimiter(
+		5,
+		time.Minute,
+		logger,
+	)
+
+	api := router.Group("/api/v1")
+	auth := api.Group("/auth")
+
+	// Public authentication endpoints.
+	auth.POST(
+		"/register",
+		rateLimiter.Middleware(),
+		authHandler.Register,
+	)
+
+	auth.POST(
+		"/verify-otp",
+		rateLimiter.Middleware(),
+		authHandler.VerifyOTP,
+	)
+
+	auth.POST(
+		"/resend-otp",
+		rateLimiter.Middleware(),
+		authHandler.ResendOTP,
+	)
+
+	auth.POST(
+		"/login",
+		rateLimiter.Middleware(),
+		authHandler.Login,
+	)
+
+	auth.POST(
+		"/forgot-password",
+		rateLimiter.Middleware(),
+		authHandler.ForgotPassword,
+	)
+
+	auth.POST(
+		"/reset-password",
+		authHandler.ResetPassword,
+	)
+
+	auth.GET(
+		"/google",
+		authHandler.GoogleLogin,
+	)
+
+	auth.GET(
+		"/google/callback",
+		authHandler.GoogleCallback,
+	)
+
+	// Token endpoints.
+	auth.POST(
+		"/refresh-token",
+		authHandler.RefreshToken,
+	)
+
+	auth.POST(
+		"/logout",
+		middleware.Auth(jwtService),
+		authHandler.Logout,
+	)
+
+	// Authenticated user endpoint.
+	auth.GET(
+		"/me",
+		middleware.Auth(jwtService),
+		authHandler.Me,
+	)
+}
+
+func registerOrganizerRoutes(
+	router *gin.Engine,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	jwtService *token.JWTService,
+) {
+	api := router.Group("/api/v1")
+
+	organizer := api.Group("/organizers")
+	organizer.Use(middleware.Auth(jwtService))
+
+	// Customer organizer-application endpoints.
+	organizer.POST(
+		"/apply",
+		organizerApplicationHandler.SubmitApplication,
+	)
+}
+
+func registerAdminRoutes(
+	router *gin.Engine,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	jwtService *token.JWTService,
+) {
 
 	api := router.Group("/api/v1")
 
-	auth := api.Group("/auth")
-	auth.POST("/register", authHandler.Register)
-	auth.POST("/verify-otp", authHandler.VerifyOTP)
-	auth.POST("/resend-otp", authHandler.ResendOTP)
+	admin := api.Group("/admin")
+	admin.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireRole("ADMIN"),
+	)
 
-	auth.POST("/login", authHandler.Login)
-	auth.POST("/refresh-token", authHandler.RefreshToken)
-	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
+	admin.GET(
+		"/organizer-applications",
+		organizerApplicationHandler.ListApplications,
+	)
 
-	auth.POST("/forgot-password", authHandler.ForgotPassword)
-	auth.POST("/reset-password", authHandler.ResetPassword)
+	admin.GET(
+		"/organizer-applications/:id",
+		organizerApplicationHandler.GetApplication,
+	)
 
-	auth.GET("/google", authHandler.GoogleLogin)
-	auth.GET("/google/callback", authHandler.GoogleCallback)
-	
-	auth.GET("/me", middleware.Auth(jwtService), authHandler.Me)
-
-	protected := api.Group("/protected")
-
-	protected.Use(middleware.Auth(jwtService))
-
-	protected.GET("/test", func(ctx *gin.Context) {
-		userID, _ := ctx.Get("user_id")
-		role, _ := ctx.Get("user_role")
-
-		ctx.JSON(http.StatusOK, gin.H{
-			"message": "you are authenticated",
-			"user_id": userID,
-			"role":    role,
-		})
-	})
-
-	return router
+	admin.PATCH(
+		"/organizer-applications/:id/approve",
+		organizerApplicationHandler.ApproveApplication,
+	)
 }
