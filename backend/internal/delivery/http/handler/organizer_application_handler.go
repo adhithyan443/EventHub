@@ -3,6 +3,7 @@ package handler
 import (
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
@@ -11,18 +12,21 @@ import (
 )
 
 type OrganizerApplicationHandler struct {
-	applicationUsecase *organizer.ApplicationUsecase
-	logger             *slog.Logger
+	applicationUsecase      *organizer.ApplicationUsecase
+	adminApplicationUsecase *organizer.AdminApplicationUsecase
+	logger                  *slog.Logger
 }
 
 func NewOrganizerApplicationHandler(
 	applicationUsecase *organizer.ApplicationUsecase,
+	adminApplicationUsecase *organizer.AdminApplicationUsecase,
 	logger *slog.Logger,
 
 ) *OrganizerApplicationHandler {
 	return &OrganizerApplicationHandler{
-		applicationUsecase: applicationUsecase,
-		logger:             logger,
+		applicationUsecase:      applicationUsecase,
+		adminApplicationUsecase: adminApplicationUsecase,
+		logger:                  logger,
 	}
 }
 
@@ -82,4 +86,64 @@ func getAuthenticatedUserID(ctx *gin.Context) (uuid.UUID, error) {
 	}
 
 	return userID, nil
+}
+
+func (h *OrganizerApplicationHandler) ListApplications(ctx *gin.Context) {
+	page := 1
+	limit := 10
+
+	if value := ctx.Query("page"); value != "" {
+		parsedPage, err := strconv.Atoi(value)
+		if err != nil {
+			ctx.Error(errors.NewValidationError("invalid page"))
+			return
+		}
+
+		page = parsedPage
+	}
+
+	if value := ctx.Query("limit"); value != "" {
+		parsedLimit, err := strconv.Atoi(value)
+		if err != nil {
+			ctx.Error(errors.NewValidationError("invalid limit"))
+			return
+		}
+
+		limit = parsedLimit
+	}
+
+	status := ctx.Query("status")
+
+	result, err := h.adminApplicationUsecase.ListApplications(
+		page,
+		limit,
+		status,
+	)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	applications := make(
+		[]organizer.AdminApplicationResponse,
+		0,
+		len(result.Applications),
+	)
+
+	for _, application := range result.Applications {
+		applications = append(
+			applications,
+			organizer.ToAdminApplicationResponse(application),
+		)
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"applications": applications,
+			"page":         result.Page,
+			"limit":        result.Limit,
+			"total":        result.Total,
+		},
+	})
 }

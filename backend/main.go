@@ -108,8 +108,14 @@ func main() {
 		logger,
 	)
 
+	adminApplicationUsecase := organizer.NewAdminApplicationUsecase(
+		organizerApplicationRepo,
+		logger,
+	)
+
 	organizerApplicationHandler := handler.NewOrganizerApplicationHandler(
 		organizerApplicationUsecase,
+		adminApplicationUsecase,
 		logger,
 	)
 

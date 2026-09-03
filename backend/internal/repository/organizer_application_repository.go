@@ -190,3 +190,85 @@ func modelToOrganizerApplication(
 		UpdatedAt:               model.UpdatedAt,
 	}
 }
+
+func (r *OrganizerApplicationRepository) List(
+	page int,
+	limit int,
+	status domain.ApplicationStatus,
+) (*domain.OrganizerApplicationList, error) {
+
+	var modelsList []models.OrganizerApplicationModel
+	var total int64
+
+	offset := (page - 1) * limit
+
+	query := r.db.Model(
+		&models.OrganizerApplicationModel{},
+	)
+
+	// Apply status filter only when a status was provided.
+	if status != "" {
+		query = query.Where(
+			"status = ?",
+			string(status),
+		)
+	}
+
+	// Get total number of matching applications.
+	if err := query.Count(&total).Error; err != nil {
+		r.logger.Error(
+			"organizer_application_count_failed",
+			"status", status,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	// Fetch newest applications first.
+	if err := query.
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Find(&modelsList).Error; err != nil {
+
+		r.logger.Error(
+			"organizer_application_list_failed",
+			"page", page,
+			"limit", limit,
+			"status", status,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	applications := make(
+		[]*domain.OrganizerApplication,
+		0,
+		len(modelsList),
+	)
+
+	for i := range modelsList {
+		applications = append(
+			applications,
+			modelToOrganizerApplication(&modelsList[i]),
+		)
+	}
+
+	r.logger.Info(
+		"organizer_applications_listed",
+		"page", page,
+		"limit", limit,
+		"status", status,
+		"count", len(applications),
+		"total", total,
+	)
+
+	return &domain.OrganizerApplicationList{
+		Applications: applications,
+		Total:        total,
+		Page:         page,
+		Limit:        limit,
+	}, nil
+}

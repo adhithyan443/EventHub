@@ -42,8 +42,17 @@ type OrganizerApplication struct {
 	UpdatedAt time.Time
 }
 
+type OrganizerApplicationList struct {
+	Applications []*OrganizerApplication
+	Total        int64
+	Page         int
+	Limit        int
+}
+
 type OrganizerApplicationRepository interface {
 	Create(application *OrganizerApplication) error
 	FindByUserID(userID uuid.UUID) (*OrganizerApplication, error)
 	Update(application *OrganizerApplication) error
+
+	List(page int, limit int, status ApplicationStatus) (*OrganizerApplicationList, error)
 }
