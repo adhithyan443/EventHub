@@ -13,3 +13,7 @@ type OrganizerModel struct {
 	CreatedAt time.Time `gorm:"not null;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"not null;autoUpdateTime"`
 }
+
+func (OrganizerModel) TableName() string {
+	return "organizers"
+}

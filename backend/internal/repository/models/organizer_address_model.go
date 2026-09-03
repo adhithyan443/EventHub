@@ -19,3 +19,9 @@ type OrganizerAddressModel struct {
 	CreatedAt time.Time `gorm:"not null;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"not null;autoUpdateTime"`
 }
+
+
+func (OrganizerAddressModel) TableName() string {
+	return "organizer_addresses"
+}
+

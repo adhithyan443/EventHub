@@ -186,4 +186,9 @@ func registerAdminRoutes(
 		"/organizer-applications/:id",
 		organizerApplicationHandler.GetApplication,
 	)
+
+	admin.PATCH(
+		"/organizer-applications/:id/approve",
+		organizerApplicationHandler.ApproveApplication,
+	)
 }
