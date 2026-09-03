@@ -56,7 +56,7 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	txManager := repository.NewTransactionManager(db)
+	txManager := repository.NewTransactionManager(db, logger)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
@@ -110,6 +110,7 @@ func main() {
 
 	adminApplicationUsecase := organizer.NewAdminApplicationUsecase(
 		organizerApplicationRepo,
+		txManager,
 		logger,
 	)
 

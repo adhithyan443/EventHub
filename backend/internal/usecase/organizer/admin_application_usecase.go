@@ -1,25 +1,31 @@
 package organizer
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type AdminApplicationUsecase struct {
-	repository domain.OrganizerApplicationRepository
-	logger     *slog.Logger
+	repository         domain.OrganizerApplicationRepository
+	transactionManager domain.TransactionManager
+	logger             *slog.Logger
 }
 
 func NewAdminApplicationUsecase(
 	repository domain.OrganizerApplicationRepository,
+	transactionManager domain.TransactionManager,
 	logger *slog.Logger,
 ) *AdminApplicationUsecase {
 	return &AdminApplicationUsecase{
 		repository: repository,
+		transactionManager: transactionManager,
 		logger:     logger,
 	}
 }
@@ -118,4 +124,102 @@ func (u *AdminApplicationUsecase) GetApplication(
 	)
 
 	return application, nil
+}
+
+func (u *AdminApplicationUsecase) ApproveApplication(
+	id uuid.UUID,
+) error {
+
+	return u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+
+			// Find the application inside the transaction.
+			application, err := tx.OrganizerApplicationRepository().FindByID(id)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return appErrors.NewNotFoundError(
+						"organizer application not found",
+					)
+				}
+
+				u.logger.Error(
+					"admin_organizer_application_approval_find_failed",
+					"application_id", id,
+					"error", err,
+				)
+
+				return fmt.Errorf(
+					"failed to retrieve organizer application",
+				)
+			}
+
+			// Only pending applications can be approved.
+			if application.Status != domain.ApplicationPending {
+				return appErrors.NewConflictError(
+					"only pending applications can be approved",
+				)
+			}
+
+			// Change the application status to APPROVED.
+			application.Status = domain.ApplicationApproved
+			application.RejectionReason = ""
+
+			if err := tx.OrganizerApplicationRepository().Update(application); err != nil {
+				u.logger.Error(
+					"admin_organizer_application_approval_update_failed",
+					"application_id", id,
+					"error", err,
+				)
+
+				return fmt.Errorf(
+					"failed to approve organizer application",
+				)
+			}
+
+			// Find the user associated with the application.
+			user, err := tx.UserRepository().FindByID(application.UserID)
+			if err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return appErrors.NewNotFoundError(
+						"application user not found",
+					)
+				}
+
+				u.logger.Error(
+					"admin_organizer_application_user_find_failed",
+					"application_id", id,
+					"user_id", application.UserID,
+					"error", err,
+				)
+
+				return fmt.Errorf(
+					"failed to retrieve application user",
+				)
+			}
+
+			// Promote the user to ORGANIZER.
+			user.Role = "ORGANIZER"
+
+			if err := tx.UserRepository().Update(user); err != nil {
+				u.logger.Error(
+					"admin_organizer_application_user_role_update_failed",
+					"application_id", id,
+					"user_id", application.UserID,
+					"error", err,
+				)
+
+				return fmt.Errorf(
+					"failed to update user role",
+				)
+			}
+
+			u.logger.Info(
+				"admin_organizer_application_approved",
+				"application_id", id,
+				"user_id", application.UserID,
+			)
+
+			return nil
+		},
+	)
 }

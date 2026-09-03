@@ -142,13 +142,21 @@ func organizerApplicationToModel(
 ) models.OrganizerApplicationModel {
 
 	return models.OrganizerApplicationModel{
-		ID:                      application.ID,
-		UserID:                  application.UserID,
-		BusinessName:            application.BusinessName,
-		BusinessType:            application.BusinessType,
-		Description:             application.Description,
-		Phone:                   application.Phone,
-		Website:                 application.Website,
+		ID:           application.ID,
+		UserID:       application.UserID,
+		BusinessName: application.BusinessName,
+		BusinessType: application.BusinessType,
+		Description:  application.Description,
+		Phone:        application.Phone,
+		Website:      application.Website,
+
+		// Address fields copied from the domain to the database model.
+		AddressLine: application.AddressLine,
+		City:        application.City,
+		State:       application.State,
+		Country:     application.Country,
+		PostalCode:  application.PostalCode,
+
 		BankName:                application.BankName,
 		AccountHolderName:       application.AccountHolderName,
 		AccountNumberEncrypted:  application.AccountNumberEncrypted,
@@ -169,13 +177,21 @@ func modelToOrganizerApplication(
 ) *domain.OrganizerApplication {
 
 	return &domain.OrganizerApplication{
-		ID:                      model.ID,
-		UserID:                  model.UserID,
-		BusinessName:            model.BusinessName,
-		BusinessType:            model.BusinessType,
-		Description:             model.Description,
-		Phone:                   model.Phone,
-		Website:                 model.Website,
+		ID:           model.ID,
+		UserID:       model.UserID,
+		BusinessName: model.BusinessName,
+		BusinessType: model.BusinessType,
+		Description:  model.Description,
+		Phone:        model.Phone,
+		Website:      model.Website,
+
+		// Address fields copied from the database model to the domain.
+		AddressLine: model.AddressLine,
+		City:        model.City,
+		State:       model.State,
+		Country:     model.Country,
+		PostalCode:  model.PostalCode,
+
 		BankName:                model.BankName,
 		AccountHolderName:       model.AccountHolderName,
 		AccountNumberEncrypted:  model.AccountNumberEncrypted,
@@ -273,16 +289,21 @@ func (r *OrganizerApplicationRepository) List(
 	}, nil
 }
 
-
-
 func (r *OrganizerApplicationRepository) FindByID(
 	id uuid.UUID,
 ) (*domain.OrganizerApplication, error) {
 
 	var model models.OrganizerApplicationModel
 
-	// Query the database using the application primary key.
-	if err := r.db.First(&model, "id = ?", id).Error; err != nil {
+	err := r.db.
+		Where("id = ?", id).
+		First(&model).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, gorm.ErrRecordNotFound
+		}
+
 		r.logger.Error(
 			"organizer_application_find_by_id_failed",
 			"application_id", id,
@@ -292,33 +313,5 @@ func (r *OrganizerApplicationRepository) FindByID(
 		return nil, err
 	}
 
-	// Convert the persistence model into the domain entity.
-	application := &domain.OrganizerApplication{
-		ID:                      model.ID,
-		UserID:                  model.UserID,
-		BusinessName:            model.BusinessName,
-		BusinessType:            model.BusinessType,
-		Description:             model.Description,
-		Phone:                   model.Phone,
-		Website:                 model.Website,
-		GSTNumber:               model.GSTNumber,
-		PANNumber:               model.PANNumber,
-		BankName:                model.BankName,
-		AccountHolderName:       model.AccountHolderName,
-		AccountNumberEncrypted:  model.AccountNumberEncrypted,
-		IFSCCode:                model.IFSCCode,
-		LogoURL:                 model.LogoURL,
-		VerificationDocumentURL: model.VerificationDocumentURL,
-		Status:                  domain.ApplicationStatus(model.Status),
-		RejectionReason:         model.RejectionReason,
-		CreatedAt:               model.CreatedAt,
-		UpdatedAt:               model.UpdatedAt,
-	}
-
-	r.logger.Info(
-		"organizer_application_found_by_id",
-		"application_id", id,
-	)
-
-	return application, nil
+	return modelToOrganizerApplication(&model), nil
 }

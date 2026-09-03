@@ -32,6 +32,12 @@ type OrganizerApplication struct {
 	AccountNumberEncrypted string
 	IFSCCode               string
 
+	AddressLine string
+	City        string
+	State       string
+	Country     string
+	PostalCode  string
+
 	LogoURL                 string
 	VerificationDocumentURL string
 

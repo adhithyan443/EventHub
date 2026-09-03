@@ -1,4 +1,4 @@
-//DTO
+// DTO
 package organizer
 
 import (
@@ -9,13 +9,20 @@ import (
 )
 
 type AdminApplicationResponse struct {
-	ID                      uuid.UUID `json:"id"`
-	UserID                  uuid.UUID `json:"user_id"`
-	BusinessName            string    `json:"business_name"`
-	BusinessType            string    `json:"business_type"`
-	Description             string    `json:"description"`
-	Phone                   string    `json:"phone"`
-	Website                 string    `json:"website"`
+	ID           uuid.UUID `json:"id"`
+	UserID       uuid.UUID `json:"user_id"`
+	BusinessName string    `json:"business_name"`
+	BusinessType string    `json:"business_type"`
+	Description  string    `json:"description"`
+	Phone        string    `json:"phone"`
+	Website      string    `json:"website"`
+
+	AddressLine string `json:"address_line"`
+	City        string `json:"city"`
+	State       string `json:"state"`
+	Country     string `json:"country"`
+	PostalCode  string `json:"postal_code"`
+
 	GSTNumber               string    `json:"gst_number"`
 	PANNumber               string    `json:"pan_number"`
 	BankName                string    `json:"bank_name"`
@@ -33,13 +40,20 @@ func ToAdminApplicationResponse(
 	application *domain.OrganizerApplication,
 ) AdminApplicationResponse {
 	return AdminApplicationResponse{
-		ID:                      application.ID,
-		UserID:                  application.UserID,
-		BusinessName:            application.BusinessName,
-		BusinessType:            application.BusinessType,
-		Description:             application.Description,
-		Phone:                   application.Phone,
-		Website:                 application.Website,
+		ID:           application.ID,
+		UserID:       application.UserID,
+		BusinessName: application.BusinessName,
+		BusinessType: application.BusinessType,
+		Description:  application.Description,
+		Phone:        application.Phone,
+		Website:      application.Website,
+
+		AddressLine: application.AddressLine,
+		City:        application.City,
+		State:       application.State,
+		Country:     application.Country,
+		PostalCode:  application.PostalCode,
+
 		GSTNumber:               application.GSTNumber,
 		PANNumber:               application.PANNumber,
 		BankName:                application.BankName,

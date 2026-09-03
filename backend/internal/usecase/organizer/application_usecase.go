@@ -190,6 +190,25 @@ func (u *ApplicationUsecase) buildApplication(
 		Description:  strings.TrimSpace(input.BusinessDescription),
 		Phone:        strings.TrimSpace(input.ContactPhone),
 		Website:      strings.TrimSpace(input.Website),
+		AddressLine: strings.TrimSpace(
+			input.AddressLine,
+		),
+
+		City: strings.TrimSpace(
+			input.City,
+		),
+
+		State: strings.TrimSpace(
+			input.State,
+		),
+
+		Country: strings.TrimSpace(
+			input.Country,
+		),
+
+		PostalCode: strings.TrimSpace(
+			input.PostalCode,
+		),
 
 		GSTNumber: strings.ToUpper(
 			strings.TrimSpace(input.GSTNumber),
@@ -203,7 +222,7 @@ func (u *ApplicationUsecase) buildApplication(
 			input.AccountHolderName,
 		),
 
-		// TODO: Encrypt the account number before storing it.
+		
 		AccountNumberEncrypted: encryptedAccountNumber,
 
 		IFSCCode: strings.ToUpper(
@@ -276,5 +295,25 @@ func updateApplication(
 
 	application.VerificationDocumentURL = strings.TrimSpace(
 		input.VerificationDocumentURL,
+	)
+
+	application.AddressLine = strings.TrimSpace(
+		input.AddressLine,
+	)
+
+	application.City = strings.TrimSpace(
+		input.City,
+	)
+
+	application.State = strings.TrimSpace(
+		input.State,
+	)
+
+	application.Country = strings.TrimSpace(
+		input.Country,
+	)
+
+	application.PostalCode = strings.TrimSpace(
+		input.PostalCode,
 	)
 }
