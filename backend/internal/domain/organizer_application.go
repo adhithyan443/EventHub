@@ -53,6 +53,6 @@ type OrganizerApplicationRepository interface {
 	Create(application *OrganizerApplication) error
 	FindByUserID(userID uuid.UUID) (*OrganizerApplication, error)
 	Update(application *OrganizerApplication) error
-
+	FindByID(id uuid.UUID) (*OrganizerApplication, error)
 	List(page int, limit int, status ApplicationStatus) (*OrganizerApplicationList, error)
 }

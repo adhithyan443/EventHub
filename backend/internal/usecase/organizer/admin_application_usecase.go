@@ -93,3 +93,29 @@ func applicationID(value string) (uuid.UUID, error) {
 
 	return id, nil
 }
+
+// GetApplication retrieves a single organizer application for admin review.
+func (u *AdminApplicationUsecase) GetApplication(
+	id uuid.UUID,
+) (*domain.OrganizerApplication, error) {
+
+	application, err := u.repository.FindByID(id)
+	if err != nil {
+		u.logger.Error(
+			"admin_organizer_application_get_failed",
+			"application_id", id,
+			"error", err,
+		)
+
+		return nil, fmt.Errorf(
+			"failed to retrieve organizer application",
+		)
+	}
+
+	u.logger.Info(
+		"admin_organizer_application_retrieved",
+		"application_id", id,
+	)
+
+	return application, nil
+}

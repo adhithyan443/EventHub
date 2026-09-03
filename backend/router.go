@@ -181,4 +181,9 @@ func registerAdminRoutes(
 		"/organizer-applications",
 		organizerApplicationHandler.ListApplications,
 	)
+
+	admin.GET(
+		"/organizer-applications/:id",
+		organizerApplicationHandler.GetApplication,
+	)
 }

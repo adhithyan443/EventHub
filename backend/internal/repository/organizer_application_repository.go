@@ -272,3 +272,53 @@ func (r *OrganizerApplicationRepository) List(
 		Limit:        limit,
 	}, nil
 }
+
+
+
+func (r *OrganizerApplicationRepository) FindByID(
+	id uuid.UUID,
+) (*domain.OrganizerApplication, error) {
+
+	var model models.OrganizerApplicationModel
+
+	// Query the database using the application primary key.
+	if err := r.db.First(&model, "id = ?", id).Error; err != nil {
+		r.logger.Error(
+			"organizer_application_find_by_id_failed",
+			"application_id", id,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	// Convert the persistence model into the domain entity.
+	application := &domain.OrganizerApplication{
+		ID:                      model.ID,
+		UserID:                  model.UserID,
+		BusinessName:            model.BusinessName,
+		BusinessType:            model.BusinessType,
+		Description:             model.Description,
+		Phone:                   model.Phone,
+		Website:                 model.Website,
+		GSTNumber:               model.GSTNumber,
+		PANNumber:               model.PANNumber,
+		BankName:                model.BankName,
+		AccountHolderName:       model.AccountHolderName,
+		AccountNumberEncrypted:  model.AccountNumberEncrypted,
+		IFSCCode:                model.IFSCCode,
+		LogoURL:                 model.LogoURL,
+		VerificationDocumentURL: model.VerificationDocumentURL,
+		Status:                  domain.ApplicationStatus(model.Status),
+		RejectionReason:         model.RejectionReason,
+		CreatedAt:               model.CreatedAt,
+		UpdatedAt:               model.UpdatedAt,
+	}
+
+	r.logger.Info(
+		"organizer_application_found_by_id",
+		"application_id", id,
+	)
+
+	return application, nil
+}

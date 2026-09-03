@@ -147,3 +147,30 @@ func (h *OrganizerApplicationHandler) ListApplications(ctx *gin.Context) {
 		},
 	})
 }
+
+func (h *OrganizerApplicationHandler) GetApplication(ctx *gin.Context) {
+	// Get the application ID from the URL parameter.
+	idParam := ctx.Param("id")
+
+	// Convert the string ID into a UUID.
+	applicationID, err := uuid.Parse(idParam)
+	if err != nil {
+		ctx.Error(errors.NewValidationError("invalid application id"))
+		return
+	}
+
+	// Retrieve the application through the admin usecase.
+	application, err := h.adminApplicationUsecase.GetApplication(applicationID)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	// Convert the domain entity into the safe admin response DTO.
+	response := organizer.ToAdminApplicationResponse(application)
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    response,
+	})
+}
