@@ -9,9 +9,11 @@ import (
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
+	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/adhithyan443/EventHub/backend/internal/service/google"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/joho/godotenv"
 )
 
@@ -51,11 +53,20 @@ func main() {
 
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
-	userRepo := repository.NewUserRepository(db)
+	userRepo := repository.NewUserRepository(db, logger)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	txManager := repository.NewTransactionManager(db)
+	txManager := repository.NewTransactionManager(db, logger)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
+
+	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
+	if err != nil {
+		logger.Error(
+			"encryption_service_initialization_failed",
+			"error", err,
+		)
+		return
+	}
 
 	googleOAuthService := google.NewGoogleOAuthService(
 		cfg.GoogleClientID,
@@ -85,9 +96,33 @@ func main() {
 
 	authHandler := handler.NewAuthHandler(authUsecase, cfg.FrontendURL)
 
+	// organizerApplicationRepo
+	organizerApplicationRepo := repository.NewOrganizerApplicationRepository(
+		db,
+		logger,
+	)
+
+	organizerApplicationUsecase := organizer.NewApplicationUsecase(
+		organizerApplicationRepo,
+		encryptionService,
+		logger,
+	)
+
+	adminApplicationUsecase := organizer.NewAdminApplicationUsecase(
+		organizerApplicationRepo,
+		txManager,
+		logger,
+	)
+
+	organizerApplicationHandler := handler.NewOrganizerApplicationHandler(
+		organizerApplicationUsecase,
+		adminApplicationUsecase,
+		logger,
+	)
+
 	logger.Info("database migration completed")
 
-	router := setupRouter(logger, authHandler, jwtService)
+	router := setupRouter(logger, authHandler, organizerApplicationHandler, jwtService)
 
 	logger.Info(
 		"EventHub backend started",

@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"log/slog"
+
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
@@ -8,11 +10,15 @@ import (
 )
 
 type UserRepository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	logger *slog.Logger
 }
 
-func NewUserRepository(db *gorm.DB) *UserRepository {
-	return &UserRepository{db: db}
+func NewUserRepository(db *gorm.DB, logger *slog.Logger) *UserRepository {
+	return &UserRepository{
+		db:     db,
+		logger: logger,
+	}
 }
 
 func (r *UserRepository) Create(user *domain.User) error {
@@ -55,10 +61,20 @@ func (r *UserRepository) Update(user *domain.User) error {
 	model := userToModel(user)
 
 	if err := r.db.Save(&model).Error; err != nil {
+		r.logger.Error(
+			"user_update_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return err
 	}
 
 	*user = modelToUser(&model)
+
+	r.logger.Info(
+		"user_updated",
+		"user_id", user.ID,
+	)
 
 	return nil
 }

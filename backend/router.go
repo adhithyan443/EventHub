@@ -15,31 +15,25 @@ import (
 func setupRouter(
 	logger *slog.Logger,
 	authHandler *handler.AuthHandler,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
-
-	rateLimiter := middleware.NewRateLimiter(
-		5,
-		time.Minute,
-		logger,
-	)
-
 	router := gin.New()
 
+	// Global middleware.
 	router.Use(
-
 		cors.New(cors.Config{
 			AllowOrigins: []string{
-				"http://127.0.0.1:5173",
 				"http://localhost:5173",
+				"http://127.0.0.1:5173",
 			},
 			AllowMethods: []string{
-				"GET",
-				"POST",
-				"PUT",
-				"PATCH",
-				"DELETE",
-				"OPTIONS",
+				http.MethodGet,
+				http.MethodPost,
+				http.MethodPut,
+				http.MethodPatch,
+				http.MethodDelete,
+				http.MethodOptions,
 			},
 			AllowHeaders: []string{
 				"Origin",
@@ -49,22 +43,44 @@ func setupRouter(
 			},
 			AllowCredentials: true,
 		}),
-
 		middleware.RequestID(),
 		middleware.Logger(logger),
 		middleware.Recovery(logger),
 		middleware.ErrorHandler(),
 	)
 
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
+	registerHealthRoutes(router)
+	registerAuthRoutes(router, authHandler, jwtService, logger)
+	registerOrganizerRoutes(router, organizerApplicationHandler, jwtService)
+	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
+
+	return router
+}
+
+func registerHealthRoutes(router *gin.Engine) {
+	router.GET("/health", func(ctx *gin.Context) {
+		ctx.JSON(http.StatusOK, gin.H{
 			"status": "ok",
 		})
 	})
+}
+
+func registerAuthRoutes(
+	router *gin.Engine,
+	authHandler *handler.AuthHandler,
+	jwtService *token.JWTService,
+	logger *slog.Logger,
+) {
+	rateLimiter := middleware.NewRateLimiter(
+		5,
+		time.Minute,
+		logger,
+	)
 
 	api := router.Group("/api/v1")
-
 	auth := api.Group("/auth")
+
+	// Public authentication endpoints.
 	auth.POST(
 		"/register",
 		rateLimiter.Middleware(),
@@ -89,56 +105,90 @@ func setupRouter(
 		authHandler.Login,
 	)
 
-	auth.POST("/refresh-token", authHandler.RefreshToken)
-	auth.POST("/logout", middleware.Auth(jwtService), authHandler.Logout)
-
 	auth.POST(
 		"/forgot-password",
 		rateLimiter.Middleware(),
 		authHandler.ForgotPassword,
 	)
 
-	auth.POST("/reset-password", authHandler.ResetPassword)
+	auth.POST(
+		"/reset-password",
+		authHandler.ResetPassword,
+	)
 
-	auth.GET("/google", authHandler.GoogleLogin)
-	auth.GET("/google/callback", authHandler.GoogleCallback)
+	auth.GET(
+		"/google",
+		authHandler.GoogleLogin,
+	)
 
-	auth.GET("/me", middleware.Auth(jwtService), authHandler.Me)
+	auth.GET(
+		"/google/callback",
+		authHandler.GoogleCallback,
+	)
 
-	protected := api.Group("/protected")
+	// Token endpoints.
+	auth.POST(
+		"/refresh-token",
+		authHandler.RefreshToken,
+	)
 
-	protected.Use(middleware.Auth(jwtService))
+	auth.POST(
+		"/logout",
+		middleware.Auth(jwtService),
+		authHandler.Logout,
+	)
 
-	protected.GET("/test", func(ctx *gin.Context) {
-		userID, _ := ctx.Get("user_id")
-		role, _ := ctx.Get("user_role")
+	// Authenticated user endpoint.
+	auth.GET(
+		"/me",
+		middleware.Auth(jwtService),
+		authHandler.Me,
+	)
+}
 
-		ctx.JSON(http.StatusOK, gin.H{
-			"message": "you are authenticated",
-			"user_id": userID,
-			"role":    role,
-		})
-	})
+func registerOrganizerRoutes(
+	router *gin.Engine,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	jwtService *token.JWTService,
+) {
+	api := router.Group("/api/v1")
 
-	protected.GET(
-		"/admin-test",
+	organizer := api.Group("/organizers")
+	organizer.Use(middleware.Auth(jwtService))
+
+	// Customer organizer-application endpoints.
+	organizer.POST(
+		"/apply",
+		organizerApplicationHandler.SubmitApplication,
+	)
+}
+
+func registerAdminRoutes(
+	router *gin.Engine,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	jwtService *token.JWTService,
+) {
+
+	api := router.Group("/api/v1")
+
+	admin := api.Group("/admin")
+	admin.Use(
+		middleware.Auth(jwtService),
 		middleware.RequireRole("ADMIN"),
-		func(ctx *gin.Context) {
-			ctx.JSON(http.StatusOK, gin.H{
-				"message": "admin access granted",
-			})
-		},
 	)
 
-	protected.GET(
-		"/organizer-test",
-		middleware.RequireRole("ORGANIZER"),
-		func(ctx *gin.Context) {
-			ctx.JSON(http.StatusOK, gin.H{
-				"message": "organizer access granted",
-			})
-		},
+	admin.GET(
+		"/organizer-applications",
+		organizerApplicationHandler.ListApplications,
 	)
 
-	return router
+	admin.GET(
+		"/organizer-applications/:id",
+		organizerApplicationHandler.GetApplication,
+	)
+
+	admin.PATCH(
+		"/organizer-applications/:id/approve",
+		organizerApplicationHandler.ApproveApplication,
+	)
 }
