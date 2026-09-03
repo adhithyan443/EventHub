@@ -27,10 +27,30 @@ func (m *TransactionManager) WithinTransaction(
 ) error {
 	return m.db.Transaction(func(txDB *gorm.DB) error {
 		txRepos := &transactionRepositories{
-			userRepo:                NewUserRepository(txDB),
+			userRepo:                NewUserRepository(txDB, m.logger),
 			pendingRegistrationRepo: NewPendingRegistrationRepository(txDB),
 			passwordResetTokenRepo:  NewPasswordResetTokenRepository(txDB),
 			organizerApplicationRepo: NewOrganizerApplicationRepository(
+				txDB,
+				m.logger,
+			),
+
+			organizerRepo: NewOrganizerRepository(
+				txDB,
+				m.logger,
+			),
+
+			organizerProfileRepo: NewOrganizerProfileRepository(
+				txDB,
+				m.logger,
+			),
+
+			organizerAddressRepo: NewOrganizerAddressRepository(
+				txDB,
+				m.logger,
+			),
+
+			organizerBankAccountRepo: NewOrganizerBankAccountRepository(
 				txDB,
 				m.logger,
 			),
@@ -45,6 +65,11 @@ type transactionRepositories struct {
 	pendingRegistrationRepo  *PendingRegistrationRepository
 	passwordResetTokenRepo   domain.PasswordResetTokenRepository
 	organizerApplicationRepo domain.OrganizerApplicationRepository
+
+	organizerRepo            domain.OrganizerRepository
+	organizerProfileRepo     domain.OrganizerProfileRepository
+	organizerAddressRepo     domain.OrganizerAddressRepository
+	organizerBankAccountRepo domain.OrganizerBankAccountRepository
 }
 
 func (r *transactionRepositories) UserRepository() domain.UserRepository {
@@ -61,4 +86,20 @@ func (r *transactionRepositories) PasswordResetTokenRepository() domain.Password
 
 func (r *transactionRepositories) OrganizerApplicationRepository() domain.OrganizerApplicationRepository {
 	return r.organizerApplicationRepo
+}
+
+func (r *transactionRepositories) OrganizerRepository() domain.OrganizerRepository {
+	return r.organizerRepo
+}
+
+func (r *transactionRepositories) OrganizerProfileRepository() domain.OrganizerProfileRepository {
+	return r.organizerProfileRepo
+}
+
+func (r *transactionRepositories) OrganizerAddressRepository() domain.OrganizerAddressRepository {
+	return r.organizerAddressRepo
+}
+
+func (r *transactionRepositories) OrganizerBankAccountRepository() domain.OrganizerBankAccountRepository {
+	return r.organizerBankAccountRepo
 }

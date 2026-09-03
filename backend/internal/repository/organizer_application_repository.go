@@ -315,3 +315,24 @@ func (r *OrganizerApplicationRepository) FindByID(
 
 	return modelToOrganizerApplication(&model), nil
 }
+
+
+
+func (r *OrganizerApplicationRepository) Delete(id uuid.UUID) error {
+	err := r.db.Delete(&models.OrganizerApplicationModel{}, "id = ?", id).Error
+	if err != nil {
+		r.logger.Error(
+			"organizer_application_delete_failed",
+			"application_id", id,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"organizer_application_deleted",
+		"application_id", id,
+	)
+
+	return nil
+}

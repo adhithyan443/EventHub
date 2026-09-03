@@ -53,7 +53,7 @@ func main() {
 
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
-	userRepo := repository.NewUserRepository(db)
+	userRepo := repository.NewUserRepository(db, logger)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
 	txManager := repository.NewTransactionManager(db, logger)

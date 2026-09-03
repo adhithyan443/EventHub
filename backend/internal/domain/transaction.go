@@ -10,5 +10,8 @@ type TransactionRepositories interface {
 	PasswordResetTokenRepository() PasswordResetTokenRepository
 
 	OrganizerApplicationRepository() OrganizerApplicationRepository
+	OrganizerRepository() OrganizerRepository
+	OrganizerProfileRepository() OrganizerProfileRepository
+	OrganizerAddressRepository() OrganizerAddressRepository
+	OrganizerBankAccountRepository() OrganizerBankAccountRepository
 }
-

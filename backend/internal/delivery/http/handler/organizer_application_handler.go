@@ -174,3 +174,24 @@ func (h *OrganizerApplicationHandler) GetApplication(ctx *gin.Context) {
 		"data":    response,
 	})
 }
+
+func (h *OrganizerApplicationHandler) ApproveApplication(ctx *gin.Context) {
+
+	idParam := ctx.Param("id")
+
+	applicationID, err := uuid.Parse(idParam)
+	if err != nil {
+		ctx.Error(errors.NewValidationError("invalid application id"))
+		return
+	}
+
+	if err := h.adminApplicationUsecase.ApproveApplication(applicationID); err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "organizer application approved successfully",
+	})
+}

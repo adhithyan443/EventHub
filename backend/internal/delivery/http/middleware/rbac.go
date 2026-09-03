@@ -1,4 +1,4 @@
-//Role based access control
+// Role based access control
 package middleware
 
 import (

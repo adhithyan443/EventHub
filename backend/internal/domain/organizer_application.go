@@ -60,5 +60,6 @@ type OrganizerApplicationRepository interface {
 	FindByUserID(userID uuid.UUID) (*OrganizerApplication, error)
 	Update(application *OrganizerApplication) error
 	FindByID(id uuid.UUID) (*OrganizerApplication, error)
+	Delete(id uuid.UUID) error
 	List(page int, limit int, status ApplicationStatus) (*OrganizerApplicationList, error)
 }

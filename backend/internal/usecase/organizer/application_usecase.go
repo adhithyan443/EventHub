@@ -222,7 +222,6 @@ func (u *ApplicationUsecase) buildApplication(
 			input.AccountHolderName,
 		),
 
-		
 		AccountNumberEncrypted: encryptedAccountNumber,
 
 		IFSCCode: strings.ToUpper(
