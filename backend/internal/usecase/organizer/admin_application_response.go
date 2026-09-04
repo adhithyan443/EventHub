@@ -9,13 +9,15 @@ import (
 )
 
 type AdminApplicationResponse struct {
-	ID           uuid.UUID `json:"id"`
-	UserID       uuid.UUID `json:"user_id"`
-	BusinessName string    `json:"business_name"`
-	BusinessType string    `json:"business_type"`
-	Description  string    `json:"description"`
-	Phone        string    `json:"phone"`
-	Website      string    `json:"website"`
+	ID            uuid.UUID `json:"id"`
+	UserID        uuid.UUID `json:"user_id"`
+	ApplicantName string    `json:"applicant_name"`
+
+	BusinessName string `json:"business_name"`
+	BusinessType string `json:"business_type"`
+	Description  string `json:"description"`
+	Phone        string `json:"phone"`
+	Website      string `json:"website"`
 
 	AddressLine string `json:"address_line"`
 	City        string `json:"city"`
@@ -40,8 +42,10 @@ func ToAdminApplicationResponse(
 	application *domain.OrganizerApplication,
 ) AdminApplicationResponse {
 	return AdminApplicationResponse{
-		ID:           application.ID,
-		UserID:       application.UserID,
+		ID:            application.ID,
+		UserID:        application.UserID,
+		ApplicantName: application.ApplicantName,
+
 		BusinessName: application.BusinessName,
 		BusinessType: application.BusinessType,
 		Description:  application.Description,

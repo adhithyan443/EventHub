@@ -28,7 +28,6 @@ func NewOrganizerApplicationRepository(
 func (r *OrganizerApplicationRepository) Create(
 	application *domain.OrganizerApplication,
 ) error {
-
 	model := organizerApplicationToModel(application)
 
 	if err := r.db.Create(&model).Error; err != nil {
@@ -55,7 +54,6 @@ func (r *OrganizerApplicationRepository) Create(
 func (r *OrganizerApplicationRepository) FindByUserID(
 	userID uuid.UUID,
 ) (*domain.OrganizerApplication, error) {
-
 	var model models.OrganizerApplicationModel
 
 	err := r.db.
@@ -82,7 +80,6 @@ func (r *OrganizerApplicationRepository) FindByUserID(
 func (r *OrganizerApplicationRepository) Update(
 	application *domain.OrganizerApplication,
 ) error {
-
 	model := organizerApplicationToModel(application)
 
 	result := r.db.
@@ -117,6 +114,7 @@ func (r *OrganizerApplicationRepository) Update(
 	if err := r.db.
 		Where("id = ?", application.ID).
 		First(&updatedModel).Error; err != nil {
+
 		r.logger.Error(
 			"organizer_application_reload_failed",
 			"application_id", application.ID,
@@ -140,7 +138,6 @@ func (r *OrganizerApplicationRepository) Update(
 func organizerApplicationToModel(
 	application *domain.OrganizerApplication,
 ) models.OrganizerApplicationModel {
-
 	return models.OrganizerApplicationModel{
 		ID:           application.ID,
 		UserID:       application.UserID,
@@ -157,10 +154,11 @@ func organizerApplicationToModel(
 		Country:     application.Country,
 		PostalCode:  application.PostalCode,
 
-		BankName:                application.BankName,
-		AccountHolderName:       application.AccountHolderName,
-		AccountNumberEncrypted:  application.AccountNumberEncrypted,
-		IFSCCode:                application.IFSCCode,
+		BankName:               application.BankName,
+		AccountHolderName:      application.AccountHolderName,
+		AccountNumberEncrypted: application.AccountNumberEncrypted,
+		IFSCCode:               application.IFSCCode,
+
 		GSTNumber:               application.GSTNumber,
 		PANNumber:               application.PANNumber,
 		LogoURL:                 application.LogoURL,
@@ -175,7 +173,6 @@ func organizerApplicationToModel(
 func modelToOrganizerApplication(
 	model *models.OrganizerApplicationModel,
 ) *domain.OrganizerApplication {
-
 	return &domain.OrganizerApplication{
 		ID:           model.ID,
 		UserID:       model.UserID,
@@ -192,10 +189,11 @@ func modelToOrganizerApplication(
 		Country:     model.Country,
 		PostalCode:  model.PostalCode,
 
-		BankName:                model.BankName,
-		AccountHolderName:       model.AccountHolderName,
-		AccountNumberEncrypted:  model.AccountNumberEncrypted,
-		IFSCCode:                model.IFSCCode,
+		BankName:               model.BankName,
+		AccountHolderName:      model.AccountHolderName,
+		AccountNumberEncrypted: model.AccountNumberEncrypted,
+		IFSCCode:               model.IFSCCode,
+
 		GSTNumber:               model.GSTNumber,
 		PANNumber:               model.PANNumber,
 		LogoURL:                 model.LogoURL,
@@ -207,30 +205,51 @@ func modelToOrganizerApplication(
 	}
 }
 
+// organizerApplicationListRow represents an organizer application
+// together with the applicant's name from the users table.
+type organizerApplicationListRow struct {
+	models.OrganizerApplicationModel
+
+	ApplicantName string `gorm:"column:applicant_name"`
+}
+
+func organizerApplicationRowToDomain(
+	row *organizerApplicationListRow,
+) *domain.OrganizerApplication {
+	application := modelToOrganizerApplication(
+		&row.OrganizerApplicationModel,
+	)
+
+	application.ApplicantName = row.ApplicantName
+
+	return application
+}
+
 func (r *OrganizerApplicationRepository) List(
 	page int,
 	limit int,
 	status domain.ApplicationStatus,
 ) (*domain.OrganizerApplicationList, error) {
-
-	var modelsList []models.OrganizerApplicationModel
+	var rows []organizerApplicationListRow
 	var total int64
 
 	offset := (page - 1) * limit
 
-	query := r.db.Model(
-		&models.OrganizerApplicationModel{},
-	)
+	query := r.db.
+		Model(&models.OrganizerApplicationModel{}).
+		Joins(
+			"JOIN users ON users.id = organizer_applications.user_id",
+		)
 
 	// Apply status filter only when a status was provided.
 	if status != "" {
 		query = query.Where(
-			"status = ?",
+			"organizer_applications.status = ?",
 			string(status),
 		)
 	}
 
-	// Get total number of matching applications.
+	// Count matching applications.
 	if err := query.Count(&total).Error; err != nil {
 		r.logger.Error(
 			"organizer_application_count_failed",
@@ -241,12 +260,15 @@ func (r *OrganizerApplicationRepository) List(
 		return nil, err
 	}
 
-	// Fetch newest applications first.
+	// Fetch applications together with users.full_name.
 	if err := query.
-		Order("created_at DESC").
+		Select(
+			"organizer_applications.*, users.full_name AS applicant_name",
+		).
+		Order("organizer_applications.created_at DESC").
 		Limit(limit).
 		Offset(offset).
-		Find(&modelsList).Error; err != nil {
+		Scan(&rows).Error; err != nil {
 
 		r.logger.Error(
 			"organizer_application_list_failed",
@@ -262,13 +284,13 @@ func (r *OrganizerApplicationRepository) List(
 	applications := make(
 		[]*domain.OrganizerApplication,
 		0,
-		len(modelsList),
+		len(rows),
 	)
 
-	for i := range modelsList {
+	for i := range rows {
 		applications = append(
 			applications,
-			modelToOrganizerApplication(&modelsList[i]),
+			organizerApplicationRowToDomain(&rows[i]),
 		)
 	}
 
@@ -292,40 +314,55 @@ func (r *OrganizerApplicationRepository) List(
 func (r *OrganizerApplicationRepository) FindByID(
 	id uuid.UUID,
 ) (*domain.OrganizerApplication, error) {
+	var row organizerApplicationListRow
 
-	var model models.OrganizerApplicationModel
+	result := r.db.
+		Model(&models.OrganizerApplicationModel{}).
+		Joins(
+			"JOIN users ON users.id = organizer_applications.user_id",
+		).
+		Select(
+			"organizer_applications.*, users.full_name AS applicant_name",
+		).
+		Where(
+			"organizer_applications.id = ?",
+			id,
+		).
+		Scan(&row)
 
-	err := r.db.
-		Where("id = ?", id).
-		First(&model).Error
-
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, gorm.ErrRecordNotFound
-		}
-
+	if result.Error != nil {
 		r.logger.Error(
 			"organizer_application_find_by_id_failed",
 			"application_id", id,
-			"error", err,
+			"error", result.Error,
 		)
 
-		return nil, err
+		return nil, result.Error
 	}
 
-	return modelToOrganizerApplication(&model), nil
+	if row.ID == uuid.Nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+
+	return organizerApplicationRowToDomain(&row), nil
 }
 
+func (r *OrganizerApplicationRepository) Delete(
+	id uuid.UUID,
+) error {
+	err := r.db.Delete(
+		&models.OrganizerApplicationModel{},
+		"id = ?",
+		id,
+	).Error
 
-
-func (r *OrganizerApplicationRepository) Delete(id uuid.UUID) error {
-	err := r.db.Delete(&models.OrganizerApplicationModel{}, "id = ?", id).Error
 	if err != nil {
 		r.logger.Error(
 			"organizer_application_delete_failed",
 			"application_id", id,
 			"error", err,
 		)
+
 		return err
 	}
 
