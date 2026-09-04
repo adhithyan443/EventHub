@@ -48,11 +48,18 @@ export default function ProfileSidebar({ user }) {
             </div>
 
             <div className="pt-8">
-                <button
-                    onClick={() => navigate("/become-organizer")}
-                    className="w-full h-10 rounded-lg bg-[#007066] hover:bg-[#005c54] text-white text-sm font-semibold transition-colors">
-                    Become an Organizer
-                </button>
+                {user?.role === "ORGANIZER" ? (
+                    <div className="w-full py-2.5 px-3 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold text-center border border-emerald-200 flex items-center justify-center gap-1.5 shadow-xs">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                        Active Organizer
+                    </div>
+                ) : (
+                    <button
+                        onClick={() => navigate("/become-organizer")}
+                        className="w-full h-10 rounded-lg bg-[#007066] hover:bg-[#005c54] text-white text-sm font-semibold transition-colors cursor-pointer shadow-xs">
+                        Become an Organizer
+                    </button>
+                )}
             </div>
         </aside>
     );

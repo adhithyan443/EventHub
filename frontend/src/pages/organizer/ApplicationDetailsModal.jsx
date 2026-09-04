@@ -37,9 +37,27 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
   const accountHolderName = useOrganizerStore((state) => state.accountHolderName);
   const accountNumber = useOrganizerStore((state) => state.accountNumber);
   const ifscCode = useOrganizerStore((state) => state.ifscCode);
-  const applicationId = useOrganizerStore((state) => state.applicationId) || "APP001";
+  const applicationId = useOrganizerStore((state) => state.applicationId);
   const applicationStatus = useOrganizerStore((state) => state.applicationStatus) || "PENDING";
-  const submissionDate = useOrganizerStore((state) => state.submissionDate) || "10 August 2026";
+  const rawSubmissionDate = useOrganizerStore((state) => state.submissionDate);
+  const rejectionReason = useOrganizerStore((state) => state.rejectionReason);
+
+  const formattedDate = rawSubmissionDate
+    ? (() => {
+        try {
+          const d = new Date(rawSubmissionDate);
+          return isNaN(d.getTime())
+            ? rawSubmissionDate
+            : d.toLocaleDateString("en-US", {
+                day: "numeric",
+                month: "long",
+                year: "numeric",
+              });
+        } catch {
+          return rawSubmissionDate;
+        }
+      })()
+    : "—";
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -103,13 +121,29 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
             </h3>
             <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
               <DetailItem label="Application ID" value={applicationId} />
-              <DetailItem label="Submission Date" value={submissionDate} />
+              <DetailItem label="Submission Date" value={formattedDate} />
               <div className="flex items-center justify-between py-2 text-xs sm:text-sm">
                 <span className="text-slate-500 font-medium">Status</span>
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-primary/10 text-primary border border-primary/20">
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold border ${
+                  applicationStatus === "REJECTED"
+                    ? "bg-red-50 text-red-600 border-red-200"
+                    : applicationStatus === "APPROVED"
+                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                    : "bg-primary/10 text-primary border-primary/20"
+                }`}>
                   {applicationStatus}
                 </span>
               </div>
+              {rejectionReason && (
+                <div className="mt-3 pt-3 border-t border-slate-200/80">
+                  <span className="text-xs font-bold uppercase tracking-wider text-red-600 block mb-1">
+                    Rejection Reason
+                  </span>
+                  <p className="text-xs sm:text-sm text-red-900 font-medium bg-red-50/80 p-2.5 rounded-lg border border-red-100">
+                    {rejectionReason}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

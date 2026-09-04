@@ -1,5 +1,9 @@
 import { create } from "zustand";
-import { applyAsOrganizer } from "../api/organizerApi";
+import {
+  applyAsOrganizer,
+  getOrganizerApplication,
+  resubmitOrganizerApplication,
+} from "../api/organizerApi";
 
 const DRAFT_STORAGE_KEY = "eventhub_organizer_draft";
 
@@ -36,12 +40,18 @@ const initialData = {
   businessLogoPreview: "",
   businessLogoUrl: "",
 
-  // Status & Submission
+  // Status & Submission metadata
   termsAccepted: false,
   applicationSubmitted: false,
   applicationStatus: null,
   applicationId: null,
+  rejectionReason: "",
   submissionDate: null,
+
+  // Resubmission & Lifecycle states
+  isResubmission: false,
+  isCheckingApplication: false,
+  fetchError: null,
 
   // Submission state
   isSubmitting: false,
@@ -143,6 +153,124 @@ const useOrganizerStore = create((set, get) => ({
     }
   },
 
+  loadApplication: (application) => {
+    if (!application) return;
+
+    const status = application.status || "PENDING";
+    const isRejected = status === "REJECTED";
+
+    set({
+      businessName: application.business_name || application.businessName || "",
+      businessType: application.business_type || application.businessType || "",
+      description:
+        application.description ||
+        application.business_description ||
+        application.businessDescription ||
+        "",
+      phone:
+        application.phone ||
+        application.contact_phone ||
+        application.contactPhone ||
+        "",
+      website: application.website || "",
+
+      addressLine: application.address_line || application.addressLine || "",
+      city: application.city || "",
+      state: application.state || "",
+      country: application.country || "",
+      postalCode: application.postal_code || application.postalCode || "",
+
+      panNumber: application.pan_number || application.panNumber || "",
+      gstNumber: application.gst_number || application.gstNumber || "",
+
+      bankName: application.bank_name || application.bankName || "",
+      accountHolderName:
+        application.account_holder_name ||
+        application.accountHolderName ||
+        "",
+      accountNumber:
+        application.account_number || application.accountNumber || "",
+      confirmAccount:
+        application.account_number || application.accountNumber || "",
+      ifscCode: application.ifsc_code || application.ifscCode || "",
+
+      verificationDocumentUrl:
+        application.verification_document_url ||
+        application.verificationDocumentUrl ||
+        "",
+      businessLogoUrl: application.logo_url || application.businessLogoUrl || "",
+      businessLogoPreview:
+        application.logo_url || application.businessLogoUrl || "",
+
+      applicationId: application.id || application.applicationId || null,
+      applicationStatus: status,
+      rejectionReason:
+        application.rejection_reason || application.rejectionReason || "",
+      submissionDate:
+        application.created_at ||
+        application.createdAt ||
+        application.submissionDate ||
+        null,
+
+      applicationSubmitted: status === "PENDING" || status === "APPROVED",
+      isResubmission: isRejected,
+      termsAccepted: false,
+      submitError: null,
+      fetchError: null,
+    });
+  },
+
+  fetchApplication: async () => {
+    set({ isCheckingApplication: true, fetchError: null });
+
+    try {
+      const response = await getOrganizerApplication();
+      const application = response?.data || response;
+
+      if (application && (application.id || application.status)) {
+        get().loadApplication(application);
+        set({ isCheckingApplication: false });
+        return { exists: true, application };
+      } else {
+        set({
+          applicationStatus: null,
+          applicationId: null,
+          applicationSubmitted: false,
+          isResubmission: false,
+          isCheckingApplication: false,
+        });
+        return { exists: false, application: null };
+      }
+    } catch (error) {
+      const statusCode = error?.response?.status;
+      if (statusCode === 404) {
+        // Genuine 404 / no application exists
+        set({
+          applicationStatus: null,
+          applicationId: null,
+          applicationSubmitted: false,
+          isResubmission: false,
+          isCheckingApplication: false,
+          fetchError: null,
+        });
+        return { exists: false, application: null };
+      }
+
+      // Other errors: 401, 500, network error
+      const message =
+        error?.response?.data?.message ||
+        error?.message ||
+        "Failed to retrieve application status";
+
+      set({
+        isCheckingApplication: false,
+        fetchError: message,
+      });
+
+      return { exists: false, error: message, status: statusCode };
+    }
+  },
+
   submitApplication: async () => {
     const state = get();
 
@@ -178,8 +306,12 @@ const useOrganizerStore = create((set, get) => ({
         verification_document_url: state.verificationDocumentUrl || "",
       };
 
-      // Submit the application to the real backend
-      const response = await applyAsOrganizer(applicationData);
+      // Isolate new application vs resubmission endpoint call
+      const submitAction = state.isResubmission
+        ? resubmitOrganizerApplication
+        : applyAsOrganizer;
+
+      const response = await submitAction(applicationData);
 
       // Read the application information returned by the backend
       const application = response?.data || response;
@@ -190,9 +322,14 @@ const useOrganizerStore = create((set, get) => ({
         applicationId:
           application?.id ||
           application?.applicationId ||
+          state.applicationId ||
           null,
         submissionDate:
-          application?.createdAt || new Date().toISOString(),
+          application?.createdAt ||
+          application?.created_at ||
+          new Date().toISOString(),
+        rejectionReason: "",
+        isResubmission: false,
         isSubmitting: false,
         submitError: null,
       });

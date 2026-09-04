@@ -161,6 +161,11 @@ func registerOrganizerRoutes(
 		"/apply",
 		organizerApplicationHandler.SubmitApplication,
 	)
+
+	organizer.GET(
+		"/application",
+		organizerApplicationHandler.GetMyApplication,
+	)
 }
 
 func registerAdminRoutes(

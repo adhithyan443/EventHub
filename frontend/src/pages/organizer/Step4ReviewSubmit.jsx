@@ -43,6 +43,8 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
 
   const isSubmitting = useOrganizerStore((state) => state.isSubmitting);
   const submitError = useOrganizerStore((state) => state.submitError);
+  const isResubmission = useOrganizerStore((state) => state.isResubmission);
+  const rejectionReason = useOrganizerStore((state) => state.rejectionReason);
 
   const [validationError, setValidationError] = useState("");
 
@@ -90,6 +92,30 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
       </div>
 
       <form onSubmit={handleFormSubmit} className="space-y-6">
+        {/* Rejection Feedback Banner on Review Step */}
+        {(isResubmission || rejectionReason) && (
+          <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 sm:p-5 flex items-start gap-3.5 shadow-xs">
+            <div className="w-8 h-8 rounded-lg bg-amber-500/15 text-amber-700 flex items-center justify-center shrink-0 mt-0.5">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-900 block mb-0.5">
+                Admin Rejection Feedback
+              </span>
+              <p className="text-xs sm:text-sm font-medium text-amber-900">
+                {rejectionReason || "Please verify your details and documentation before resubmitting."}
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                Ensure that all requested changes have been addressed below before clicking Resubmit Application.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* 2x2 Review Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {/* Card 1: Business Information */}
@@ -343,11 +369,11 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
                   </svg>
-                  <span>Submitting...</span>
+                  <span>{isResubmission ? "Resubmitting..." : "Submitting..."}</span>
                 </>
               ) : (
                 <>
-                  Submit Application
+                  {isResubmission ? "Resubmit Application" : "Submit Application"}
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <line x1="22" y1="2" x2="11" y2="13" />
                     <polygon points="22 2 15 22 11 13 2 9 22 2" />
