@@ -1,4 +1,8 @@
-import { Link, useLocation } from "react-router-dom";
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { LogoutIcon } from "../layout/icons";
+import { logout } from "../../api/authApi";
+import useAuthStore from "../../store/authStore";
 
 const navItems = [
   {
@@ -113,6 +117,23 @@ const navItems = [
 
 export default function AdminSidebar() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch (error) {
+      // Safely handle backend logout failures without exposing raw errors
+      console.error("Logout request failed:", error?.message || error);
+    } finally {
+      clearAuth();
+      setIsLoggingOut(false);
+      navigate("/login", { replace: true });
+    }
+  }
 
   return (
     <aside className="bg-[#f9f9ff] border-r border-[#bcc9c6] flex flex-col h-full w-[239px] shrink-0 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
@@ -160,8 +181,8 @@ export default function AdminSidebar() {
         })}
       </nav>
 
-      {/* Create Event CTA */}
-      {/* <div className="px-4 py-4 border-t border-[#dce2f7]">
+      {/* Bottom Actions: Create Event & Logout */}
+      <div className="px-4 py-4 border-t border-[#dce2f7] flex flex-col gap-2">
         <button
           type="button"
           className="bg-[#00685f] text-white text-sm font-semibold w-full flex items-center justify-center gap-2 py-2 rounded-lg hover:bg-[#005a52] transition-colors cursor-pointer"
@@ -174,7 +195,18 @@ export default function AdminSidebar() {
           </svg>
           Create Event
         </button>
-      </div> */}
+
+        <button
+          type="button"
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="w-full flex items-center justify-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 transition-colors cursor-pointer disabled:opacity-50"
+          title="Sign out of Admin Console"
+        >
+          <LogoutIcon className="w-4 h-4 text-[#ba1a1a]" />
+          <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
+        </button>
+      </div>
     </aside>
   );
 }
