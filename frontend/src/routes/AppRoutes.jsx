@@ -7,6 +7,9 @@ import OAuthCallbackPage from "../pages/auth/OAuthCallbackPage";
 import ForgotPasswordPage from "../pages/auth/ForgotPasswordPage";
 import ResetPasswordPage from "../pages/auth/ResetPasswordPage";
 import DiscoverEventsPage from "../pages/events/DiscoverEventsPage";
+import ProfilePage from "../pages/profile/ProfilePage";
+import BecomeOrganizerPage from "../pages/organizer/BecomeOrganizerPage";
+import OrganizerStatusPage from "../pages/organizer/OrganizerStatusPage";
 
 export default function AppRoutes() {
     return (
@@ -28,6 +31,11 @@ export default function AppRoutes() {
 
             {/* Customer home */}
             <Route path="/" element={<DiscoverEventsPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
+
+            {/* Become an Organizer Workflow */}
+            <Route path="/become-organizer" element={<BecomeOrganizerPage />} />
+            <Route path="/become-organizer/status" element={<OrganizerStatusPage />} />
         </Routes>
     );
 }
