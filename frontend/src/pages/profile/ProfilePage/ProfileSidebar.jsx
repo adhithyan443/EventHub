@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { UserIcon, TicketIcon, HeartIcon, SettingsIcon } from "../../../components/layout/icons";
 
 const navItems = [
@@ -10,6 +10,7 @@ const navItems = [
 
 export default function ProfileSidebar({ user }) {
     const avatarUrl = user?.avatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80";
+    const navigate = useNavigate();
 
     return (
         <aside className="w-64 shrink-0 bg-[#f0f4fa] border border-slate-200/70 rounded-2xl p-5 flex flex-col justify-between self-stretch">
@@ -33,10 +34,9 @@ export default function ProfileSidebar({ user }) {
                             to={to}
                             end={to === "/profile"}
                             className={({ isActive }) =>
-                                `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                                    isActive
-                                        ? "bg-primary text-white font-semibold shadow-sm"
-                                        : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
+                                `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                                    ? "bg-primary text-white font-semibold shadow-sm"
+                                    : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
                                 }`
                             }
                         >
@@ -48,7 +48,9 @@ export default function ProfileSidebar({ user }) {
             </div>
 
             <div className="pt-8">
-                <button className="w-full h-10 rounded-lg bg-[#007066] hover:bg-[#005c54] text-white text-sm font-semibold transition-colors">
+                <button
+                    onClick={() => navigate("/become-organizer")}
+                    className="w-full h-10 rounded-lg bg-[#007066] hover:bg-[#005c54] text-white text-sm font-semibold transition-colors">
                     Become an Organizer
                 </button>
             </div>

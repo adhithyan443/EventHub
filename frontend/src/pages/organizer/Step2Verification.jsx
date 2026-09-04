@@ -9,7 +9,9 @@ export default function Step2Verification({ onNext, onBack, onSaveLater }) {
   const panNumber = useOrganizerStore((state) => state.panNumber);
   const gstNumber = useOrganizerStore((state) => state.gstNumber);
   const verificationDocument = useOrganizerStore((state) => state.verificationDocument);
+  const verificationDocumentUrl = useOrganizerStore((state) => state.verificationDocumentUrl);
   const businessLogoPreview = useOrganizerStore((state) => state.businessLogoPreview);
+  const businessLogoUrl = useOrganizerStore((state) => state.businessLogoUrl);
   const setField = useOrganizerStore((state) => state.setField);
   const setVerificationDocument = useOrganizerStore((state) => state.setVerificationDocument);
   const removeVerificationDocument = useOrganizerStore((state) => state.removeVerificationDocument);
@@ -313,6 +315,24 @@ export default function Step2Verification({ onNext, onBack, onSaveLater }) {
             {docUploadError && (
               <p className="text-xs text-red-500 mt-1">{docUploadError}</p>
             )}
+
+            {/* Document Storage URL */}
+            <div className="flex flex-col gap-1.5 mt-2 bg-slate-50/60 p-3.5 rounded-xl border border-slate-200/80">
+              <label htmlFor="verificationDocumentUrl" className="text-xs font-semibold text-slate-700">
+                Document URL <span className="text-xs font-normal text-slate-400">(Required for API submission)</span>
+              </label>
+              <input
+                id="verificationDocumentUrl"
+                type="url"
+                className="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-xs text-ink bg-white outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400 font-mono"
+                placeholder="https://storage.example.com/documents/verification.pdf"
+                value={verificationDocumentUrl}
+                onChange={(e) => setField("verificationDocumentUrl", e.target.value)}
+              />
+              <p className="text-xs text-slate-500">
+                The backend requires a hosted document URL. In production, this URL is generated automatically upon uploading to object storage.
+              </p>
+            </div>
           </div>
 
           {/* Business Logo Upload */}
@@ -322,7 +342,7 @@ export default function Step2Verification({ onNext, onBack, onSaveLater }) {
               This logo will be displayed on your organizer profile and event pages.
             </p>
 
-            <div className="flex items-center gap-4 sm:gap-6 mt-2">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 sm:gap-6 mt-2">
               <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
                 {businessLogoPreview ? (
                   <img
@@ -338,12 +358,12 @@ export default function Step2Verification({ onNext, onBack, onSaveLater }) {
                 )}
               </div>
 
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1.5 flex-1">
                 <div className="flex items-center gap-3">
                   <button
                     type="button"
                     onClick={() => logoInputRef.current?.click()}
-                    className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-sm"
+                    className="px-4 py-2 text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-sm cursor-pointer"
                   >
                     {businessLogoPreview ? "Change Logo" : "Upload Logo"}
                   </button>
@@ -351,7 +371,7 @@ export default function Step2Verification({ onNext, onBack, onSaveLater }) {
                     <button
                       type="button"
                       onClick={() => removeBusinessLogo()}
-                      className="text-xs font-semibold text-red-500 hover:underline"
+                      className="text-xs font-semibold text-red-500 hover:underline cursor-pointer"
                     >
                       Remove
                     </button>
@@ -366,6 +386,21 @@ export default function Step2Verification({ onNext, onBack, onSaveLater }) {
                 className="hidden"
                 accept="image/*"
                 onChange={handleLogoChange}
+              />
+            </div>
+
+            {/* Logo Storage URL */}
+            <div className="flex flex-col gap-1.5 mt-2 bg-slate-50/60 p-3.5 rounded-xl border border-slate-200/80">
+              <label htmlFor="businessLogoUrl" className="text-xs font-semibold text-slate-700">
+                Logo URL <span className="text-xs font-normal text-slate-400">(Optional)</span>
+              </label>
+              <input
+                id="businessLogoUrl"
+                type="url"
+                className="w-full border border-slate-300 rounded-lg px-3.5 py-2 text-xs text-ink bg-white outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 placeholder:text-slate-400 font-mono"
+                placeholder="https://storage.example.com/logos/business-logo.png"
+                value={businessLogoUrl}
+                onChange={(e) => setField("businessLogoUrl", e.target.value)}
               />
             </div>
           </div>

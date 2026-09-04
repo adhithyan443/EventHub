@@ -18,12 +18,30 @@ export default function Step1BusinessInfo({ onNext, onSaveLater }) {
   const description = useOrganizerStore((state) => state.description);
   const phone = useOrganizerStore((state) => state.phone);
   const website = useOrganizerStore((state) => state.website);
+  const addressLine = useOrganizerStore((state) => state.addressLine);
+  const city = useOrganizerStore((state) => state.city);
+  const state = useOrganizerStore((state) => state.state);
+  const country = useOrganizerStore((state) => state.country);
+  const postalCode = useOrganizerStore((state) => state.postalCode);
   const setField = useOrganizerStore((state) => state.setField);
 
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
 
-  function validate(fields = { businessName, businessType, description, phone, website }) {
+  function validate(
+    fields = {
+      businessName,
+      businessType,
+      description,
+      phone,
+      website,
+      addressLine,
+      city,
+      state,
+      country,
+      postalCode,
+    }
+  ) {
     const errs = {};
 
     if (!fields.businessName?.trim()) {
@@ -52,6 +70,28 @@ export default function Step1BusinessInfo({ onNext, onSaveLater }) {
       if (urlErr) errs.website = urlErr;
     }
 
+    if (!fields.addressLine?.trim()) {
+      errs.addressLine = "Address line is required";
+    } else if (fields.addressLine.trim().length < 3) {
+      errs.addressLine = "Address line must contain at least 3 characters";
+    }
+
+    if (!fields.city?.trim()) {
+      errs.city = "City is required";
+    }
+
+    if (!fields.state?.trim()) {
+      errs.state = "State is required";
+    }
+
+    if (!fields.country?.trim()) {
+      errs.country = "Country is required";
+    }
+
+    if (!fields.postalCode?.trim()) {
+      errs.postalCode = "Postal code is required";
+    }
+
     return errs;
   }
 
@@ -64,6 +104,11 @@ export default function Step1BusinessInfo({ onNext, onSaveLater }) {
         description,
         phone,
         website,
+        addressLine,
+        city,
+        state,
+        country,
+        postalCode,
         [field]: value,
       };
       setErrors(validate(currentValues));
@@ -83,6 +128,11 @@ export default function Step1BusinessInfo({ onNext, onSaveLater }) {
       description: true,
       phone: true,
       website: true,
+      addressLine: true,
+      city: true,
+      state: true,
+      country: true,
+      postalCode: true,
     });
 
     const validationErrors = validate();
@@ -264,6 +314,140 @@ export default function Step1BusinessInfo({ onNext, onSaveLater }) {
                   {errors.website}
                 </p>
               )}
+            </div>
+          </div>
+
+          {/* Section: Business Address */}
+          <div className="pt-6 border-t border-slate-100 space-y-5">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 mb-1">
+                Business Address
+              </h3>
+              <p className="text-xs text-slate-500">
+                Provide your registered business or organization address.
+              </p>
+            </div>
+
+            {/* Address Line */}
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="addressLine" className={labelClass}>
+                Address Line <span className="text-red-500" aria-hidden="true">*</span>
+              </label>
+              <input
+                id="addressLine"
+                type="text"
+                className={inputClass(errors.addressLine)}
+                placeholder="Street address, building, suite, unit"
+                value={addressLine}
+                onChange={(e) => handleChange("addressLine", e.target.value)}
+                onBlur={() => handleBlur("addressLine")}
+                aria-required="true"
+                aria-invalid={!!errors.addressLine}
+                aria-describedby={errors.addressLine ? "addressLine-error" : undefined}
+              />
+              {errors.addressLine && (
+                <p id="addressLine-error" className="text-xs text-red-500 mt-0.5">
+                  {errors.addressLine}
+                </p>
+              )}
+            </div>
+
+            {/* City & State */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="city" className={labelClass}>
+                  City <span className="text-red-500" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="city"
+                  type="text"
+                  className={inputClass(errors.city)}
+                  placeholder="e.g. Mumbai"
+                  value={city}
+                  onChange={(e) => handleChange("city", e.target.value)}
+                  onBlur={() => handleBlur("city")}
+                  aria-required="true"
+                  aria-invalid={!!errors.city}
+                  aria-describedby={errors.city ? "city-error" : undefined}
+                />
+                {errors.city && (
+                  <p id="city-error" className="text-xs text-red-500 mt-0.5">
+                    {errors.city}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="state" className={labelClass}>
+                  State / Province <span className="text-red-500" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="state"
+                  type="text"
+                  className={inputClass(errors.state)}
+                  placeholder="e.g. Maharashtra"
+                  value={state}
+                  onChange={(e) => handleChange("state", e.target.value)}
+                  onBlur={() => handleBlur("state")}
+                  aria-required="true"
+                  aria-invalid={!!errors.state}
+                  aria-describedby={errors.state ? "state-error" : undefined}
+                />
+                {errors.state && (
+                  <p id="state-error" className="text-xs text-red-500 mt-0.5">
+                    {errors.state}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Country & Postal Code */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="country" className={labelClass}>
+                  Country <span className="text-red-500" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="country"
+                  type="text"
+                  className={inputClass(errors.country)}
+                  placeholder="e.g. India"
+                  value={country}
+                  onChange={(e) => handleChange("country", e.target.value)}
+                  onBlur={() => handleBlur("country")}
+                  aria-required="true"
+                  aria-invalid={!!errors.country}
+                  aria-describedby={errors.country ? "country-error" : undefined}
+                />
+                {errors.country && (
+                  <p id="country-error" className="text-xs text-red-500 mt-0.5">
+                    {errors.country}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="postalCode" className={labelClass}>
+                  Postal Code / PIN <span className="text-red-500" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="postalCode"
+                  type="text"
+                  className={inputClass(errors.postalCode)}
+                  placeholder="e.g. 400001"
+                  value={postalCode}
+                  onChange={(e) => handleChange("postalCode", e.target.value)}
+                  onBlur={() => handleBlur("postalCode")}
+                  aria-required="true"
+                  aria-invalid={!!errors.postalCode}
+                  aria-describedby={errors.postalCode ? "postalCode-error" : undefined}
+                />
+                {errors.postalCode && (
+                  <p id="postalCode-error" className="text-xs text-red-500 mt-0.5">
+                    {errors.postalCode}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         </div>

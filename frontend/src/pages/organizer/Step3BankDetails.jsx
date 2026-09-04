@@ -5,7 +5,7 @@ import { validateIFSC } from "../../utils/validation";
 
 export default function Step3BankDetails({ onNext, onBack, onSaveLater }) {
   const bankName = useOrganizerStore((state) => state.bankName);
-  const accountHolder = useOrganizerStore((state) => state.accountHolder);
+  const accountHolderName = useOrganizerStore((state) => state.accountHolderName);
   const accountNumber = useOrganizerStore((state) => state.accountNumber);
   const confirmAccount = useOrganizerStore((state) => state.confirmAccount);
   const ifscCode = useOrganizerStore((state) => state.ifscCode);
@@ -16,15 +16,15 @@ export default function Step3BankDetails({ onNext, onBack, onSaveLater }) {
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
 
-  function validate(fields = { bankName, accountHolder, accountNumber, confirmAccount, ifscCode }) {
+  function validate(fields = { bankName, accountHolderName, accountNumber, confirmAccount, ifscCode }) {
     const errs = {};
 
     if (!fields.bankName?.trim()) {
       errs.bankName = "Bank name is required";
     }
 
-    if (!fields.accountHolder?.trim()) {
-      errs.accountHolder = "Account holder name is required";
+    if (!fields.accountHolderName?.trim()) {
+      errs.accountHolderName = "Account holder name is required";
     }
 
     if (!fields.accountNumber?.trim()) {
@@ -52,7 +52,7 @@ export default function Step3BankDetails({ onNext, onBack, onSaveLater }) {
     if (touched[field]) {
       const currentValues = {
         bankName,
-        accountHolder,
+        accountHolderName,
         accountNumber,
         confirmAccount,
         ifscCode,
@@ -76,7 +76,7 @@ export default function Step3BankDetails({ onNext, onBack, onSaveLater }) {
     e.preventDefault();
     setTouched({
       bankName: true,
-      accountHolder: true,
+      accountHolderName: true,
       accountNumber: true,
       confirmAccount: true,
       ifscCode: true,
@@ -168,24 +168,24 @@ export default function Step3BankDetails({ onNext, onBack, onSaveLater }) {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label htmlFor="accountHolder" className={labelClass}>
+              <label htmlFor="accountHolderName" className={labelClass}>
                 Account Holder Name <span className="text-red-500" aria-hidden="true">*</span>
               </label>
               <input
-                id="accountHolder"
+                id="accountHolderName"
                 type="text"
-                className={inputClass(errors.accountHolder)}
+                className={inputClass(errors.accountHolderName)}
                 placeholder="Enter account holder name"
-                value={accountHolder}
-                onChange={(e) => handleChange("accountHolder", e.target.value)}
-                onBlur={() => handleBlur("accountHolder")}
+                value={accountHolderName}
+                onChange={(e) => handleChange("accountHolderName", e.target.value)}
+                onBlur={() => handleBlur("accountHolderName")}
                 aria-required="true"
-                aria-invalid={!!errors.accountHolder}
-                aria-describedby={errors.accountHolder ? "accountHolder-error" : "holder-help"}
+                aria-invalid={!!errors.accountHolderName}
+                aria-describedby={errors.accountHolderName ? "accountHolder-error" : "holder-help"}
               />
-              {errors.accountHolder ? (
+              {errors.accountHolderName ? (
                 <p id="accountHolder-error" className="text-xs text-red-500 mt-0.5">
-                  {errors.accountHolder}
+                  {errors.accountHolderName}
                 </p>
               ) : (
                 <p id="holder-help" className="text-xs text-slate-500">

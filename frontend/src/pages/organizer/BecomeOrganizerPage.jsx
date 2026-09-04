@@ -9,14 +9,23 @@ import Step3BankDetails from "./Step3BankDetails";
 import Step4ReviewSubmit from "./Step4ReviewSubmit";
 import useOrganizerStore from "../../store/organizerStore";
 
+
 export default function BecomeOrganizerPage() {
   const navigate = useNavigate();
 
   const currentStep = useOrganizerStore((state) => state.currentStep);
   const setCurrentStep = useOrganizerStore((state) => state.setCurrentStep);
   const saveDraft = useOrganizerStore((state) => state.saveDraft);
-  const submitApplication = useOrganizerStore((state) => state.submitApplication);
-  const applicationSubmitted = useOrganizerStore((state) => state.applicationSubmitted);
+
+
+  const applicationSubmitted = useOrganizerStore(
+    (state) => state.applicationSubmitted
+  );
+
+  const submitApplication = useOrganizerStore(
+    (state) => state.submitApplication
+  );
+
 
   const [toastMessage, setToastMessage] = useState("");
 
@@ -34,6 +43,7 @@ export default function BecomeOrganizerPage() {
 
   function showToast(msg) {
     setToastMessage(msg);
+
     setTimeout(() => {
       setToastMessage("");
     }, 4500);
@@ -62,9 +72,14 @@ export default function BecomeOrganizerPage() {
     setCurrentStep(stepNum);
   }
 
-  function handleSubmit() {
-    submitApplication();
-    navigate("/become-organizer/status");
+
+  async function handleSubmit() {
+    try {
+      await submitApplication();
+      navigate("/become-organizer/status");
+    } catch {
+      // Step 4 will display submitError from the store and user stays on Step 4
+    }
   }
 
   return (

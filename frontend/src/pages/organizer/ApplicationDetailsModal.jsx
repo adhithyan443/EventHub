@@ -19,12 +19,22 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
   const description = useOrganizerStore((state) => state.description);
   const phone = useOrganizerStore((state) => state.phone);
   const website = useOrganizerStore((state) => state.website);
+
+  const addressLine = useOrganizerStore((state) => state.addressLine);
+  const city = useOrganizerStore((state) => state.city);
+  const stateVal = useOrganizerStore((state) => state.state);
+  const country = useOrganizerStore((state) => state.country);
+  const postalCode = useOrganizerStore((state) => state.postalCode);
+
   const panNumber = useOrganizerStore((state) => state.panNumber);
   const gstNumber = useOrganizerStore((state) => state.gstNumber);
   const verificationDocument = useOrganizerStore((state) => state.verificationDocument);
+  const verificationDocumentUrl = useOrganizerStore((state) => state.verificationDocumentUrl);
   const businessLogoPreview = useOrganizerStore((state) => state.businessLogoPreview);
+  const businessLogoUrl = useOrganizerStore((state) => state.businessLogoUrl);
+
   const bankName = useOrganizerStore((state) => state.bankName);
-  const accountHolder = useOrganizerStore((state) => state.accountHolder);
+  const accountHolderName = useOrganizerStore((state) => state.accountHolderName);
   const accountNumber = useOrganizerStore((state) => state.accountNumber);
   const ifscCode = useOrganizerStore((state) => state.ifscCode);
   const applicationId = useOrganizerStore((state) => state.applicationId) || "APP001";
@@ -114,6 +124,9 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
               <DetailItem label="Description" value={description} />
               <DetailItem label="Phone" value={phone} />
               <DetailItem label="Website" value={website} />
+              <DetailItem label="Address" value={addressLine} />
+              <DetailItem label="City / State" value={city && stateVal ? `${city}, ${stateVal}` : city || stateVal} />
+              <DetailItem label="Postal / Country" value={postalCode && country ? `${postalCode}, ${country}` : postalCode || country} />
             </div>
           </div>
 
@@ -125,7 +138,8 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
             <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
               <DetailItem label="PAN Number" value={maskPAN(panNumber)} isMasked />
               <DetailItem label="GST Number" value={gstNumber || "N/A"} isMasked={!!gstNumber} />
-              <DetailItem label="Document" value={verificationDocument?.name || "Not uploaded"} />
+              <DetailItem label="Document File" value={verificationDocument?.name || "Not uploaded"} />
+              <DetailItem label="Document URL" value={verificationDocumentUrl || "Not provided"} />
               <div className="flex items-center justify-between py-2 text-xs sm:text-sm">
                 <span className="text-slate-500 font-medium">Business Logo</span>
                 {businessLogoPreview ? (
@@ -138,6 +152,9 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
                   <span className="text-slate-400 font-medium">Default</span>
                 )}
               </div>
+              {businessLogoUrl && (
+                <DetailItem label="Logo URL" value={businessLogoUrl} />
+              )}
             </div>
           </div>
 
@@ -148,7 +165,7 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
             </h3>
             <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
               <DetailItem label="Bank Name" value={bankName} />
-              <DetailItem label="Account Holder" value={accountHolder} />
+              <DetailItem label="Account Holder" value={accountHolderName} />
               <DetailItem label="Account Number" value={maskAccountNumber(accountNumber)} isMasked />
               <DetailItem label="IFSC Code" value={ifscCode} isMasked />
             </div>

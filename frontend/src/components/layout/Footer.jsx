@@ -24,7 +24,7 @@ export default function Footer() {
         </nav>
 
         <p className="text-slate-500 text-xs">
-          &copy; 2024 EventHub. All rights reserved.
+          &copy; 2026 EventHub. All rights reserved.
         </p>
       </div>
     </footer>
