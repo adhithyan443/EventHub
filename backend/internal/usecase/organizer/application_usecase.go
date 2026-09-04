@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -315,4 +317,77 @@ func updateApplication(
 	application.PostalCode = strings.TrimSpace(
 		input.PostalCode,
 	)
+}
+
+type OrganizerApplicationResponse struct {
+	ID                      uuid.UUID `json:"id"`
+	BusinessName            string    `json:"business_name"`
+	BusinessType            string    `json:"business_type"`
+	BusinessDescription     string    `json:"business_description"`
+	Website                 string    `json:"website"`
+	ContactPhone            string    `json:"contact_phone"`
+	AddressLine             string    `json:"address_line"`
+	City                    string    `json:"city"`
+	State                   string    `json:"state"`
+	Country                 string    `json:"country"`
+	PostalCode              string    `json:"postal_code"`
+	BankName                string    `json:"bank_name"`
+	AccountHolderName       string    `json:"account_holder_name"`
+	IFSCCode                string    `json:"ifsc_code"`
+	GSTNumber               string    `json:"gst_number"`
+	PANNumber               string    `json:"pan_number"`
+	LogoURL                 string    `json:"logo_url"`
+	VerificationDocumentURL string    `json:"verification_document_url"`
+	Status                  string    `json:"status"`
+	RejectionReason         string    `json:"rejection_reason,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
+
+func (u *ApplicationUsecase) GetApplication(
+	userID uuid.UUID,
+) (*OrganizerApplicationResponse, error) {
+
+	application, err := u.repository.FindByUserID(userID)
+	if err != nil {
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, appErrors.NewNotFoundError(
+				"organizer application not found",
+			)
+		}
+
+		u.logger.Error(
+			"organizer_application_fetch_failed",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+
+		return nil, fmt.Errorf("failed to fetch organizer application")
+	}
+
+	return &OrganizerApplicationResponse{
+		ID:                      application.ID,
+		BusinessName:            application.BusinessName,
+		BusinessType:            application.BusinessType,
+		BusinessDescription:     application.Description,
+		Website:                 application.Website,
+		ContactPhone:            application.Phone,
+		AddressLine:             application.AddressLine,
+		City:                    application.City,
+		State:                   application.State,
+		Country:                 application.Country,
+		PostalCode:              application.PostalCode,
+		BankName:                application.BankName,
+		AccountHolderName:       application.AccountHolderName,
+		IFSCCode:                application.IFSCCode,
+		GSTNumber:               application.GSTNumber,
+		PANNumber:               application.PANNumber,
+		LogoURL:                 application.LogoURL,
+		VerificationDocumentURL: application.VerificationDocumentURL,
+		Status:                  string(application.Status),
+		RejectionReason:         application.RejectionReason,
+		CreatedAt:               application.CreatedAt,
+		UpdatedAt:               application.UpdatedAt,
+	}, nil
 }

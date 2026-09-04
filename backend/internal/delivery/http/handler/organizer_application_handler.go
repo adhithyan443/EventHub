@@ -195,3 +195,28 @@ func (h *OrganizerApplicationHandler) ApproveApplication(ctx *gin.Context) {
 		"message": "organizer application approved successfully",
 	})
 }
+
+func (h *OrganizerApplicationHandler) GetMyApplication(ctx *gin.Context) {
+	userIDValue, exists := ctx.Get("user_id")
+	if !exists {
+		ctx.Error(errors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+
+	userID, ok := userIDValue.(uuid.UUID)
+	if !ok {
+		ctx.Error(errors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+
+	application, err := h.applicationUsecase.GetApplication(userID)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    application,
+	})
+}
