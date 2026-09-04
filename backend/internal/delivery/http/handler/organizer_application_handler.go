@@ -220,3 +220,53 @@ func (h *OrganizerApplicationHandler) GetMyApplication(ctx *gin.Context) {
 		"data":    application,
 	})
 }
+
+func (h *OrganizerApplicationHandler) RejectApplication(
+	ctx *gin.Context,
+) {
+	// Read the application UUID from the URL.
+	idParam := ctx.Param("id")
+
+	applicationID, err := uuid.Parse(idParam)
+	if err != nil {
+		ctx.Error(
+			errors.NewValidationError("invalid application id"),
+		)
+		return
+	}
+
+	// Define the rejection request body.
+	var req struct {
+		Reason string `json:"reason" binding:"required"`
+	}
+
+	// Validate the request body.
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn(
+			"admin_organizer_application_rejection_validation_failed",
+			"application_id", applicationID,
+			"error", err,
+		)
+
+		ctx.Error(
+			errors.NewValidationError(
+				"rejection reason is required",
+			),
+		)
+		return
+	}
+
+	// Reject the application through the admin usecase.
+	if err := h.adminApplicationUsecase.RejectApplication(
+		applicationID,
+		req.Reason,
+	); err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "organizer application rejected successfully",
+	})
+}

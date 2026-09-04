@@ -15,8 +15,9 @@ const (
 )
 
 type OrganizerApplication struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	ApplicantName string
 
 	BusinessName string
 	BusinessType string

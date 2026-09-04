@@ -23,15 +23,24 @@ export const login = async (data) => {
     return response.data;
 };
 
-export const refreshToken = async (refreshToken) => {
+export const refreshToken = async (token) => {
+    const activeToken =
+        token ||
+        localStorage.getItem("eventhub_refresh_token");
     const response = await apiClient.post("/auth/refresh-token", {
-        refreshToken,
+        refreshToken: activeToken,
     });
     return response.data;
 };
 
-export const logout = async () => {
-    const response = await apiClient.post("/auth/logout");
+export const logout = async (token) => {
+    const activeToken =
+        token ||
+        localStorage.getItem("eventhub_refresh_token") ||
+        "";
+    const response = await apiClient.post("/auth/logout", {
+        refreshToken: activeToken,
+    });
     return response.data;
 };
 

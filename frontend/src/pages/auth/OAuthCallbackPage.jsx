@@ -43,7 +43,7 @@ export default function OAuthCallbackPage() {
                         break;
 
                     case "CUSTOMER":
-                        navigate("/", { replace: true });
+                        navigate("/events", { replace: true });
                         break;
 
                     default:

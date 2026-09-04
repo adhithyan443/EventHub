@@ -2,7 +2,7 @@ import { Link, NavLink } from "react-router-dom";
 import { SearchIcon, BellIcon } from "./icons";
 
 const navLinks = [
-  { label: "Events", to: "/" },
+  { label: "Events", to: "/events" },
   { label: "Categories", to: "/categories" },
   { label: "My Tickets", to: "/my-tickets" },
 ];
@@ -12,7 +12,7 @@ export default function AppHeader() {
     <header className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-border">
       <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-8">
-          <Link to="/" className="font-display text-2xl font-bold text-primary">
+          <Link to="/events" className="font-display text-2xl font-bold text-primary">
             EventHub
           </Link>
 
@@ -30,7 +30,7 @@ export default function AppHeader() {
               <NavLink
                 key={link.to}
                 to={link.to}
-                end={link.to === "/"}
+                end={link.to === "/events"}
                 className={({ isActive }) =>
                   `text-sm py-1.5 border-b-2 transition-colors ${
                     isActive

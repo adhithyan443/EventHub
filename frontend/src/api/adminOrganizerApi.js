@@ -43,3 +43,15 @@ export const approveOrganizerApplication = async (applicationId) => {
 
     return response.data;
 };
+
+// Reject an organizer application.
+export const rejectOrganizerApplication = async (applicationId, reason) => {
+    const response = await apiClient.patch(
+        `/admin/organizer-applications/${applicationId}/reject`,
+        {
+            reason,
+        }
+    );
+
+    return response.data;
+};

@@ -4,7 +4,7 @@ export default function Footer() {
   return (
     <footer className="w-full bg-[#eef2fb] border-t border-slate-200/60 mt-auto">
       <div className="max-w-7xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs sm:text-sm text-slate-600">
-        <Link to="/" className="font-display font-bold text-slate-900 text-lg">
+        <Link to="/events" className="font-display font-bold text-slate-900 text-lg">
           EventHub
         </Link>
 
