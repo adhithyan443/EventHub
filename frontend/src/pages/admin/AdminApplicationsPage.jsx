@@ -47,46 +47,9 @@ export default function AdminApplicationsPage() {
   const [error, setError] = useState("");
 
   /*
-   * Fetch organizer applications from the backend.
-   *
-   * Pagination and status filtering are handled by the API.
-   */
-  // const fetchApplications = async () => {
-  //   try {
-  //     setLoading(true);
-  //     setError("");
-
-  //     const response = await getOrganizerApplications({
-  //       page,
-  //       limit: PER_PAGE,
-  //       status:
-  //         activeTab === "all"
-  //           ? ""
-  //           : activeTab.toUpperCase(),
-  //     });
-
-  //     setApps(response.data?.applications || []);
-  //     setTotal(response.data?.total || 0);
-  //   } catch (err) {
-  //     console.error(
-  //       "Failed to fetch organizer applications:",
-  //       err
-  //     );
-
-  //     setError(
-  //       err.response?.data?.message ||
-  //       "Failed to load organizer applications."
-  //     );
-
-  //     setApps([]);
-  //     setTotal(0);
-  //   } finally {
-  //     setLoading(false);
-  //   }
-  // };
-
-  /*
    * Fetch applications whenever page or status changes.
+   *
+   * Pagination and status filtering are handled by the backend.
    */
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +106,7 @@ export default function AdminApplicationsPage() {
       cancelled = true;
     };
   }, [page, activeTab]);
+
   /*
    * Fetch complete application details before
    * opening the review panel.
@@ -254,6 +218,9 @@ export default function AdminApplicationsPage() {
    *
    * Backend search is not implemented yet, so this remains
    * client-side for the current page.
+   *
+   * Applicant name comes from users.full_name through
+   * the backend's `applicant_name` field.
    */
   const filtered = apps.filter((app) => {
     const query = search.trim().toLowerCase();
@@ -265,6 +232,7 @@ export default function AdminApplicationsPage() {
     return (
       app.id?.toLowerCase().includes(query) ||
       app.business_name?.toLowerCase().includes(query) ||
+      app.applicant_name?.toLowerCase().includes(query) ||
       app.business_type?.toLowerCase().includes(query) ||
       app.phone?.toLowerCase().includes(query)
     );
@@ -490,8 +458,8 @@ export default function AdminApplicationsPage() {
 
               <div
                 className={`text-2xl font-bold ${i === 0
-                  ? "text-[#00685f]"
-                  : "text-[#141b2b]"
+                    ? "text-[#00685f]"
+                    : "text-[#141b2b]"
                   }`}
               >
                 {card.count}
@@ -514,8 +482,8 @@ export default function AdminApplicationsPage() {
                     handleTabChange(key)
                   }
                   className={`flex items-center gap-2 px-4 py-2 text-sm font-semibold transition-colors relative cursor-pointer ${activeTab === key
-                    ? "text-[#00685f] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-[#00685f]"
-                    : "text-[#3d4947] hover:text-[#141b2b]"
+                      ? "text-[#00685f] after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-[#00685f]"
+                      : "text-[#3d4947] hover:text-[#141b2b]"
                     }`}
                 >
                   {label}
@@ -523,9 +491,9 @@ export default function AdminApplicationsPage() {
                   {count > 0 && (
                     <span
                       className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${activeTab === key &&
-                        key === "pending"
-                        ? "bg-[#fef3c7] text-[#92400e]"
-                        : "bg-[#dce2f7] text-[#141b2b]"
+                          key === "pending"
+                          ? "bg-[#fef3c7] text-[#92400e]"
+                          : "bg-[#dce2f7] text-[#141b2b]"
                         }`}
                     >
                       {count}
@@ -639,8 +607,8 @@ export default function AdminApplicationsPage() {
                     <tr
                       key={app.id}
                       className={`border-t border-[rgba(188,201,198,0.3)] ${i % 2 === 0
-                        ? "bg-white"
-                        : "bg-[#fafbff]"
+                          ? "bg-white"
+                          : "bg-[#fafbff]"
                         } hover:bg-[#f1f3ff] transition-colors`}
                     >
                       <td className="px-4 py-4 font-mono text-[#141b2b] text-xs font-semibold">
@@ -648,15 +616,14 @@ export default function AdminApplicationsPage() {
                       </td>
 
                       <td className="px-4 py-4">
+                        {/* Business name comes from organizer_applications.business_name */}
                         <div className="text-[#141b2b] text-sm font-medium">
                           {app.business_name || "-"}
                         </div>
 
+                        {/* Applicant name comes from users.full_name */}
                         <div className="text-[#6d7a77] text-xs">
-                          {app.applicant ||
-                            app.email ||
-                            app.phone ||
-                            "-"}
+                          {app.applicant_name || "-"}
                         </div>
                       </td>
 
@@ -666,7 +633,9 @@ export default function AdminApplicationsPage() {
 
                       <td className="px-4 py-4 text-[#3d4947] text-sm">
                         {app.created_at
-                          ? new Date(app.created_at).toLocaleDateString()
+                          ? new Date(
+                            app.created_at
+                          ).toLocaleDateString()
                           : "-"}
                       </td>
 
@@ -674,7 +643,7 @@ export default function AdminApplicationsPage() {
                         <span
                           className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${statusColors[
                             app.status
-                          ] ||
+                            ] ||
                             "bg-gray-100 text-gray-600"
                             }`}
                         >
@@ -693,8 +662,8 @@ export default function AdminApplicationsPage() {
                             actionLoading
                           }
                           className={`text-sm cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed ${app.status === "PENDING"
-                            ? "text-[#00685f] font-semibold hover:underline"
-                            : "text-[#3d4947] font-medium hover:text-[#141b2b]"
+                              ? "text-[#00685f] font-semibold hover:underline"
+                              : "text-[#3d4947] font-medium hover:text-[#141b2b]"
                             }`}
                         >
                           {app.status === "PENDING"
