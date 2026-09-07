@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrPasswordResetTokenNotFound = errors.New("password reset token not found")
 
 type PasswordResetToken struct {
 	ID        uuid.UUID

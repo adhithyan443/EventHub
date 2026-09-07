@@ -62,7 +62,7 @@ func (r *OrganizerApplicationRepository) FindByUserID(
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, gorm.ErrRecordNotFound
+			return nil, domain.ErrOrganizerApplicationNotFound
 		}
 
 		r.logger.Error(
@@ -105,7 +105,7 @@ func (r *OrganizerApplicationRepository) Update(
 			"user_id", application.UserID,
 		)
 
-		return gorm.ErrRecordNotFound
+		return domain.ErrOrganizerApplicationNotFound
 	}
 
 	// Reload the updated record.
@@ -341,7 +341,7 @@ func (r *OrganizerApplicationRepository) FindByID(
 	}
 
 	if row.ID == uuid.Nil {
-		return nil, gorm.ErrRecordNotFound
+		return nil, domain.ErrOrganizerApplicationNotFound
 	}
 
 	return organizerApplicationRowToDomain(&row), nil

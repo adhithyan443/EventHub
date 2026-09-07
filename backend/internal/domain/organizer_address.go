@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrOrganizerAddressNotFound = errors.New("organizer address not found")
 
 type OrganizerAddress struct {
 	ID          uuid.UUID
