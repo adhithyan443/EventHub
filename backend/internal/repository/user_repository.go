@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
@@ -37,6 +38,9 @@ func (r *UserRepository) FindByID(id uuid.UUID) (*domain.User, error) {
 	var model models.UserModel
 
 	if err := r.db.First(&model, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
 		return nil, err
 	}
 
@@ -49,6 +53,9 @@ func (r *UserRepository) FindByEmail(email string) (*domain.User, error) {
 	var model models.UserModel
 
 	if err := r.db.Where("email = ?", email).First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
 		return nil, err
 	}
 
@@ -85,6 +92,9 @@ func (r *UserRepository) FindByPhone(phone string) (*domain.User, error) {
 	if err := r.db.
 		Where("phone = ?", phone).
 		First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
 		return nil, err
 	}
 

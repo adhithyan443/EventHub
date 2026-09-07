@@ -19,7 +19,6 @@ type OrganizerBankAccountModel struct {
 	UpdatedAt time.Time `gorm:"not null;autoUpdateTime"`
 }
 
-
 func (OrganizerBankAccountModel) TableName() string {
 	return "organizer_bank_accounts"
 }

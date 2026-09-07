@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrOrganizerApplicationNotFound = errors.New("organizer application not found")
 
 type ApplicationStatus string
 

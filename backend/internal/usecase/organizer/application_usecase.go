@@ -11,7 +11,6 @@ import (
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type ApplicationUsecase struct {
@@ -60,7 +59,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 	existing, err := u.repository.FindByUserID(userID)
 
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
 		u.logger.Error(
 			"organizer_application_lookup_failed",
 			"user_id", userID,
@@ -75,7 +74,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 		Create the first application with PENDING status.
 	*/
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
 
 		application := u.buildApplication(
 			userID,
@@ -85,7 +84,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 		if err := u.repository.Create(application); err != nil {
 			u.logger.Error(
-				"organizer_application_create_failed",
+				"organizer_application_submission_failed",
 				"user_id", userID,
 				"error", err,
 			)
@@ -94,7 +93,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 		}
 
 		u.logger.Info(
-			"organizer_application_created",
+			"organizer_application_submitted",
 			"user_id", userID,
 			"application_id", application.ID,
 		)
@@ -149,7 +148,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 		if err := u.repository.Update(existing); err != nil {
 			u.logger.Error(
-				"organizer_application_resubmit_failed",
+				"organizer_application_submission_failed",
 				"user_id", userID,
 				"application_id", existing.ID,
 				"error", err,
@@ -351,7 +350,7 @@ func (u *ApplicationUsecase) GetApplication(
 	application, err := u.repository.FindByUserID(userID)
 	if err != nil {
 
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
 			return nil, appErrors.NewNotFoundError(
 				"organizer application not found",
 			)
@@ -400,6 +399,11 @@ func (u *AdminApplicationUsecase) RejectApplication(
 	reason = strings.TrimSpace(reason)
 
 	if reason == "" {
+		u.logger.Warn(
+			"admin_organizer_application_rejection_failed",
+			"application_id", id,
+			"reason", "empty_rejection_reason",
+		)
 		return appErrors.NewValidationError(
 			"rejection reason is required",
 		)
@@ -407,7 +411,12 @@ func (u *AdminApplicationUsecase) RejectApplication(
 
 	application, err := u.repository.FindByID(id)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+			u.logger.Warn(
+				"admin_organizer_application_rejection_failed",
+				"application_id", id,
+				"reason", "application_not_found",
+			)
 			return appErrors.NewNotFoundError(
 				"organizer application not found",
 			)
@@ -425,6 +434,12 @@ func (u *AdminApplicationUsecase) RejectApplication(
 	}
 
 	if application.Status != domain.ApplicationPending {
+		u.logger.Warn(
+			"admin_organizer_application_rejection_failed",
+			"application_id", id,
+			"reason", "application_not_pending",
+			"status", application.Status,
+		)
 		return appErrors.NewConflictError(
 			"only pending applications can be rejected",
 		)

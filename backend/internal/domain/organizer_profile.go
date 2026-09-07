@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrOrganizerProfileNotFound = errors.New("organizer profile not found")
 
 type OrganizerProfile struct {
 	ID          uuid.UUID

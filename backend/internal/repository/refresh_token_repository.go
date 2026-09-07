@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
@@ -29,6 +31,9 @@ func (r *RefreshTokenRepository) FindByTokenHash(hash string) (*domain.RefreshTo
 	if err := r.db.
 		Where("token_hash = ?", hash).
 		First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrRefreshTokenNotFound
+		}
 		return nil, err
 	}
 

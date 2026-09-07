@@ -16,7 +16,6 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 type AuthUsecase struct {
@@ -131,20 +130,36 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 	existingUser, err := u.userRepo.FindByEmail(input.Email)
 
 	if err == nil && existingUser != nil {
+		u.logger.Warn(
+			"user_registration_failed",
+			"reason", "email_already_exists",
+		)
 		return appErrors.NewConflictError("email already exists")
 	}
 
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrUserNotFound) {
+		u.logger.Error(
+			"user_registration_failed",
+			"error", err,
+		)
 		return err
 	}
 
 	existingUserByPhone, err := u.userRepo.FindByPhone(input.Phone)
 
 	if err == nil && existingUserByPhone != nil {
+		u.logger.Warn(
+			"user_registration_failed",
+			"reason", "phone_already_exists",
+		)
 		return appErrors.NewConflictError("phone number already exists")
 	}
 
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrUserNotFound) {
+		u.logger.Error(
+			"user_registration_failed",
+			"error", err,
+		)
 		return err
 	}
 
@@ -153,6 +168,10 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		bcrypt.DefaultCost,
 	)
 	if err != nil {
+		u.logger.Error(
+			"user_registration_failed",
+			"error", err,
+		)
 		return err
 	}
 
@@ -162,12 +181,14 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 
 		otp, err := generateOTP()
 		if err != nil {
+			u.logger.Error(
+				"user_registration_failed",
+				"error", err,
+			)
 			return err
 		}
 
 		otpHash := hashOTP(otp)
-
-		// u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
 
 		now := time.Now()
 
@@ -180,6 +201,10 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		pendingRegistration.UpdatedAt = now
 
 		if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
+			u.logger.Error(
+				"user_registration_failed",
+				"error", err,
+			)
 			return err
 		}
 
@@ -205,17 +230,24 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return nil
 	}
 
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrPendingRegistrationNotFound) {
+		u.logger.Error(
+			"user_registration_failed",
+			"error", err,
+		)
 		return err
 	}
 
 	otp, err := generateOTP()
 	if err != nil {
+		u.logger.Error(
+			"user_registration_failed",
+			"error", err,
+		)
 		return err
 	}
 
 	otpHash := hashOTP(otp)
-	// u.logger.Info("otp_generated_debug", "email", input.Email, "otp", otp)
 
 	now := time.Now()
 
@@ -233,6 +265,10 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 	}
 
 	if err := u.pendingRegistrationRepo.Create(pendingRegistration); err != nil {
+		u.logger.Error(
+			"user_registration_failed",
+			"error", err,
+		)
 		return err
 	}
 
@@ -268,21 +304,47 @@ func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, string, err
 
 	user, err := u.userRepo.FindByEmail(input.Email)
 	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			u.logger.Warn(
+				"user_login_failed",
+				"reason", "invalid_credentials",
+			)
+			return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
+		}
+
+		u.logger.Error(
+			"user_login_failed",
+			"error", err,
+		)
 		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
 	}
 
 	if user.Status != "ACTIVE" {
+		u.logger.Warn(
+			"user_login_failed",
+			"user_id", user.ID,
+			"reason", "account_inactive",
+		)
 		return nil, "", "", appErrors.NewUnauthorizedError("user account is not active")
 	}
 	if err := bcrypt.CompareHashAndPassword(
 		[]byte(user.PasswordHash),
 		[]byte(input.Password),
 	); err != nil {
+		u.logger.Warn(
+			"user_login_failed",
+			"reason", "invalid_credentials",
+		)
 		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
 	}
 
 	accessToken, rawRefreshToken, err := u.generateAuthTokens(user)
 	if err != nil {
+		u.logger.Error(
+			"user_login_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return nil, "", "", err
 	}
 
@@ -310,23 +372,64 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 
 	storedToken, err := u.refreshTokenRepo.FindByTokenHash(tokenHash)
 	if err != nil {
+		if errors.Is(err, domain.ErrRefreshTokenNotFound) {
+			u.logger.Warn(
+				"refresh_token_failed",
+				"reason", "token_not_found",
+			)
+			return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+		}
+
+		u.logger.Error(
+			"refresh_token_failed",
+			"error", err,
+		)
 		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if storedToken.RevokedAt != nil {
+		u.logger.Warn(
+			"refresh_token_failed",
+			"user_id", storedToken.UserID,
+			"reason", "token_revoked",
+		)
 		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if time.Now().After(storedToken.ExpiresAt) {
+		u.logger.Warn(
+			"refresh_token_failed",
+			"user_id", storedToken.UserID,
+			"reason", "token_expired",
+		)
 		return "", "", appErrors.NewUnauthorizedError("refresh token expired")
 	}
 
 	user, err := u.userRepo.FindByID(storedToken.UserID)
 	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			u.logger.Warn(
+				"refresh_token_failed",
+				"user_id", storedToken.UserID,
+				"reason", "user_not_found",
+			)
+			return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+		}
+
+		u.logger.Error(
+			"refresh_token_failed",
+			"user_id", storedToken.UserID,
+			"error", err,
+		)
 		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if user.Status != "ACTIVE" {
+		u.logger.Warn(
+			"refresh_token_failed",
+			"user_id", user.ID,
+			"reason", "account_inactive",
+		)
 		return "", "", appErrors.NewUnauthorizedError("user account is not active")
 	}
 
@@ -336,14 +439,29 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 	)
 
 	if err != nil {
+		u.logger.Error(
+			"refresh_token_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return "", "", err
 	}
 
 	if err := u.refreshTokenRepo.Revoke(storedToken.ID); err != nil {
+		u.logger.Error(
+			"refresh_token_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return "", "", err
 	}
 	newRefreshToken, err := generateRefreshToken()
 	if err != nil {
+		u.logger.Error(
+			"refresh_token_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return "", "", err
 	}
 
@@ -358,6 +476,11 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 	}
 
 	if err := u.refreshTokenRepo.Create(newToken); err != nil {
+		u.logger.Error(
+			"refresh_token_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return "", "", err
 	}
 
@@ -384,18 +507,47 @@ func (u *AuthUsecase) Logout(userID uuid.UUID, input LogoutInput) error {
 
 	storedToken, err := u.refreshTokenRepo.FindByTokenHash(tokenHash)
 	if err != nil {
+		if errors.Is(err, domain.ErrRefreshTokenNotFound) {
+			u.logger.Warn(
+				"user_logout_failed",
+				"user_id", userID,
+				"reason", "token_not_found",
+			)
+			return appErrors.NewUnauthorizedError("invalid refresh token")
+		}
+
+		u.logger.Error(
+			"user_logout_failed",
+			"user_id", userID,
+			"error", err,
+		)
 		return appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if storedToken.UserID != userID {
+		u.logger.Warn(
+			"user_logout_failed",
+			"user_id", userID,
+			"reason", "token_user_mismatch",
+		)
 		return appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if storedToken.RevokedAt != nil { // Prevent logging out an already revoked session.
+		u.logger.Warn(
+			"user_logout_failed",
+			"user_id", userID,
+			"reason", "token_already_revoked",
+		)
 		return appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if err := u.refreshTokenRepo.Revoke(storedToken.ID); err != nil {
+		u.logger.Error(
+			"user_logout_failed",
+			"user_id", userID,
+			"error", err,
+		)
 		return err
 	}
 
@@ -430,14 +582,36 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 
 	pendingRegistration, err := u.pendingRegistrationRepo.FindByEmail(input.Email)
 	if err != nil {
+		if errors.Is(err, domain.ErrPendingRegistrationNotFound) {
+			u.logger.Warn(
+				"otp_verification_failed",
+				"reason", "registration_not_found",
+			)
+			return nil, appErrors.NewValidationError("invalid or expired verification code")
+		}
+
+		u.logger.Error(
+			"otp_verification_failed",
+			"error", err,
+		)
 		return nil, appErrors.NewValidationError("invalid or expired verification code")
 	}
 
 	if pendingRegistration.OTPAttempts >= maxOTPAttempts {
+		u.logger.Warn(
+			"otp_verification_failed",
+			"registration_id", pendingRegistration.ID,
+			"reason", "max_attempts_exceeded",
+		)
 		return nil, appErrors.NewValidationError("invalid or expired verification code")
 	}
 
 	if time.Now().After(pendingRegistration.OTPExpiresAt) {
+		u.logger.Warn(
+			"otp_verification_failed",
+			"registration_id", pendingRegistration.ID,
+			"reason", "otp_expired",
+		)
 		return nil, appErrors.NewValidationError("invalid or expired verification code")
 	}
 
@@ -449,6 +623,11 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 		pendingRegistration.UpdatedAt = time.Now()
 
 		if err := u.pendingRegistrationRepo.Update(pendingRegistration); err != nil {
+			u.logger.Error(
+				"otp_verification_failed",
+				"registration_id", pendingRegistration.ID,
+				"error", err,
+			)
 			return nil, err
 		}
 
@@ -520,12 +699,20 @@ func (u *AuthUsecase) ResendOTP(input ResendOTPInput) error {
 
 	if err != nil {
 
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if errors.Is(err, domain.ErrPendingRegistrationNotFound) {
+			u.logger.Warn(
+				"otp_resend_failed",
+				"reason", "registration_not_found_or_verified",
+			)
 			return appErrors.NewValidationError(
 				"registration not found or already verified",
 			)
 		}
 
+		u.logger.Error(
+			"otp_resend_failed",
+			"error", err,
+		)
 		return err
 	}
 
@@ -592,15 +779,28 @@ func (u *AuthUsecase) ForgotPassword(input ForgotPasswordInput) error {
 	user, err := u.userRepo.FindByEmail(input.Email)
 
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil //This is called account enumeration protection.
+		if errors.Is(err, domain.ErrUserNotFound) {
+			u.logger.Info(
+				"password_reset_request_ignored",
+				"reason", "user_not_found",
+			)
+			return nil // This is called account enumeration protection.
 		}
 
+		u.logger.Error(
+			"password_reset_failed",
+			"error", err,
+		)
 		return err
 	}
 
 	resetToken, err := generatePasswordResetToken()
 	if err != nil {
+		u.logger.Error(
+			"password_reset_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return err
 	}
 
@@ -617,6 +817,11 @@ func (u *AuthUsecase) ForgotPassword(input ForgotPasswordInput) error {
 	}
 
 	if err := u.passwordResetTokenRepo.Create(passwordResetToken); err != nil {
+		u.logger.Error(
+			"password_reset_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return err
 	}
 
@@ -663,19 +868,46 @@ func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
 
 	resetToken, err := u.passwordResetTokenRepo.FindByTokenHash(tokenHash)
 	if err != nil {
+		if errors.Is(err, domain.ErrPasswordResetTokenNotFound) {
+			u.logger.Warn(
+				"password_reset_failed",
+				"reason", "token_not_found",
+			)
+			return appErrors.NewValidationError("invalid or expired reset token")
+		}
+
+		u.logger.Error(
+			"password_reset_failed",
+			"error", err,
+		)
 		return appErrors.NewValidationError("invalid or expired reset token")
 	}
 
 	if resetToken.UsedAt != nil {
+		u.logger.Warn(
+			"password_reset_failed",
+			"user_id", resetToken.UserID,
+			"reason", "token_already_used",
+		)
 		return appErrors.NewValidationError("invalid or expired reset token")
 	}
 
 	if time.Now().After(resetToken.ExpiresAt) {
+		u.logger.Warn(
+			"password_reset_failed",
+			"user_id", resetToken.UserID,
+			"reason", "token_expired",
+		)
 		return appErrors.NewValidationError("invalid or expired reset token")
 	}
 
 	user, err := u.userRepo.FindByID(resetToken.UserID)
 	if err != nil {
+		u.logger.Error(
+			"password_reset_failed",
+			"user_id", resetToken.UserID,
+			"error", err,
+		)
 		return err
 	}
 
@@ -684,6 +916,11 @@ func (u *AuthUsecase) ResetPassword(input ResetPasswordInput) error {
 		bcrypt.DefaultCost,
 	)
 	if err != nil {
+		u.logger.Error(
+			"password_reset_failed",
+			"user_id", resetToken.UserID,
+			"error", err,
+		)
 		return err
 	}
 
@@ -760,7 +997,11 @@ func (u *AuthUsecase) HandleGoogleCallback(
 	user, err := u.userRepo.FindByEmail(email)
 
 	if err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
+		if !errors.Is(err, domain.ErrUserNotFound) {
+			u.logger.Error(
+				"google_oauth_failed",
+				"error", err,
+			)
 			return nil, "", "", err
 		}
 
@@ -778,6 +1019,10 @@ func (u *AuthUsecase) HandleGoogleCallback(
 		}
 
 		if err := u.userRepo.Create(user); err != nil {
+			u.logger.Error(
+				"google_oauth_failed",
+				"error", err,
+			)
 			return nil, "", "", err
 		}
 
@@ -788,6 +1033,11 @@ func (u *AuthUsecase) HandleGoogleCallback(
 	}
 
 	if user.Status != "ACTIVE" {
+		u.logger.Warn(
+			"google_oauth_login_failed",
+			"user_id", user.ID,
+			"reason", "account_inactive",
+		)
 		return nil, "", "", appErrors.NewUnauthorizedError(
 			"user account is not active",
 		)
@@ -795,6 +1045,11 @@ func (u *AuthUsecase) HandleGoogleCallback(
 
 	accessToken, rawRefreshToken, err := u.generateAuthTokens(user)
 	if err != nil {
+		u.logger.Error(
+			"google_oauth_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return nil, "", "", err
 	}
 
@@ -841,10 +1096,29 @@ func (u *AuthUsecase) generateAuthTokens(
 func (u *AuthUsecase) GetCurrentUser(userID uuid.UUID) (*domain.User, error) {
 	user, err := u.userRepo.FindByID(userID)
 	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			u.logger.Warn(
+				"get_current_user_failed",
+				"user_id", userID,
+				"reason", "user_not_found",
+			)
+			return nil, appErrors.NewUnauthorizedError("user not found")
+		}
+
+		u.logger.Error(
+			"get_current_user_failed",
+			"user_id", userID,
+			"error", err,
+		)
 		return nil, appErrors.NewUnauthorizedError("user not found")
 	}
 
 	if user.Status != "ACTIVE" {
+		u.logger.Warn(
+			"get_current_user_failed",
+			"user_id", userID,
+			"reason", "account_inactive",
+		)
 		return nil, appErrors.NewUnauthorizedError("user account is not active")
 	}
 	return user, nil

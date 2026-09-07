@@ -20,8 +20,6 @@ type OrganizerAddressModel struct {
 	UpdatedAt time.Time `gorm:"not null;autoUpdateTime"`
 }
 
-
 func (OrganizerAddressModel) TableName() string {
 	return "organizer_addresses"
 }
-
