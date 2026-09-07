@@ -16,6 +16,7 @@ func setupRouter(
 	logger *slog.Logger,
 	authHandler *handler.AuthHandler,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	categoryHandler *handler.CategoryHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -53,6 +54,7 @@ func setupRouter(
 	registerAuthRoutes(router, authHandler, jwtService, logger)
 	registerOrganizerRoutes(router, organizerApplicationHandler, jwtService)
 	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
+	registerCategoryRoutes(router, categoryHandler)
 
 	return router
 }
@@ -200,5 +202,17 @@ func registerAdminRoutes(
 	admin.PATCH(
 		"/organizer-applications/:id/reject",
 		organizerApplicationHandler.RejectApplication,
+	)
+}
+
+func registerCategoryRoutes(
+	router *gin.Engine,
+	categoryHandler *handler.CategoryHandler,
+) {
+	api := router.Group("/api/v1")
+
+	api.GET(
+		"/categories",
+		categoryHandler.GetCategories,
 	)
 }

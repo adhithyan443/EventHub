@@ -13,6 +13,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/google"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/joho/godotenv"
 )
@@ -50,6 +51,7 @@ func main() {
 		logger.Error("database migration failed", "error", err)
 		return
 	}
+	logger.Info("database migration completed")
 
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
@@ -58,6 +60,12 @@ func main() {
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
 	txManager := repository.NewTransactionManager(db, logger)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
+
+	categoryRepository := repository.NewCategoryRepository(db, logger)
+
+	categoryUsecase := category.NewCategoryUsecase(categoryRepository, logger)
+	
+	categoryHandler := handler.NewCategoryHandler(categoryUsecase)
 
 	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
 	if err != nil {
@@ -120,9 +128,7 @@ func main() {
 		logger,
 	)
 
-	logger.Info("database migration completed")
-
-	router := setupRouter(logger, authHandler, organizerApplicationHandler, jwtService)
+	router := setupRouter(logger, authHandler, organizerApplicationHandler, categoryHandler, jwtService)
 
 	logger.Info(
 		"EventHub backend started",
