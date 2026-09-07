@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrPendingRegistrationNotFound = errors.New("pending registration not found")
 
 type PendingRegistration struct {
 	ID           uuid.UUID

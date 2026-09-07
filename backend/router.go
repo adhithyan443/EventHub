@@ -46,12 +46,13 @@ func setupRouter(
 		middleware.RequestID(),
 		middleware.Logger(logger),
 		middleware.Recovery(logger),
-		middleware.ErrorHandler(),
+		middleware.ErrorHandler(logger),
 	)
 
 	registerHealthRoutes(router)
 	registerAuthRoutes(router, authHandler, jwtService, logger)
 	registerOrganizerRoutes(router, organizerApplicationHandler, jwtService)
+	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
 
 	return router
 }
@@ -159,5 +160,45 @@ func registerOrganizerRoutes(
 	organizer.POST(
 		"/apply",
 		organizerApplicationHandler.SubmitApplication,
+	)
+
+	organizer.GET(
+		"/application",
+		organizerApplicationHandler.GetMyApplication,
+	)
+}
+
+func registerAdminRoutes(
+	router *gin.Engine,
+	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	jwtService *token.JWTService,
+) {
+
+	api := router.Group("/api/v1")
+
+	admin := api.Group("/admin")
+	admin.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireRole("ADMIN"),
+	)
+
+	admin.GET(
+		"/organizer-applications",
+		organizerApplicationHandler.ListApplications,
+	)
+
+	admin.GET(
+		"/organizer-applications/:id",
+		organizerApplicationHandler.GetApplication,
+	)
+
+	admin.PATCH(
+		"/organizer-applications/:id/approve",
+		organizerApplicationHandler.ApproveApplication,
+	)
+
+	admin.PATCH(
+		"/organizer-applications/:id/reject",
+		organizerApplicationHandler.RejectApplication,
 	)
 }

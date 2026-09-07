@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
 import Button from "../../components/ui/Button";
@@ -15,6 +15,22 @@ export default function LoginPage() {
     const navigate = useNavigate();
 
     const setAuth = useAuthStore((state) => state.setAuth);
+    const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+    const isInitializing = useAuthStore((state) => state.isInitializing);
+    const user = useAuthStore((state) => state.user);
+
+    // If user is already authenticated with a valid session, redirect to appropriate role route
+    useEffect(() => {
+        if (!isInitializing && isAuthenticated && user) {
+            if (user.role === "ADMIN") {
+                navigate("/admin", { replace: true });
+            } else if (user.role === "CUSTOMER") {
+                navigate("/events", { replace: true });
+            } else if (user.role === "ORGANIZER") {
+                navigate("/organizer", { replace: true });
+            }
+        }
+    }, [isInitializing, isAuthenticated, user, navigate]);
 
     function handleChange(e) {
         const { name, value } = e.target;
@@ -68,7 +84,7 @@ export default function LoginPage() {
                     break;
 
                 case "CUSTOMER":
-                    navigate("/");
+                    navigate("/events");
                     break;
 
                 default:

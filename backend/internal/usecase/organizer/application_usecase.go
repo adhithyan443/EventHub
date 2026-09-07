@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type ApplicationUsecase struct {
@@ -58,7 +59,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 	existing, err := u.repository.FindByUserID(userID)
 
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	if err != nil && !errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
 		u.logger.Error(
 			"organizer_application_lookup_failed",
 			"user_id", userID,
@@ -73,7 +74,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 		Create the first application with PENDING status.
 	*/
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
 
 		application := u.buildApplication(
 			userID,
@@ -83,7 +84,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 		if err := u.repository.Create(application); err != nil {
 			u.logger.Error(
-				"organizer_application_create_failed",
+				"organizer_application_submission_failed",
 				"user_id", userID,
 				"error", err,
 			)
@@ -92,7 +93,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 		}
 
 		u.logger.Info(
-			"organizer_application_created",
+			"organizer_application_submitted",
 			"user_id", userID,
 			"application_id", application.ID,
 		)
@@ -147,7 +148,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 		if err := u.repository.Update(existing); err != nil {
 			u.logger.Error(
-				"organizer_application_resubmit_failed",
+				"organizer_application_submission_failed",
 				"user_id", userID,
 				"application_id", existing.ID,
 				"error", err,
@@ -190,6 +191,25 @@ func (u *ApplicationUsecase) buildApplication(
 		Description:  strings.TrimSpace(input.BusinessDescription),
 		Phone:        strings.TrimSpace(input.ContactPhone),
 		Website:      strings.TrimSpace(input.Website),
+		AddressLine: strings.TrimSpace(
+			input.AddressLine,
+		),
+
+		City: strings.TrimSpace(
+			input.City,
+		),
+
+		State: strings.TrimSpace(
+			input.State,
+		),
+
+		Country: strings.TrimSpace(
+			input.Country,
+		),
+
+		PostalCode: strings.TrimSpace(
+			input.PostalCode,
+		),
 
 		GSTNumber: strings.ToUpper(
 			strings.TrimSpace(input.GSTNumber),
@@ -203,7 +223,6 @@ func (u *ApplicationUsecase) buildApplication(
 			input.AccountHolderName,
 		),
 
-		// TODO: Encrypt the account number before storing it.
 		AccountNumberEncrypted: encryptedAccountNumber,
 
 		IFSCCode: strings.ToUpper(
@@ -277,4 +296,176 @@ func updateApplication(
 	application.VerificationDocumentURL = strings.TrimSpace(
 		input.VerificationDocumentURL,
 	)
+
+	application.AddressLine = strings.TrimSpace(
+		input.AddressLine,
+	)
+
+	application.City = strings.TrimSpace(
+		input.City,
+	)
+
+	application.State = strings.TrimSpace(
+		input.State,
+	)
+
+	application.Country = strings.TrimSpace(
+		input.Country,
+	)
+
+	application.PostalCode = strings.TrimSpace(
+		input.PostalCode,
+	)
+}
+
+type OrganizerApplicationResponse struct {
+	ID                      uuid.UUID `json:"id"`
+	BusinessName            string    `json:"business_name"`
+	BusinessType            string    `json:"business_type"`
+	BusinessDescription     string    `json:"business_description"`
+	Website                 string    `json:"website"`
+	ContactPhone            string    `json:"contact_phone"`
+	AddressLine             string    `json:"address_line"`
+	City                    string    `json:"city"`
+	State                   string    `json:"state"`
+	Country                 string    `json:"country"`
+	PostalCode              string    `json:"postal_code"`
+	BankName                string    `json:"bank_name"`
+	AccountHolderName       string    `json:"account_holder_name"`
+	IFSCCode                string    `json:"ifsc_code"`
+	GSTNumber               string    `json:"gst_number"`
+	PANNumber               string    `json:"pan_number"`
+	LogoURL                 string    `json:"logo_url"`
+	VerificationDocumentURL string    `json:"verification_document_url"`
+	Status                  string    `json:"status"`
+	RejectionReason         string    `json:"rejection_reason,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
+
+func (u *ApplicationUsecase) GetApplication(
+	userID uuid.UUID,
+) (*OrganizerApplicationResponse, error) {
+
+	application, err := u.repository.FindByUserID(userID)
+	if err != nil {
+
+		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+			return nil, appErrors.NewNotFoundError(
+				"organizer application not found",
+			)
+		}
+
+		u.logger.Error(
+			"organizer_application_fetch_failed",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+
+		return nil, fmt.Errorf("failed to fetch organizer application")
+	}
+
+	return &OrganizerApplicationResponse{
+		ID:                      application.ID,
+		BusinessName:            application.BusinessName,
+		BusinessType:            application.BusinessType,
+		BusinessDescription:     application.Description,
+		Website:                 application.Website,
+		ContactPhone:            application.Phone,
+		AddressLine:             application.AddressLine,
+		City:                    application.City,
+		State:                   application.State,
+		Country:                 application.Country,
+		PostalCode:              application.PostalCode,
+		BankName:                application.BankName,
+		AccountHolderName:       application.AccountHolderName,
+		IFSCCode:                application.IFSCCode,
+		GSTNumber:               application.GSTNumber,
+		PANNumber:               application.PANNumber,
+		LogoURL:                 application.LogoURL,
+		VerificationDocumentURL: application.VerificationDocumentURL,
+		Status:                  string(application.Status),
+		RejectionReason:         application.RejectionReason,
+		CreatedAt:               application.CreatedAt,
+		UpdatedAt:               application.UpdatedAt,
+	}, nil
+}
+
+func (u *AdminApplicationUsecase) RejectApplication(
+	id uuid.UUID,
+	reason string,
+) error {
+
+	reason = strings.TrimSpace(reason)
+
+	if reason == "" {
+		u.logger.Warn(
+			"admin_organizer_application_rejection_failed",
+			"application_id", id,
+			"reason", "empty_rejection_reason",
+		)
+		return appErrors.NewValidationError(
+			"rejection reason is required",
+		)
+	}
+
+	application, err := u.repository.FindByID(id)
+	if err != nil {
+		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+			u.logger.Warn(
+				"admin_organizer_application_rejection_failed",
+				"application_id", id,
+				"reason", "application_not_found",
+			)
+			return appErrors.NewNotFoundError(
+				"organizer application not found",
+			)
+		}
+
+		u.logger.Error(
+			"admin_organizer_application_rejection_find_failed",
+			"application_id", id,
+			"error", err,
+		)
+
+		return fmt.Errorf(
+			"failed to retrieve organizer application",
+		)
+	}
+
+	if application.Status != domain.ApplicationPending {
+		u.logger.Warn(
+			"admin_organizer_application_rejection_failed",
+			"application_id", id,
+			"reason", "application_not_pending",
+			"status", application.Status,
+		)
+		return appErrors.NewConflictError(
+			"only pending applications can be rejected",
+		)
+	}
+
+	// Update the application instead of deleting it.
+	application.Status = domain.ApplicationRejected
+	application.RejectionReason = reason
+
+	if err := u.repository.Update(application); err != nil {
+		u.logger.Error(
+			"admin_organizer_application_rejection_update_failed",
+			"application_id", id,
+			"error", err,
+		)
+
+		return fmt.Errorf(
+			"failed to reject organizer application",
+		)
+	}
+
+	u.logger.Info(
+		"admin_organizer_application_rejected",
+		"application_id", id,
+		"user_id", application.UserID,
+	)
+
+	return nil
 }

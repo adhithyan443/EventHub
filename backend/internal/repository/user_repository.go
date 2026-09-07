@@ -1,6 +1,9 @@
 package repository
 
 import (
+	"errors"
+	"log/slog"
+
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
@@ -8,11 +11,15 @@ import (
 )
 
 type UserRepository struct {
-	db *gorm.DB
+	db     *gorm.DB
+	logger *slog.Logger
 }
 
-func NewUserRepository(db *gorm.DB) *UserRepository {
-	return &UserRepository{db: db}
+func NewUserRepository(db *gorm.DB, logger *slog.Logger) *UserRepository {
+	return &UserRepository{
+		db:     db,
+		logger: logger,
+	}
 }
 
 func (r *UserRepository) Create(user *domain.User) error {
@@ -31,6 +38,9 @@ func (r *UserRepository) FindByID(id uuid.UUID) (*domain.User, error) {
 	var model models.UserModel
 
 	if err := r.db.First(&model, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
 		return nil, err
 	}
 
@@ -43,6 +53,9 @@ func (r *UserRepository) FindByEmail(email string) (*domain.User, error) {
 	var model models.UserModel
 
 	if err := r.db.Where("email = ?", email).First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
 		return nil, err
 	}
 
@@ -55,10 +68,20 @@ func (r *UserRepository) Update(user *domain.User) error {
 	model := userToModel(user)
 
 	if err := r.db.Save(&model).Error; err != nil {
+		r.logger.Error(
+			"user_update_failed",
+			"user_id", user.ID,
+			"error", err,
+		)
 		return err
 	}
 
 	*user = modelToUser(&model)
+
+	r.logger.Info(
+		"user_updated",
+		"user_id", user.ID,
+	)
 
 	return nil
 }
@@ -69,6 +92,9 @@ func (r *UserRepository) FindByPhone(phone string) (*domain.User, error) {
 	if err := r.db.
 		Where("phone = ?", phone).
 		First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrUserNotFound
+		}
 		return nil, err
 	}
 

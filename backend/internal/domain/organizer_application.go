@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrOrganizerApplicationNotFound = errors.New("organizer application not found")
 
 type ApplicationStatus string
 
@@ -15,8 +18,9 @@ const (
 )
 
 type OrganizerApplication struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+	ID            uuid.UUID
+	UserID        uuid.UUID
+	ApplicantName string
 
 	BusinessName string
 	BusinessType string
@@ -32,6 +36,12 @@ type OrganizerApplication struct {
 	AccountNumberEncrypted string
 	IFSCCode               string
 
+	AddressLine string
+	City        string
+	State       string
+	Country     string
+	PostalCode  string
+
 	LogoURL                 string
 	VerificationDocumentURL string
 
@@ -42,8 +52,18 @@ type OrganizerApplication struct {
 	UpdatedAt time.Time
 }
 
+type OrganizerApplicationList struct {
+	Applications []*OrganizerApplication
+	Total        int64
+	Page         int
+	Limit        int
+}
+
 type OrganizerApplicationRepository interface {
 	Create(application *OrganizerApplication) error
 	FindByUserID(userID uuid.UUID) (*OrganizerApplication, error)
 	Update(application *OrganizerApplication) error
+	FindByID(id uuid.UUID) (*OrganizerApplication, error)
+	Delete(id uuid.UUID) error
+	List(page int, limit int, status ApplicationStatus) (*OrganizerApplicationList, error)
 }

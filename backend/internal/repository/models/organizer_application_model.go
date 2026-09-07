@@ -24,6 +24,12 @@ type OrganizerApplicationModel struct {
 	AccountNumberEncrypted string `gorm:"type:text;not null"`
 	IFSCCode               string `gorm:"type:varchar(20);not null"`
 
+	AddressLine string `gorm:"type:text;not null"`
+	City        string `gorm:"type:varchar(100);not null"`
+	State       string `gorm:"type:varchar(100);not null"`
+	Country     string `gorm:"type:varchar(100);not null"`
+	PostalCode  string `gorm:"type:varchar(20);not null"`
+
 	LogoURL                 string `gorm:"type:varchar(1000)"`
 	VerificationDocumentURL string `gorm:"type:varchar(1000);not null"`
 

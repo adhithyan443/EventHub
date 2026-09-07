@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrRefreshTokenNotFound = errors.New("refresh token not found")
 
 type RefreshToken struct {
 	ID        uuid.UUID

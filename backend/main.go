@@ -53,10 +53,10 @@ func main() {
 
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
-	userRepo := repository.NewUserRepository(db)
+	userRepo := repository.NewUserRepository(db, logger)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	txManager := repository.NewTransactionManager(db)
+	txManager := repository.NewTransactionManager(db, logger)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
@@ -108,8 +108,15 @@ func main() {
 		logger,
 	)
 
+	adminApplicationUsecase := organizer.NewAdminApplicationUsecase(
+		organizerApplicationRepo,
+		txManager,
+		logger,
+	)
+
 	organizerApplicationHandler := handler.NewOrganizerApplicationHandler(
 		organizerApplicationUsecase,
+		adminApplicationUsecase,
 		logger,
 	)
 
