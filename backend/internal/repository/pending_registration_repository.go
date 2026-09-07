@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
@@ -29,6 +31,9 @@ func (r *PendingRegistrationRepository) FindByEmail(email string) (*domain.Pendi
 	var model models.PendingRegistrationModel
 
 	if err := r.db.Where("email = ?", email).First(&model).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrPendingRegistrationNotFound
+		}
 		return nil, err
 	}
 

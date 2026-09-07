@@ -9,7 +9,6 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 type AdminApplicationUsecase struct {
@@ -96,7 +95,7 @@ func (u *AdminApplicationUsecase) ListApplications(
 // 	if err != nil {
 // 		return uuid.Nil, fmt.Errorf("invalid application id")
 // 	}
-
+//
 // 	return id, nil
 // }
 
@@ -107,6 +106,16 @@ func (u *AdminApplicationUsecase) GetApplication(
 
 	application, err := u.repository.FindByID(id)
 	if err != nil {
+		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+			u.logger.Warn(
+				"admin_organizer_application_not_found",
+				"application_id", id,
+			)
+			return nil, appErrors.NewNotFoundError(
+				"organizer application not found",
+			)
+		}
+
 		u.logger.Error(
 			"admin_organizer_application_get_failed",
 			"application_id", id,
@@ -131,7 +140,12 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 
 		application, err := tx.OrganizerApplicationRepository().FindByID(id)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+				u.logger.Warn(
+					"admin_organizer_application_approval_failed",
+					"application_id", id,
+					"reason", "application_not_found",
+				)
 				return appErrors.NewNotFoundError("organizer application not found")
 			}
 
@@ -145,6 +159,12 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 
 		// Only pending applications can be approved.
 		if application.Status != domain.ApplicationPending {
+			u.logger.Warn(
+				"admin_organizer_application_approval_failed",
+				"application_id", id,
+				"reason", "application_not_pending",
+				"status", application.Status,
+			)
 			return appErrors.NewConflictError(
 				"only pending applications can be approved",
 			)
@@ -153,7 +173,13 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 		// Fetch the applicant
 		user, err := tx.UserRepository().FindByID(application.UserID)
 		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
+			if errors.Is(err, domain.ErrUserNotFound) {
+				u.logger.Warn(
+					"admin_organizer_application_approval_failed",
+					"application_id", id,
+					"user_id", application.UserID,
+					"reason", "user_not_found",
+				)
 				return appErrors.NewNotFoundError("application user not found")
 			}
 

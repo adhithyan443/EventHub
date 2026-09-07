@@ -27,4 +27,3 @@ type OrganizerProfileModel struct {
 func (OrganizerProfileModel) TableName() string {
 	return "organizer_profiles"
 }
-

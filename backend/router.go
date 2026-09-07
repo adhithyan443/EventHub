@@ -46,7 +46,7 @@ func setupRouter(
 		middleware.RequestID(),
 		middleware.Logger(logger),
 		middleware.Recovery(logger),
-		middleware.ErrorHandler(),
+		middleware.ErrorHandler(logger),
 	)
 
 	registerHealthRoutes(router)

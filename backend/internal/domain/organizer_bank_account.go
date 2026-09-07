@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrOrganizerBankAccountNotFound = errors.New("organizer bank account not found")
 
 type OrganizerBankAccount struct {
 	ID          uuid.UUID

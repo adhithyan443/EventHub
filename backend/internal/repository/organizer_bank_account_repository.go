@@ -61,7 +61,7 @@ func (r *OrganizerBankAccountRepository) FindByOrganizerID(
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, gorm.ErrRecordNotFound
+			return nil, domain.ErrOrganizerBankAccountNotFound
 		}
 
 		r.logger.Error(

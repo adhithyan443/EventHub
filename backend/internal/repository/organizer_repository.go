@@ -62,7 +62,7 @@ func (r *OrganizerRepository) FindByID(
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, gorm.ErrRecordNotFound
+			return nil, domain.ErrOrganizerNotFound
 		}
 
 		r.logger.Error(
@@ -88,7 +88,7 @@ func (r *OrganizerRepository) FindByUserID(
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, gorm.ErrRecordNotFound
+			return nil, domain.ErrOrganizerNotFound
 		}
 
 		r.logger.Error(
