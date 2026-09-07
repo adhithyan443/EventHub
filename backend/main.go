@@ -53,6 +53,13 @@ func main() {
 	}
 	logger.Info("database migration completed")
 
+	if err := database.SeedCategories(db, logger); err != nil {
+		logger.Error("category seeding failed", "error", err)
+		return
+	}
+
+	logger.Info("category seeding completed")
+
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
 	userRepo := repository.NewUserRepository(db, logger)
@@ -64,7 +71,7 @@ func main() {
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
 	categoryUsecase := category.NewCategoryUsecase(categoryRepository, logger)
-	
+
 	categoryHandler := handler.NewCategoryHandler(categoryUsecase)
 
 	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
