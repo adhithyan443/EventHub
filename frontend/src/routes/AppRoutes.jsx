@@ -18,6 +18,7 @@ import AdminDashboardPage from "../pages/admin/AdminDashboardPage";
 import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
+import VenueDemoPage from "../pages/venue/VenueDemoPage";
 
 export default function AppRoutes() {
     return (
@@ -28,6 +29,8 @@ export default function AppRoutes() {
             <Route path="/verify-otp" element={<OtpPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+            <Route path="/demo" element={<VenueDemoPage />} />
 
             {/* Google OAuth callback */}
             <Route
