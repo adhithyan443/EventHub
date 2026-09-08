@@ -3,6 +3,7 @@ package event
 import (
 	"errors"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,6 +42,9 @@ func NewEventUsecase(
 type CreateEventInput struct {
 	UserID     uuid.UUID
 	CategoryID uuid.UUID
+
+	EventType string
+	OnlineURL string
 
 	Title          string
 	Description    string
@@ -87,6 +91,7 @@ func (u *EventUsecase) CreateEvent(
 		u.logger.Error(
 			"event_create_validation_failed",
 			"user_id", input.UserID,
+			"event_type", input.EventType,
 			"error", err,
 		)
 
@@ -163,37 +168,18 @@ func (u *EventUsecase) CreateEvent(
 				return domain.ErrCategoryNotFound
 			}
 
-			// 3. Find or create venue using Google Place ID
-			venue, err := tx.VenueRepository().
-				FindByGooglePlaceID(input.Venue.GooglePlaceID)
+			// 3. Resolve venue only for physical/hybrid events.
+			var venue *domain.Venue
 
-			if err != nil && !errors.Is(err, domain.ErrVenueNotFound) {
-				u.logger.Error(
-					"event_create_venue_lookup_failed",
-					"google_place_id", input.Venue.GooglePlaceID,
-					"error", err,
-				)
+			if input.EventType == domain.EventTypePhysical ||
+				input.EventType == domain.EventTypeHybrid {
 
-				return err
-			}
+				venue, err = tx.VenueRepository().
+					FindByGooglePlaceID(input.Venue.GooglePlaceID)
 
-			if errors.Is(err, domain.ErrVenueNotFound) {
-				venue = &domain.Venue{
-					ID:            uuid.New(),
-					GooglePlaceID: strings.TrimSpace(input.Venue.GooglePlaceID),
-					Name:          strings.TrimSpace(input.Venue.Name),
-					Address:       strings.TrimSpace(input.Venue.Address),
-					City:          strings.TrimSpace(input.Venue.City),
-					State:         strings.TrimSpace(input.Venue.State),
-					Country:       strings.TrimSpace(input.Venue.Country),
-					PostalCode:    strings.TrimSpace(input.Venue.PostalCode),
-					Latitude:      input.Venue.Latitude,
-					Longitude:     input.Venue.Longitude,
-				}
-
-				if err := tx.VenueRepository().Create(venue); err != nil {
+				if err != nil && !errors.Is(err, domain.ErrVenueNotFound) {
 					u.logger.Error(
-						"event_create_venue_creation_failed",
+						"event_create_venue_lookup_failed",
 						"google_place_id", input.Venue.GooglePlaceID,
 						"error", err,
 					)
@@ -201,25 +187,59 @@ func (u *EventUsecase) CreateEvent(
 					return err
 				}
 
-				u.logger.Info(
-					"event_create_venue_created",
-					"venue_id", venue.ID,
-					"google_place_id", venue.GooglePlaceID,
-				)
-			} else {
-				u.logger.Info(
-					"event_create_venue_reused",
-					"venue_id", venue.ID,
-					"google_place_id", venue.GooglePlaceID,
-				)
+				if errors.Is(err, domain.ErrVenueNotFound) {
+					venue = &domain.Venue{
+						ID:            uuid.New(),
+						GooglePlaceID: strings.TrimSpace(input.Venue.GooglePlaceID),
+						Name:          strings.TrimSpace(input.Venue.Name),
+						Address:       strings.TrimSpace(input.Venue.Address),
+						City:          strings.TrimSpace(input.Venue.City),
+						State:         strings.TrimSpace(input.Venue.State),
+						Country:       strings.TrimSpace(input.Venue.Country),
+						PostalCode:    strings.TrimSpace(input.Venue.PostalCode),
+						Latitude:      input.Venue.Latitude,
+						Longitude:     input.Venue.Longitude,
+					}
+
+					if err := tx.VenueRepository().Create(venue); err != nil {
+						u.logger.Error(
+							"event_create_venue_creation_failed",
+							"google_place_id", input.Venue.GooglePlaceID,
+							"error", err,
+						)
+
+						return err
+					}
+
+					u.logger.Info(
+						"event_create_venue_created",
+						"venue_id", venue.ID,
+						"google_place_id", venue.GooglePlaceID,
+					)
+				} else {
+					u.logger.Info(
+						"event_create_venue_reused",
+						"venue_id", venue.ID,
+						"google_place_id", venue.GooglePlaceID,
+					)
+				}
 			}
 
-			// 4. Create Event
+			// 4. Prepare nullable venue ID.
+			var venueID *uuid.UUID
+
+			if venue != nil {
+				venueID = &venue.ID
+			}
+
+			// 5. Create Event
 			event := &domain.Event{
 				ID:             uuid.New(),
 				OrganizerID:    organizer.ID,
 				CategoryID:     input.CategoryID,
-				VenueID:        venue.ID,
+				VenueID:        venueID,
+				EventType:      input.EventType,
+				OnlineURL:      strings.TrimSpace(input.OnlineURL),
 				Title:          strings.TrimSpace(input.Title),
 				Description:    strings.TrimSpace(input.Description),
 				BannerURL:      strings.TrimSpace(input.BannerURL),
@@ -234,14 +254,15 @@ func (u *EventUsecase) CreateEvent(
 					"user_id", input.UserID,
 					"organizer_id", organizer.ID,
 					"event_id", event.ID,
-					"venue_id", venue.ID,
+					"event_type", event.EventType,
+					"venue_id", venueID,
 					"error", err,
 				)
 
 				return err
 			}
 
-			// 5. Create Event Schedule
+			// 6. Create Event Schedule
 			schedule := &domain.EventSchedule{
 				ID:        uuid.New(),
 				EventID:   event.ID,
@@ -260,7 +281,7 @@ func (u *EventUsecase) CreateEvent(
 				return err
 			}
 
-			// 6. Create Event Settings
+			// 7. Create Event Settings
 			setting := &domain.EventSetting{
 				ID:                  uuid.New(),
 				EventID:             event.ID,
@@ -278,7 +299,7 @@ func (u *EventUsecase) CreateEvent(
 				return err
 			}
 
-			// 7. Create Event Cancellation Settings
+			// 8. Create Event Cancellation Settings
 			cancellation := &domain.EventCancellation{
 				ID:                        uuid.New(),
 				EventID:                   event.ID,
@@ -308,6 +329,13 @@ func (u *EventUsecase) CreateEvent(
 	)
 
 	if err != nil {
+		u.logger.Error(
+			"event_create_transaction_failed",
+			"user_id", input.UserID,
+			"event_type", input.EventType,
+			"error", err,
+		)
+
 		return nil, err
 	}
 
@@ -315,6 +343,7 @@ func (u *EventUsecase) CreateEvent(
 		"event_created",
 		"event_id", output.Event.ID,
 		"organizer_id", output.Event.OrganizerID,
+		"event_type", output.Event.EventType,
 		"venue_id", output.Event.VenueID,
 		"status", output.Event.Status,
 	)
@@ -347,7 +376,7 @@ func validateCreateEventInput(input CreateEventInput) error {
 		return ErrInvalidEventInput
 	}
 
-	if err := validateVenueInput(input.Venue); err != nil {
+	if err := validateEventType(input); err != nil {
 		return ErrInvalidEventInput
 	}
 
@@ -372,6 +401,12 @@ func validateCreateEventInput(input CreateEventInput) error {
 		return ErrInvalidEventSettings
 	}
 
+	// Online events cannot use reserved seating.
+	if input.EventType == domain.EventTypeOnline &&
+		input.SeatLayoutType == SeatLayoutTypeSeated {
+		return ErrInvalidEventSettings
+	}
+
 	if input.BookingLimitPerUser <= 0 {
 		return ErrInvalidEventSettings
 	}
@@ -387,6 +422,73 @@ func validateCreateEventInput(input CreateEventInput) error {
 	}
 
 	return nil
+}
+
+func validateEventType(input CreateEventInput) error {
+	switch input.EventType {
+	case domain.EventTypePhysical:
+		if strings.TrimSpace(input.OnlineURL) != "" {
+			return errors.New("physical event cannot have online url")
+		}
+
+		return validateVenueInput(input.Venue)
+
+	case domain.EventTypeOnline:
+		if err := validateOnlineURL(input.OnlineURL); err != nil {
+			return err
+		}
+
+		if hasVenueInput(input.Venue) {
+			return errors.New("online event cannot have venue")
+		}
+
+		return nil
+
+	case domain.EventTypeHybrid:
+		if err := validateVenueInput(input.Venue); err != nil {
+			return err
+		}
+
+		return validateOnlineURL(input.OnlineURL)
+
+	default:
+		return errors.New("invalid event type")
+	}
+}
+
+func validateOnlineURL(value string) error {
+	value = strings.TrimSpace(value)
+
+	if value == "" {
+		return errors.New("online url is required")
+	}
+
+	parsedURL, err := url.ParseRequestURI(value)
+	if err != nil {
+		return errors.New("invalid online url")
+	}
+
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return errors.New("online url must use http or https")
+	}
+
+	if parsedURL.Host == "" {
+		return errors.New("online url must contain a host")
+	}
+
+	return nil
+}
+
+func hasVenueInput(input VenueInput) bool {
+	return strings.TrimSpace(input.GooglePlaceID) != "" ||
+		strings.TrimSpace(input.Name) != "" ||
+		strings.TrimSpace(input.Address) != "" ||
+		strings.TrimSpace(input.City) != "" ||
+		strings.TrimSpace(input.State) != "" ||
+		strings.TrimSpace(input.Country) != "" ||
+		strings.TrimSpace(input.PostalCode) != "" ||
+		input.Latitude != 0 ||
+		input.Longitude != 0
 }
 
 func validateVenueInput(input VenueInput) error {

@@ -14,6 +14,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
+	eventUsecase "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/joho/godotenv"
 )
@@ -22,7 +23,7 @@ func main() {
 
 	logger, closeLog, err := appLogger.New("app.log")
 	if err != nil {
-		slog.Error("Failed to initialize logger", "error", err)
+		slog.Error("failed to initialize logger", "error", err)
 		return
 	}
 	defer closeLog()
@@ -30,7 +31,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if err := godotenv.Load("../.env"); err != nil {
-		logger.Warn(" .env file not found, using environment variables")
+		logger.Warn(".env file not found, using environment variables")
 	}
 
 	cfg, err := config.Load()
@@ -51,6 +52,7 @@ func main() {
 		logger.Error("database migration failed", "error", err)
 		return
 	}
+
 	logger.Info("database migration completed")
 
 	if err := database.SeedCategories(db, logger); err != nil {
@@ -65,15 +67,32 @@ func main() {
 	userRepo := repository.NewUserRepository(db, logger)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	txManager := repository.NewTransactionManager(db, logger)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
+	txManager := repository.NewTransactionManager(db, logger)
+
 	categoryRepository := repository.NewCategoryRepository(db, logger)
-	// _ = repository.NewVenueRepository(db, logger)
 
-	categoryUsecase := category.NewCategoryUsecase(categoryRepository, logger)
+	categoryUsecase := category.NewCategoryUsecase(
+		categoryRepository,
+		logger,
+	)
 
-	categoryHandler := handler.NewCategoryHandler(categoryUsecase)
+	categoryHandler := handler.NewCategoryHandler(
+		categoryUsecase,
+	)
+
+	// Event usecase
+	eventUsecase := eventUsecase.NewEventUsecase(
+		txManager,
+		logger,
+	)
+
+	// Event handler
+	eventHandler := handler.NewEventHandler(
+		eventUsecase,
+		logger,
+	)
 
 	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
 	if err != nil {
@@ -98,6 +117,7 @@ func main() {
 		cfg.SMTPFrom,
 		cfg.FrontendURL,
 	)
+
 	authUsecase := auth.NewAuthUsecase(
 		userRepo,
 		pendingRegistrationRepo,
@@ -110,9 +130,11 @@ func main() {
 		logger,
 	)
 
-	authHandler := handler.NewAuthHandler(authUsecase, cfg.FrontendURL)
+	authHandler := handler.NewAuthHandler(
+		authUsecase,
+		cfg.FrontendURL,
+	)
 
-	// organizerApplicationRepo
 	organizerApplicationRepo := repository.NewOrganizerApplicationRepository(
 		db,
 		logger,
@@ -136,7 +158,14 @@ func main() {
 		logger,
 	)
 
-	router := setupRouter(logger, authHandler, organizerApplicationHandler, categoryHandler, jwtService)
+	router := setupRouter(
+		logger,
+		authHandler,
+		organizerApplicationHandler,
+		categoryHandler,
+		eventHandler,
+		jwtService,
+	)
 
 	logger.Info(
 		"EventHub backend started",
@@ -145,8 +174,9 @@ func main() {
 	)
 
 	if err := router.Run(":" + cfg.ServerPort); err != nil {
-		logger.Error("server failed to start", "error", err)
+		logger.Error(
+			"server failed to start",
+			"error", err,
+		)
 	}
-
-	_ = slog.Default()
 }

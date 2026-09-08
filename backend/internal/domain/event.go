@@ -15,11 +15,19 @@ const (
 	EventStatusCancelled = "CANCELLED"
 )
 
+const (
+	EventTypePhysical = "PHYSICAL"
+	EventTypeOnline   = "ONLINE"
+	EventTypeHybrid   = "HYBRID"
+)
+
 type Event struct {
 	ID             uuid.UUID
 	OrganizerID    uuid.UUID
 	CategoryID     uuid.UUID
-	VenueID        uuid.UUID
+	VenueID        *uuid.UUID
+	EventType      string
+	OnlineURL      string
 	Title          string
 	Description    string
 	BannerURL      string

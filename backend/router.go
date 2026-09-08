@@ -17,6 +17,7 @@ func setupRouter(
 	authHandler *handler.AuthHandler,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	categoryHandler *handler.CategoryHandler,
+	eventHandler *handler.EventHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -52,7 +53,12 @@ func setupRouter(
 
 	registerHealthRoutes(router)
 	registerAuthRoutes(router, authHandler, jwtService, logger)
-	registerOrganizerRoutes(router, organizerApplicationHandler, jwtService)
+	registerOrganizerRoutes(
+		router,
+		organizerApplicationHandler,
+		eventHandler,
+		jwtService,
+	)
 	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
 	registerCategoryRoutes(router, categoryHandler)
 
@@ -151,6 +157,7 @@ func registerAuthRoutes(
 func registerOrganizerRoutes(
 	router *gin.Engine,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	eventHandler *handler.EventHandler,
 	jwtService *token.JWTService,
 ) {
 	api := router.Group("/api/v1")
@@ -168,6 +175,12 @@ func registerOrganizerRoutes(
 		"/application",
 		organizerApplicationHandler.GetMyApplication,
 	)
+
+	// Organizer event endpoints.
+	organizer.POST(
+		"/events",
+		eventHandler.CreateEvent,
+	)
 }
 
 func registerAdminRoutes(
@@ -175,7 +188,6 @@ func registerAdminRoutes(
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	jwtService *token.JWTService,
 ) {
-
 	api := router.Group("/api/v1")
 
 	admin := api.Group("/admin")
