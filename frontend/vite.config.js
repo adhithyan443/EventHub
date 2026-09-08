@@ -8,6 +8,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
 
   return {
+    envDir: path.resolve(__dirname, ".."),
     plugins: [react(), tailwindcss()],
     define: {
       "import.meta.env.VITE_API_BASE_URL": JSON.stringify(

@@ -19,6 +19,17 @@ import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
 
+// Organizer UI Components
+import OrganizerLayout from "../components/organizer/OrganizerLayout";
+import OrganizerDashboardPage from "../pages/organizer/OrganizerDashboardPage";
+import CreateEventStep1BasicInfoPage from "../pages/organizer/create-event/CreateEventStep1BasicInfoPage";
+import CreateEventStep2DetailsPage from "../pages/organizer/create-event/CreateEventStep2DetailsPage";
+import CreateEventStep3TicketSelectionPage from "../pages/organizer/create-event/CreateEventStep3TicketSelectionPage";
+import CreateEventTicketTypesPage from "../pages/organizer/create-event/CreateEventTicketTypesPage";
+import CreateEventSeatConfigurationPage from "../pages/organizer/create-event/CreateEventSeatConfigurationPage";
+import CreateEventReviewPublishPage from "../pages/organizer/create-event/CreateEventReviewPublishPage";
+import OrganizerPlaceholderPage from "../pages/organizer/OrganizerPlaceholderPage";
+
 export default function AppRoutes() {
     return (
         <Routes>
@@ -62,6 +73,32 @@ export default function AppRoutes() {
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />
                 </Route>
             </Route>
+
+            {/* Organizer Portal */}
+            {/* Note: In this UI-only phase, accessible directly for UI review. Structured to allow wrapping in ProtectedRoute allowedRoles={["ORGANIZER"]} later. */}
+            <Route path="/organizer" element={<OrganizerLayout />}>
+                <Route index element={<Navigate to="/organizer/dashboard" replace />} />
+                <Route path="dashboard" element={<OrganizerDashboardPage />} />
+
+                {/* Multi-Step Event Creation Flow */}
+                <Route path="events/create" element={<Navigate to="/organizer/events/create/step-1" replace />} />
+                <Route path="events/create/step-1" element={<CreateEventStep1BasicInfoPage />} />
+                <Route path="events/create/step-2" element={<CreateEventStep2DetailsPage />} />
+                <Route path="events/create/step-3" element={<CreateEventStep3TicketSelectionPage />} />
+                <Route path="events/create/ticket-types" element={<CreateEventTicketTypesPage />} />
+                <Route path="events/create/seat-configuration" element={<CreateEventSeatConfigurationPage />} />
+                <Route path="events/create/review" element={<CreateEventReviewPublishPage />} />
+
+                {/* Organizer Placeholders */}
+                <Route path="events" element={<OrganizerPlaceholderPage title="My Events" />} />
+                <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
+                <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
+                <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />
+                <Route path="settings" element={<OrganizerPlaceholderPage title="Settings" />} />
+            </Route>
+
+            {/* Redirect alias: /organizer/create-event -> /organizer/events/create/step-1 */}
+            <Route path="/organizer/create-event" element={<Navigate to="/organizer/events/create/step-1" replace />} />
         </Routes>
     );
 }
