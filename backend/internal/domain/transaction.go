@@ -14,4 +14,9 @@ type TransactionRepositories interface {
 	OrganizerProfileRepository() OrganizerProfileRepository
 	OrganizerAddressRepository() OrganizerAddressRepository
 	OrganizerBankAccountRepository() OrganizerBankAccountRepository
+
+	EventRepository() EventRepository
+	EventScheduleRepository() EventScheduleRepository
+	EventSettingRepository() EventSettingRepository
+	EventCancellationRepository() EventCancellationRepository
 }
