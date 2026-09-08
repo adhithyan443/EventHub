@@ -54,6 +54,36 @@ func (m *TransactionManager) WithinTransaction(
 				txDB,
 				m.logger,
 			),
+
+			categoryRepo: NewCategoryRepository(
+				txDB,
+				m.logger,
+			),
+
+			venueRepo: NewVenueRepository(
+				txDB,
+				m.logger,
+			),
+
+			eventRepo: NewEventRepository(
+				txDB,
+				m.logger,
+			),
+
+			eventScheduleRepo: NewEventScheduleRepository(
+				txDB,
+				m.logger,
+			),
+
+			eventSettingRepo: NewEventSettingRepository(
+				txDB,
+				m.logger,
+			),
+
+			eventCancellationRepo: NewEventCancellationRepository(
+				txDB,
+				m.logger,
+			),
 		}
 
 		return fn(txRepos)
@@ -70,6 +100,14 @@ type transactionRepositories struct {
 	organizerProfileRepo     domain.OrganizerProfileRepository
 	organizerAddressRepo     domain.OrganizerAddressRepository
 	organizerBankAccountRepo domain.OrganizerBankAccountRepository
+
+	categoryRepo domain.CategoryRepository
+	venueRepo    domain.VenueRepository
+
+	eventRepo             domain.EventRepository
+	eventScheduleRepo     domain.EventScheduleRepository
+	eventSettingRepo      domain.EventSettingRepository
+	eventCancellationRepo domain.EventCancellationRepository
 }
 
 func (r *transactionRepositories) UserRepository() domain.UserRepository {
@@ -102,4 +140,28 @@ func (r *transactionRepositories) OrganizerAddressRepository() domain.OrganizerA
 
 func (r *transactionRepositories) OrganizerBankAccountRepository() domain.OrganizerBankAccountRepository {
 	return r.organizerBankAccountRepo
+}
+
+func (r *transactionRepositories) CategoryRepository() domain.CategoryRepository {
+	return r.categoryRepo
+}
+
+func (r *transactionRepositories) VenueRepository() domain.VenueRepository {
+	return r.venueRepo
+}
+
+func (r *transactionRepositories) EventRepository() domain.EventRepository {
+	return r.eventRepo
+}
+
+func (r *transactionRepositories) EventScheduleRepository() domain.EventScheduleRepository {
+	return r.eventScheduleRepo
+}
+
+func (r *transactionRepositories) EventSettingRepository() domain.EventSettingRepository {
+	return r.eventSettingRepo
+}
+
+func (r *transactionRepositories) EventCancellationRepository() domain.EventCancellationRepository {
+	return r.eventCancellationRepo
 }

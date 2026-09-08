@@ -19,5 +19,13 @@ func Migrate(db *gorm.DB) error {
 		&models.OrganizerProfileModel{},
 		&models.OrganizerAddressModel{},
 		&models.OrganizerBankAccountModel{},
+
+		&models.CategoryModel{},
+		&models.VenueModel{},
+
+		&models.EventModel{},
+		&models.EventScheduleModel{},
+		&models.EventSettingModel{},
+		&models.EventCancellationModel{},
 	)
 }
