@@ -55,6 +55,16 @@ func (m *TransactionManager) WithinTransaction(
 				m.logger,
 			),
 
+			categoryRepo: NewCategoryRepository(
+				txDB,
+				m.logger,
+			),
+
+			venueRepo: NewVenueRepository(
+				txDB,
+				m.logger,
+			),
+
 			eventRepo: NewEventRepository(
 				txDB,
 				m.logger,
@@ -90,6 +100,9 @@ type transactionRepositories struct {
 	organizerProfileRepo     domain.OrganizerProfileRepository
 	organizerAddressRepo     domain.OrganizerAddressRepository
 	organizerBankAccountRepo domain.OrganizerBankAccountRepository
+
+	categoryRepo domain.CategoryRepository
+	venueRepo    domain.VenueRepository
 
 	eventRepo             domain.EventRepository
 	eventScheduleRepo     domain.EventScheduleRepository
@@ -127,6 +140,14 @@ func (r *transactionRepositories) OrganizerAddressRepository() domain.OrganizerA
 
 func (r *transactionRepositories) OrganizerBankAccountRepository() domain.OrganizerBankAccountRepository {
 	return r.organizerBankAccountRepo
+}
+
+func (r *transactionRepositories) CategoryRepository() domain.CategoryRepository {
+	return r.categoryRepo
+}
+
+func (r *transactionRepositories) VenueRepository() domain.VenueRepository {
+	return r.venueRepo
 }
 
 func (r *transactionRepositories) EventRepository() domain.EventRepository {
