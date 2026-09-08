@@ -22,5 +22,10 @@ func Migrate(db *gorm.DB) error {
 
 		&models.CategoryModel{},
 		&models.VenueModel{},
+
+		&models.EventModel{},
+		&models.EventScheduleModel{},
+		&models.EventSettingModel{},
+		&models.EventCancellationModel{},
 	)
 }

@@ -69,7 +69,7 @@ func main() {
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	categoryRepository := repository.NewCategoryRepository(db, logger)
-	_ = repository.NewVenueRepository(db, logger)
+	// _ = repository.NewVenueRepository(db, logger)
 
 	categoryUsecase := category.NewCategoryUsecase(categoryRepository, logger)
 

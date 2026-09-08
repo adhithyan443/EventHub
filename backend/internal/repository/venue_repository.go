@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
@@ -33,6 +34,14 @@ func (r *VenueRepository) Create(venue *domain.Venue) error {
 		return err
 	}
 
+	*venue = *toVenueDomain(venueModel)
+
+	r.logger.Info(
+		"venue_created",
+		"venue_id", venue.ID,
+		"google_place_id", venue.GooglePlaceID,
+	)
+
 	return nil
 }
 
@@ -41,7 +50,7 @@ func (r *VenueRepository) FindByID(id uuid.UUID) (*domain.Venue, error) {
 
 	err := r.db.First(&venueModel, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrVenueNotFound
 		}
 
@@ -65,7 +74,7 @@ func (r *VenueRepository) FindByGooglePlaceID(placeID string) (*domain.Venue, er
 		First(&venueModel).Error
 
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrVenueNotFound
 		}
 
