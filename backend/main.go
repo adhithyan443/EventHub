@@ -14,13 +14,12 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
-	eventUsecase "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
+	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-
 	logger, closeLog, err := appLogger.New("app.log")
 	if err != nil {
 		slog.Error("failed to initialize logger", "error", err)
@@ -71,6 +70,7 @@ func main() {
 
 	txManager := repository.NewTransactionManager(db, logger)
 
+	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
 	categoryUsecase := category.NewCategoryUsecase(
@@ -82,15 +82,25 @@ func main() {
 		categoryUsecase,
 	)
 
-	// Event usecase
-	eventUsecase := eventUsecase.NewEventUsecase(
+	// Event dependencies.
+	eventUsecase := eventUC.NewEventUsecase(
 		txManager,
 		logger,
 	)
 
-	// Event handler
 	eventHandler := handler.NewEventHandler(
 		eventUsecase,
+		logger,
+	)
+
+	// Seat layout dependencies.
+	seatLayoutUsecase := eventUC.NewSeatLayoutUsecase(
+		txManager,
+		logger,
+	)
+
+	seatLayoutHandler := handler.NewSeatLayoutHandler(
+		seatLayoutUsecase,
 		logger,
 	)
 
@@ -164,6 +174,7 @@ func main() {
 		organizerApplicationHandler,
 		categoryHandler,
 		eventHandler,
+		seatLayoutHandler,
 		jwtService,
 	)
 

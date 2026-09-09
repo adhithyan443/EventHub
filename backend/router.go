@@ -18,6 +18,7 @@ func setupRouter(
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	categoryHandler *handler.CategoryHandler,
 	eventHandler *handler.EventHandler,
+	seatLayoutHandler *handler.SeatLayoutHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -53,12 +54,15 @@ func setupRouter(
 
 	registerHealthRoutes(router)
 	registerAuthRoutes(router, authHandler, jwtService, logger)
+
 	registerOrganizerRoutes(
 		router,
 		organizerApplicationHandler,
 		eventHandler,
+		seatLayoutHandler,
 		jwtService,
 	)
+
 	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
 	registerCategoryRoutes(router, categoryHandler)
 
@@ -158,6 +162,7 @@ func registerOrganizerRoutes(
 	router *gin.Engine,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	eventHandler *handler.EventHandler,
+	seatLayoutHandler *handler.SeatLayoutHandler,
 	jwtService *token.JWTService,
 ) {
 	api := router.Group("/api/v1")
@@ -180,6 +185,11 @@ func registerOrganizerRoutes(
 	organizer.POST(
 		"/events",
 		eventHandler.CreateEvent,
+	)
+
+	organizer.POST(
+		"/events/:id/seat-layout",
+		seatLayoutHandler.CreateSeatLayout,
 	)
 }
 
