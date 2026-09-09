@@ -20,3 +20,8 @@ type Seat struct {
 	Status     string
 	CreatedAt  time.Time
 }
+
+type SeatRepository interface {
+	Create(seat *Seat) error
+	FindByRowID(rowID uuid.UUID) ([]Seat, error)
+}

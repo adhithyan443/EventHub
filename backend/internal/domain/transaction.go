@@ -22,4 +22,9 @@ type TransactionRepositories interface {
 	EventScheduleRepository() EventScheduleRepository
 	EventSettingRepository() EventSettingRepository
 	EventCancellationRepository() EventCancellationRepository
+
+	SeatLayoutRepository() SeatLayoutRepository
+	SeatSectionRepository() SeatSectionRepository
+	SeatRowRepository() SeatRowRepository
+	SeatRepository() SeatRepository
 }

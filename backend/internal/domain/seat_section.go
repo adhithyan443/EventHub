@@ -14,3 +14,8 @@ type SeatSection struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
+
+type SeatSectionRepository interface {
+	Create(section *SeatSection) error
+	FindBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSection, error)
+}

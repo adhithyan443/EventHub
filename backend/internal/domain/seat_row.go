@@ -12,3 +12,8 @@ type SeatRow struct {
 	RowName   string
 	CreatedAt time.Time
 }
+
+type SeatRowRepository interface {
+	Create(row *SeatRow) error
+	FindBySectionID(sectionID uuid.UUID) ([]SeatRow, error)
+}
