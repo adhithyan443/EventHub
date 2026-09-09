@@ -44,7 +44,7 @@ type createRowRequest struct {
 }
 
 func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
-	userIDValue, exists := c.Get("userID")
+	userIDValue, exists := c.Get("user_id")
 	if !exists {
 		h.logger.Warn("authenticated user ID missing from context")
 		c.Error(appErrors.NewUnauthorizedError("unauthorized"))
