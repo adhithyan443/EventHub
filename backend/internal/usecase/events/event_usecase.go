@@ -1,13 +1,17 @@
 package events
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"strings"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/google/uuid"
 )
 
@@ -17,6 +21,7 @@ var (
 	ErrInvalidEventSchedule  = errors.New("invalid event schedule")
 	ErrInvalidEventSettings  = errors.New("invalid event settings")
 	ErrInvalidCancellation   = errors.New("invalid cancellation settings")
+	ErrInvalidBanner         = errors.New("invalid event banner")
 )
 
 const (
@@ -26,15 +31,18 @@ const (
 
 type EventUsecase struct {
 	transactionManager domain.TransactionManager
+	storageService     *storage.S3Service
 	logger             *slog.Logger
 }
 
 func NewEventUsecase(
 	transactionManager domain.TransactionManager,
+	storageService *storage.S3Service,
 	logger *slog.Logger,
 ) *EventUsecase {
 	return &EventUsecase{
 		transactionManager: transactionManager,
+		storageService:     storageService,
 		logger:             logger,
 	}
 }
@@ -102,7 +110,7 @@ func (u *EventUsecase) CreateEvent(
 
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
-			// 1. Verify organizer
+			// 1. Verify organizer.
 			organizer, err := tx.OrganizerRepository().
 				FindByUserID(input.UserID)
 
@@ -136,7 +144,7 @@ func (u *EventUsecase) CreateEvent(
 				return ErrUnauthorizedOrganizer
 			}
 
-			// 2. Verify active category
+			// 2. Verify active category.
 			categories, err := tx.CategoryRepository().FindActive()
 			if err != nil {
 				u.logger.Error(
@@ -232,7 +240,7 @@ func (u *EventUsecase) CreateEvent(
 				venueID = &venue.ID
 			}
 
-			// 5. Create Event
+			// 5. Create Event.
 			event := &domain.Event{
 				ID:             uuid.New(),
 				OrganizerID:    organizer.ID,
@@ -262,7 +270,7 @@ func (u *EventUsecase) CreateEvent(
 				return err
 			}
 
-			// 6. Create Event Schedule
+			// 6. Create Event Schedule.
 			schedule := &domain.EventSchedule{
 				ID:        uuid.New(),
 				EventID:   event.ID,
@@ -281,7 +289,7 @@ func (u *EventUsecase) CreateEvent(
 				return err
 			}
 
-			// 7. Create Event Settings
+			// 7. Create Event Settings.
 			setting := &domain.EventSetting{
 				ID:                  uuid.New(),
 				EventID:             event.ID,
@@ -299,7 +307,7 @@ func (u *EventUsecase) CreateEvent(
 				return err
 			}
 
-			// 8. Create Event Cancellation Settings
+			// 8. Create Event Cancellation Settings.
 			cancellation := &domain.EventCancellation{
 				ID:                        uuid.New(),
 				EventID:                   event.ID,
@@ -349,6 +357,163 @@ func (u *EventUsecase) CreateEvent(
 	)
 
 	return &output, nil
+}
+
+
+func (u *EventUsecase) UploadBanner(
+	ctx context.Context,
+	userID uuid.UUID,
+	file io.Reader,
+	contentType string,
+) (string, error) {
+	if userID == uuid.Nil {
+		u.logger.Warn(
+			"event_banner_upload_unauthorized",
+		)
+
+		return "", ErrUnauthorizedOrganizer
+	}
+
+	if file == nil {
+		u.logger.Warn(
+			"event_banner_upload_missing_file",
+			"user_id", userID,
+		)
+
+		return "", ErrInvalidBanner
+	}
+
+	if u.storageService == nil {
+		u.logger.Error(
+			"event_banner_upload_storage_unavailable",
+			"user_id", userID,
+		)
+
+		return "", errors.New("storage service is unavailable")
+	}
+
+	if !isSupportedBannerContentType(contentType) {
+		u.logger.Warn(
+			"event_banner_upload_invalid_content_type",
+			"user_id", userID,
+			"content_type", contentType,
+		)
+
+		return "", ErrInvalidBanner
+	}
+
+	// Verify that the user is an active organizer.
+	var organizerID uuid.UUID
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			organizer, err := tx.OrganizerRepository().
+				FindByUserID(userID)
+
+			if err != nil {
+				if errors.Is(err, domain.ErrOrganizerNotFound) {
+					u.logger.Warn(
+						"event_banner_upload_organizer_not_found",
+						"user_id", userID,
+					)
+
+					return ErrUnauthorizedOrganizer
+				}
+
+				u.logger.Error(
+					"event_banner_upload_organizer_lookup_failed",
+					"user_id", userID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			if organizer.Status != "ACTIVE" {
+				u.logger.Warn(
+					"event_banner_upload_organizer_inactive",
+					"user_id", userID,
+					"organizer_id", organizer.ID,
+					"status", organizer.Status,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			organizerID = organizer.ID
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		return "", err
+	}
+
+	extension := bannerExtension(contentType)
+
+	if extension == "" {
+		u.logger.Warn(
+			"event_banner_upload_invalid_extension",
+			"user_id", userID,
+			"content_type", contentType,
+		)
+
+		return "", ErrInvalidBanner
+	}
+
+	objectKey := fmt.Sprintf(
+		"event-banners/%s/%s%s",
+		organizerID.String(),
+		uuid.New().String(),
+		extension,
+	)
+
+	if err := u.storageService.Upload(
+		ctx,
+		objectKey,
+		file,
+		contentType,
+	); err != nil {
+		u.logger.Error(
+			"event_banner_upload_failed",
+			"user_id", userID,
+			"organizer_id", organizerID,
+			"error", err,
+		)
+
+		return "", err
+	}
+
+	u.logger.Info(
+		"event_banner_upload_completed",
+		"user_id", userID,
+		"organizer_id", organizerID,
+		"object_key", objectKey,
+		"content_type", contentType,
+	)
+
+	return objectKey, nil
+}
+
+func isSupportedBannerContentType(contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/png":
+		return true
+	default:
+		return false
+	}
+}
+
+func bannerExtension(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg":
+		return ".jpg"
+	case "image/png":
+		return ".png"
+	default:
+		return ""
+	}
 }
 
 func validateCreateEventInput(input CreateEventInput) error {

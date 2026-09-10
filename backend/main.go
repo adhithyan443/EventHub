@@ -11,6 +11,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/adhithyan443/EventHub/backend/internal/service/google"
+	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
@@ -61,6 +62,18 @@ func main() {
 
 	logger.Info("category seeding completed")
 
+	s3Service, err := storage.NewS3Service(
+		cfg,
+		logger,
+	)
+	if err != nil {
+		logger.Error(
+			"s3_service_initialization_failed",
+			"error", err,
+		)
+		return
+	}
+
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
 	userRepo := repository.NewUserRepository(db, logger)
@@ -85,6 +98,7 @@ func main() {
 	// Event dependencies.
 	eventUsecase := eventUC.NewEventUsecase(
 		txManager,
+		s3Service,
 		logger,
 	)
 

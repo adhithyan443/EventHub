@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+const maxEventBannerSize = 10 * 1024 * 1024 // 10 MB
 
 type EventHandler struct {
 	eventUsecase *eventUsecase.EventUsecase
@@ -284,4 +287,176 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			"cancellation": output.Cancellation,
 		},
 	})
+}
+
+func (h *EventHandler) UploadBanner(ctx *gin.Context) {
+	userID, err := getAuthenticatedUserID(ctx)
+	if err != nil {
+		h.logger.Warn(
+			"event_banner_upload_authentication_failed",
+			"error", err,
+		)
+
+		ctx.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "Unauthorized",
+		})
+		return
+	}
+
+	fileHeader, err := ctx.FormFile("banner")
+	if err != nil {
+		h.logger.Warn(
+			"event_banner_upload_file_missing",
+			"user_id", userID,
+			"error", err,
+		)
+
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Banner image is required",
+		})
+		return
+	}
+
+	if fileHeader.Size > maxEventBannerSize {
+		h.logger.Warn(
+			"event_banner_upload_file_too_large",
+			"user_id", userID,
+			"file_size", fileHeader.Size,
+		)
+
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Banner image must not exceed 10 MB",
+		})
+		return
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		h.logger.Error(
+			"event_banner_upload_file_open_failed",
+			"user_id", userID,
+			"error", err,
+		)
+
+		ctx.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "Unable to process banner image",
+		})
+		return
+	}
+	defer file.Close()
+
+	contentType, err := detectBannerContentType(file)
+	if err != nil {
+		h.logger.Warn(
+			"event_banner_upload_content_type_detection_failed",
+			"user_id", userID,
+			"error", err,
+		)
+
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid banner image",
+		})
+		return
+	}
+
+	if contentType != "image/jpeg" && contentType != "image/png" {
+		h.logger.Warn(
+			"event_banner_upload_unsupported_content_type",
+			"user_id", userID,
+			"content_type", contentType,
+		)
+
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Only PNG and JPG images are allowed",
+		})
+		return
+	}
+
+	objectKey, err := h.eventUsecase.UploadBanner(
+		ctx.Request.Context(),
+		userID,
+		file,
+		contentType,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			h.logger.Warn(
+				"event_banner_upload_forbidden",
+				"user_id", userID,
+			)
+
+			ctx.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "Only active organizers can upload event banners",
+			})
+
+		case errors.Is(err, eventUsecase.ErrInvalidBanner):
+			h.logger.Warn(
+				"event_banner_upload_invalid",
+				"user_id", userID,
+			)
+
+			ctx.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "Invalid banner image",
+			})
+
+		default:
+			h.logger.Error(
+				"event_banner_upload_request_failed",
+				"user_id", userID,
+				"error", err,
+			)
+
+			ctx.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "Failed to upload banner image",
+			})
+		}
+
+		return
+	}
+
+	h.logger.Info(
+		"event_banner_upload_request_completed",
+		"user_id", userID,
+		"object_key", objectKey,
+	)
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Banner uploaded successfully",
+		"data": gin.H{
+			"object_key": objectKey,
+		},
+	})
+}
+
+func detectBannerContentType(file io.ReadSeeker) (string, error) {
+	buffer := make([]byte, 512)
+
+	n, err := file.Read(buffer)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+
+	if n == 0 {
+		return "", errors.New("empty banner file")
+	}
+
+	contentType := http.DetectContentType(buffer[:n])
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+
+	return contentType, nil
 }

@@ -191,6 +191,11 @@ func registerOrganizerRoutes(
 		"/events/:id/seat-layout",
 		seatLayoutHandler.CreateSeatLayout,
 	)
+
+	organizer.POST(
+		"/events/banner",
+		eventHandler.UploadBanner,
+	)
 }
 
 func registerAdminRoutes(

@@ -32,3 +32,20 @@ export const resubmitOrganizerApplication = async (applicationData) => {
 
     return response.data;
 };
+
+// Create an event for the authenticated organizer.
+export const createOrganizerEvent = async (eventData) => {
+    const response = await apiClient.post(
+        "/organizers/events",
+        eventData
+    );
+
+    return response.data;
+};
+
+// Get active event categories.
+export const getCategories = async () => {
+    const response = await apiClient.get("/categories");
+
+    return response.data;
+};

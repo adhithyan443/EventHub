@@ -14,14 +14,15 @@ const initialVenue = {
 };
 
 const initialBasicInfo = {
-  title: "Sunfield Music Festival 2026",
-  category: "Music",
-  description:
-    "An electrifying weekend festival featuring top international artists, live DJ sets, artisan food markets, and unforgettable stage performances.",
+  title: "",
+  category: "",
+  categoryId: "",
+  description: "",
   banner: "",
-  language: "English",
-  ageRestriction: "18+",
+  language: "",
+  ageRestriction: "",
 };
+
 
 const initialDateTime = {
   eventDate: "2026-10-15",
@@ -128,11 +129,11 @@ export const resequenceLayout = (categories, seatsPerRow = 8) => {
       const seats = (row.seats && row.seats.length > 0
         ? row.seats
         : Array.from({ length: seatsPerRow }, (_, i) => ({
-            id: `${rowLetter}${i + 1}`,
-            number: i + 1,
-            status: "available",
-            categoryId: cat.id,
-          }))
+          id: `${rowLetter}${i + 1}`,
+          number: i + 1,
+          status: "available",
+          categoryId: cat.id,
+        }))
       ).map((seat, sIdx) => {
         const seatNum = seat.number || sIdx + 1;
         return {

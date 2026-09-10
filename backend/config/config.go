@@ -23,6 +23,11 @@ type Config struct {
 	GoogleRedirectURL  string
 
 	EncryptionKey string
+
+	AWSAccessKeyID     string
+	AWSSecretAccessKey string
+	AWSRegion          string
+	AWSS3Bucket        string
 }
 
 func Load() (Config, error) {
@@ -81,6 +86,23 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	awsAccessKeyID, err := requiredEnv("AWS_ACCESS_KEY_ID")
+	if err != nil {
+		return Config{}, err
+	}
+	awsSecretAccessKey, err := requiredEnv("AWS_SECRET_ACCESS_KEY")
+	if err != nil {
+		return Config{}, err
+	}
+	awsRegion, err := requiredEnv("AWS_REGION")
+	if err != nil {
+		return Config{}, err
+	}
+	awsS3Bucket, err := requiredEnv("AWS_S3_BUCKET")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
@@ -99,6 +121,11 @@ func Load() (Config, error) {
 		GoogleRedirectURL:  googleRedirectURL,
 
 		EncryptionKey: encryptionKey,
+
+		AWSAccessKeyID:     awsAccessKeyID,
+		AWSSecretAccessKey: awsSecretAccessKey,
+		AWSRegion:          awsRegion,
+		AWSS3Bucket:        awsS3Bucket,
 	}, nil
 }
 
