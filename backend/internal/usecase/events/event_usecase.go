@@ -359,7 +359,6 @@ func (u *EventUsecase) CreateEvent(
 	return &output, nil
 }
 
-
 func (u *EventUsecase) UploadBanner(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -498,7 +497,7 @@ func (u *EventUsecase) UploadBanner(
 
 func isSupportedBannerContentType(contentType string) bool {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
-	case "image/jpeg", "image/png":
+	case "image/jpeg", "image/png", "image/webp":
 		return true
 	default:
 		return false
@@ -511,6 +510,8 @@ func bannerExtension(contentType string) string {
 		return ".jpg"
 	case "image/png":
 		return ".png"
+	case "image/webp":
+		return ".webp"
 	default:
 		return ""
 	}

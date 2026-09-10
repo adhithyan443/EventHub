@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxEventBannerSize = 10 * 1024 * 1024 // 10 MB
+const maxEventBannerSize = 5 * 1024 * 1024 // 5 MB
 
 type EventHandler struct {
 	eventUsecase *eventUsecase.EventUsecase
@@ -328,7 +328,7 @@ func (h *EventHandler) UploadBanner(ctx *gin.Context) {
 
 		ctx.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Banner image must not exceed 10 MB",
+			"message": "Banner image must not exceed 5 MB",
 		})
 		return
 	}
@@ -364,7 +364,9 @@ func (h *EventHandler) UploadBanner(ctx *gin.Context) {
 		return
 	}
 
-	if contentType != "image/jpeg" && contentType != "image/png" {
+	if contentType != "image/jpeg" &&
+		contentType != "image/png" &&
+		contentType != "image/webp" {
 		h.logger.Warn(
 			"event_banner_upload_unsupported_content_type",
 			"user_id", userID,
@@ -373,7 +375,7 @@ func (h *EventHandler) UploadBanner(ctx *gin.Context) {
 
 		ctx.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Only PNG and JPG images are allowed",
+			"message": "Only JPEG, PNG, and WebP images are allowed",
 		})
 		return
 	}
