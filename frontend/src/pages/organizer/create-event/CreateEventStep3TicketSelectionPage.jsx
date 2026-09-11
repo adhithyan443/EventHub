@@ -193,11 +193,12 @@ export default function CreateEventStep3TicketSelectionPage() {
         </div>
 
         {/* Persistent Footer */}
-        <EventCreationFooter
-          onBack={handleBack}
-          onContinue={handleContinue}
-        />
+
       </div>
+      <EventCreationFooter
+        onBack={handleBack}
+        onContinue={handleContinue}
+      />
     </div>
   );
 }

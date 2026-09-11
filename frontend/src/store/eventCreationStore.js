@@ -52,32 +52,7 @@ const initialEventDetails = {
   visibility: "PUBLIC",
 };
 
-const initialTicketTypes = [
-  {
-    id: "ticket-1",
-    name: "VIP Early Access",
-    price: 149,
-    capacity: 250,
-    status: "ACTIVE",
-    description: "Includes priority entry, VIP lounge access, and complimentary drink voucher.",
-  },
-  {
-    id: "ticket-2",
-    name: "General Admission",
-    price: 79,
-    capacity: 1200,
-    status: "ACTIVE",
-    description: "Full access to all general admission areas and festival stages.",
-  },
-  {
-    id: "ticket-3",
-    name: "Early Bird General Admission",
-    price: 59,
-    capacity: 300,
-    status: "SOLD_OUT",
-    description: "Discounted admission for early supporters.",
-  },
-];
+const initialTicketTypes = []
 
 const initialPayoutAccount = {
   bankName: "Silicon Valley Bank",
@@ -253,9 +228,9 @@ const useEventCreationStore = create((set, get) => ({
   // Step 4A: Ticket Types (for General Admission)
   ticketTypes: initialTicketTypes,
   ticketSalesSettings: {
-    salesStartDate: "2026-09-15",
-    salesEndDate: "2026-10-14",
-    maxTicketsPerBooking: 6,
+    salesStartDate: "",
+    salesEndDate: "",
+    maxTicketsPerBooking: "",
   },
   payoutAccount: { ...initialPayoutAccount },
 
@@ -394,6 +369,14 @@ const useEventCreationStore = create((set, get) => ({
       ticketTypes: state.ticketTypes.map((t) =>
         t.id === id ? { ...t, ...updatedFields } : t
       ),
+    })),
+
+  updateTicketSalesSettings: (data) =>
+    set((state) => ({
+      ticketSalesSettings: {
+        ...state.ticketSalesSettings,
+        ...data,
+      },
     })),
 
   // Seating configuration actions
