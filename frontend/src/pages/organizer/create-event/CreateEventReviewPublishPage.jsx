@@ -12,6 +12,7 @@ import {
   isPhysicalEvent,
   isHybridEvent,
 } from "../../../constants/eventConstants";
+import { createOrganizerEvent } from "../../../api/organizerApi";
 import imgDefaultBanner from "../../../assets/organizer/0b2568d2a1321299cd93ab73936efb2e8bc467fe.png";
 
 export default function CreateEventReviewPublishPage() {
@@ -28,7 +29,11 @@ export default function CreateEventReviewPublishPage() {
   const ticketMode = useEventCreationStore((state) => state.ticketMode);
   const ticketTypes = useEventCreationStore((state) => state.ticketTypes);
   const seatingConfig = useEventCreationStore((state) => state.seatingConfiguration);
+  const ticketSalesSettings = useEventCreationStore((state) => state.ticketSalesSettings);
+  const resetForm = useEventCreationStore((state) => state.resetForm);
 
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   const isOnline = isOnlineEvent(locationType);
@@ -45,13 +50,91 @@ export default function CreateEventReviewPublishPage() {
     }
   };
 
-  // UI-only publish event flow
-  const handlePublish = () => {
-    setShowSuccessModal(true);
+  const handlePublish = async () => {
+    if (publishing) return;
+
+    try {
+      setPublishing(true);
+      setPublishError("");
+
+      const cancellationAllowed = Boolean(
+        eventDetails.cancellationPolicy?.allowCancellation
+      );
+      let cancellationDeadlineHours = 0;
+      if (cancellationAllowed) {
+        const parsedHours = parseInt(
+          eventDetails.cancellationPolicy?.cancellationDeadline,
+          10
+        );
+        cancellationDeadlineHours = !isNaN(parsedHours) && parsedHours > 0 ? parsedHours : 48;
+      }
+
+      const parsedAge = parseInt(basicInformation.ageRestriction, 10);
+      const ageRestriction = !isNaN(parsedAge) && parsedAge >= 0 ? parsedAge : 0;
+
+      const eventPayload = {
+        category_id: basicInformation.categoryId,
+        event_type: locationType,
+        online_url: isPhysical ? "" : (onlineUrl || "").trim(),
+        title: (basicInformation.title || "").trim(),
+        description: (basicInformation.description || "").trim(),
+        banner_url: "",
+        language: (basicInformation.language || "").trim(),
+        age_restriction: ageRestriction,
+        event_date: dateTime.eventDate,
+        start_time: dateTime.startTime,
+        end_time: dateTime.endTime,
+        seat_layout_type: showSeatedLayout ? "SEATED" : "GENERAL",
+        booking_limit_per_user: Number(ticketSalesSettings?.maxTicketsPerBooking) || 6,
+        cancellation_allowed: cancellationAllowed,
+        cancellation_deadline_hours: cancellationDeadlineHours,
+        venue: isOnline ? {
+          google_place_id: "",
+          name: "",
+          address: "",
+          city: "",
+          state: "",
+          country: "",
+          postal_code: "",
+          latitude: 0,
+          longitude: 0,
+        } : {
+          google_place_id: (venue.google_place_id || "").trim(),
+          name: (venue.name || "").trim(),
+          address: (venue.address || "").trim(),
+          city: (venue.city || "").trim(),
+          state: (venue.state || "").trim(),
+          country: (venue.country || "").trim(),
+          postal_code: (venue.postal_code || "").trim(),
+          latitude: venue.latitude ? Number(venue.latitude) : 0,
+          longitude: venue.longitude ? Number(venue.longitude) : 0,
+        },
+      };
+
+      const formData = new FormData();
+      formData.append("event", JSON.stringify(eventPayload));
+      if (basicInformation.bannerFile) {
+        formData.append("banner", basicInformation.bannerFile);
+      }
+
+      await createOrganizerEvent(formData);
+
+      setShowSuccessModal(true);
+    } catch (err) {
+      console.error("Failed to create event:", err);
+      const errMsg =
+        err.response?.data?.message ||
+        err.message ||
+        "Failed to publish event. Please try again.";
+      setPublishError(errMsg);
+    } finally {
+      setPublishing(false);
+    }
   };
 
   const handleReturnToDashboard = () => {
     setShowSuccessModal(false);
+    resetForm();
     navigate(ORGANIZER_ROUTES.DASHBOARD);
   };
 
@@ -69,6 +152,13 @@ export default function CreateEventReviewPublishPage() {
           </p>
         </div>
 
+        {/* Publish Error Banner */}
+        {publishError && (
+          <div className="rounded-lg border border-[#ba1a1a]/30 bg-[#ba1a1a]/5 px-4 py-3 text-sm text-[#ba1a1a]">
+            {publishError}
+          </div>
+        )}
+
         {/* 2-Column Review Bento Layout */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           {/* Main Event Preview Column (8 Cols) */}
@@ -77,7 +167,7 @@ export default function CreateEventReviewPublishPage() {
             <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl overflow-hidden shadow-xs">
               <div className="h-56 bg-gray-100 relative">
                 <img
-                  src={basicInformation.banner || imgDefaultBanner}
+                  src={basicInformation.bannerPreviewUrl || basicInformation.banner || imgDefaultBanner}
                   alt={basicInformation.title}
                   className="size-full object-cover"
                 />
@@ -390,7 +480,7 @@ export default function CreateEventReviewPublishPage() {
         isReviewStep={true}
         onBack={handleBack}
         onContinue={handlePublish}
-        continueLabel="🚀 Publish Event"
+        continueLabel={publishing ? "Publishing Event..." : "🚀 Publish Event"}
       />
 
       {/* Success / Publish Modal */}

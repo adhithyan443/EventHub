@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -76,22 +77,122 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 	}
 
 	h.logger.Info(
-		"event_create_request_received",
+		"event_multipart_request_received",
 		"user_id", userID,
+		"content_length", ctx.Request.ContentLength,
 	)
 
-	var req CreateEventRequest
+	// 1. Read "event" JSON field from multipart form.
+	eventJSON := ctx.Request.FormValue("event")
+	if eventJSON == "" {
+		eventJSON = ctx.PostForm("event")
+	}
 
-	if err := ctx.ShouldBindJSON(&req); err != nil {
+	if eventJSON == "" {
 		h.logger.Warn(
-			"event_create_request_validation_failed",
+			"event_create_missing_event_payload",
+			"user_id", userID,
+		)
+
+		ctx.Error(
+			appErrors.NewValidationError(
+				"event data is required",
+			),
+		)
+		return
+	}
+
+	var req CreateEventRequest
+	if err := json.Unmarshal([]byte(eventJSON), &req); err != nil {
+		h.logger.Warn(
+			"event_create_invalid_event_json",
 			"user_id", userID,
 			"error", err,
 		)
 
 		ctx.Error(
 			appErrors.NewValidationError(
-				"invalid request data",
+				"invalid event data",
+			),
+		)
+		return
+	}
+
+	// 2. Read "banner" file from multipart form.
+	bannerHeader, err := ctx.FormFile("banner")
+	if err != nil {
+		h.logger.Warn(
+			"event_banner_validation_failed",
+			"user_id", userID,
+			"error", err,
+		)
+
+		ctx.Error(
+			appErrors.NewValidationError(
+				"banner image is required",
+			),
+		)
+		return
+	}
+
+	if bannerHeader.Size > maxEventBannerSize {
+		h.logger.Warn(
+			"event_banner_validation_failed",
+			"user_id", userID,
+			"file_size", bannerHeader.Size,
+			"error", "file exceeds maximum size of 5 MB",
+		)
+
+		ctx.Error(
+			appErrors.NewValidationError(
+				"banner image must not exceed 5 MB",
+			),
+		)
+		return
+	}
+
+	bannerFile, err := bannerHeader.Open()
+	if err != nil {
+		h.logger.Error(
+			"event_banner_open_failed",
+			"user_id", userID,
+			"error", err,
+		)
+
+		ctx.Error(err)
+		return
+	}
+	defer bannerFile.Close()
+
+	contentType, err := detectBannerContentType(bannerFile)
+	if err != nil {
+		h.logger.Warn(
+			"event_banner_validation_failed",
+			"user_id", userID,
+			"error", err,
+		)
+
+		ctx.Error(
+			appErrors.NewValidationError(
+				"invalid banner image",
+			),
+		)
+		return
+	}
+
+	if contentType != "image/jpeg" &&
+		contentType != "image/png" &&
+		contentType != "image/webp" {
+		h.logger.Warn(
+			"event_banner_validation_failed",
+			"user_id", userID,
+			"content_type", contentType,
+			"error", "unsupported content type",
+		)
+
+		ctx.Error(
+			appErrors.NewValidationError(
+				"only JPEG, PNG, and WebP images are allowed",
 			),
 		)
 		return
@@ -191,9 +292,13 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			Latitude:      req.Venue.Latitude,
 			Longitude:     req.Venue.Longitude,
 		},
+
+		BannerReader:      bannerFile,
+		BannerContentType: contentType,
+		BannerSize:        bannerHeader.Size,
 	}
 
-	output, err := h.eventUsecase.CreateEvent(input)
+	output, err := h.eventUsecase.CreateEvent(ctx.Request.Context(), input)
 	if err != nil {
 		h.logger.Warn(
 			"event_create_request_failed",
@@ -210,6 +315,16 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			ctx.Error(
 				appErrors.NewValidationError(
 					"invalid event data",
+				),
+			)
+
+		case errors.Is(
+			err,
+			eventUsecase.ErrInvalidBanner,
+		):
+			ctx.Error(
+				appErrors.NewValidationError(
+					"invalid event banner",
 				),
 			)
 
@@ -285,159 +400,6 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			"schedule":     output.Schedule,
 			"setting":      output.Setting,
 			"cancellation": output.Cancellation,
-		},
-	})
-}
-
-func (h *EventHandler) UploadBanner(ctx *gin.Context) {
-	userID, err := getAuthenticatedUserID(ctx)
-	if err != nil {
-		h.logger.Warn(
-			"event_banner_upload_authentication_failed",
-			"error", err,
-		)
-
-		ctx.JSON(http.StatusUnauthorized, gin.H{
-			"success": false,
-			"message": "Unauthorized",
-		})
-		return
-	}
-
-	fileHeader, err := ctx.FormFile("banner")
-	if err != nil {
-		h.logger.Warn(
-			"event_banner_upload_file_missing",
-			"user_id", userID,
-			"error", err,
-		)
-
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Banner image is required",
-		})
-		return
-	}
-
-	if fileHeader.Size > maxEventBannerSize {
-		h.logger.Warn(
-			"event_banner_upload_file_too_large",
-			"user_id", userID,
-			"file_size", fileHeader.Size,
-		)
-
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Banner image must not exceed 5 MB",
-		})
-		return
-	}
-
-	file, err := fileHeader.Open()
-	if err != nil {
-		h.logger.Error(
-			"event_banner_upload_file_open_failed",
-			"user_id", userID,
-			"error", err,
-		)
-
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Unable to process banner image",
-		})
-		return
-	}
-	defer file.Close()
-
-	contentType, err := detectBannerContentType(file)
-	if err != nil {
-		h.logger.Warn(
-			"event_banner_upload_content_type_detection_failed",
-			"user_id", userID,
-			"error", err,
-		)
-
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid banner image",
-		})
-		return
-	}
-
-	if contentType != "image/jpeg" &&
-		contentType != "image/png" &&
-		contentType != "image/webp" {
-		h.logger.Warn(
-			"event_banner_upload_unsupported_content_type",
-			"user_id", userID,
-			"content_type", contentType,
-		)
-
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Only JPEG, PNG, and WebP images are allowed",
-		})
-		return
-	}
-
-	objectKey, err := h.eventUsecase.UploadBanner(
-		ctx.Request.Context(),
-		userID,
-		file,
-		contentType,
-	)
-
-	if err != nil {
-		switch {
-		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
-			h.logger.Warn(
-				"event_banner_upload_forbidden",
-				"user_id", userID,
-			)
-
-			ctx.JSON(http.StatusForbidden, gin.H{
-				"success": false,
-				"message": "Only active organizers can upload event banners",
-			})
-
-		case errors.Is(err, eventUsecase.ErrInvalidBanner):
-			h.logger.Warn(
-				"event_banner_upload_invalid",
-				"user_id", userID,
-			)
-
-			ctx.JSON(http.StatusBadRequest, gin.H{
-				"success": false,
-				"message": "Invalid banner image",
-			})
-
-		default:
-			h.logger.Error(
-				"event_banner_upload_request_failed",
-				"user_id", userID,
-				"error", err,
-			)
-
-			ctx.JSON(http.StatusInternalServerError, gin.H{
-				"success": false,
-				"message": "Failed to upload banner image",
-			})
-		}
-
-		return
-	}
-
-	h.logger.Info(
-		"event_banner_upload_request_completed",
-		"user_id", userID,
-		"object_key", objectKey,
-	)
-
-	ctx.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Banner uploaded successfully",
-		"data": gin.H{
-			"object_key": objectKey,
 		},
 	})
 }

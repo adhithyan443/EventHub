@@ -7,6 +7,7 @@ import GooglePlacesVenueSelector from "../../../components/organizer/GooglePlace
 import useEventCreationStore from "../../../store/eventCreationStore";
 import { getCategories } from "../../../api/organizerApi";
 
+
 import {
   LOCATION_TYPES,
   ORGANIZER_ROUTES,
@@ -42,6 +43,10 @@ export default function CreateEventStep1BasicInfoPage() {
   const [categories, setCategories] = useState([]);
   const [categoryLoading, setCategoryLoading] = useState(true);
   const [categoryError, setCategoryError] = useState("");
+
+  const bannerPreview = basicInformation.bannerPreviewUrl || "";
+  const [bannerError, setBannerError] = useState("");
+
 
   useEffect(() => {
     const loadCategories = async () => {
@@ -102,6 +107,55 @@ export default function CreateEventStep1BasicInfoPage() {
     "21+",
   ];
 
+
+  const handleBannerChange = (event) => {
+    const file = event.target.files?.[0];
+
+    if (!file) return;
+
+    const allowedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+    ];
+
+    const maxSize = 5 * 1024 * 1024;
+
+    setBannerError("");
+    setValidationError("");
+
+    if (!allowedTypes.includes(file.type)) {
+      setBannerError(
+        "Only JPEG, PNG, and WebP images are allowed."
+      );
+      event.target.value = "";
+      return;
+    }
+
+    if (file.size > maxSize) {
+      setBannerError(
+        "Banner image must not exceed 5 MB."
+      );
+      event.target.value = "";
+      return;
+    }
+
+    // Revoke previous preview URL if present
+    if (basicInformation.bannerPreviewUrl) {
+      URL.revokeObjectURL(basicInformation.bannerPreviewUrl);
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+
+    updateBasicInformation({
+      bannerFile: file,
+      bannerPreviewUrl: previewUrl,
+      banner: file.name,
+    });
+
+    event.target.value = "";
+  };
+
   const handleCategoryChange = (event) => {
     const categoryId = event.target.value;
 
@@ -136,6 +190,13 @@ export default function CreateEventStep1BasicInfoPage() {
     ) {
       setValidationError(
         "Please enter an event description before continuing."
+      );
+      return;
+    }
+
+    if (!basicInformation.bannerFile && !basicInformation.banner) {
+      setValidationError(
+        "Please select an event banner image before continuing."
       );
       return;
     }
@@ -313,7 +374,7 @@ export default function CreateEventStep1BasicInfoPage() {
                 <option value="">
                   Select age restriction
                 </option>
-                
+
                 {ageRestrictions.map((restriction) => (
                   <option
                     key={restriction}
@@ -346,35 +407,65 @@ export default function CreateEventStep1BasicInfoPage() {
             </div>
 
             {/* Banner Upload Box */}
+            {/* Banner Upload Box */}
             <div className="flex flex-col gap-2">
               <label className="text-[13px] font-semibold text-[#141b2b]">
                 Event Banner Image
               </label>
 
-              <div className="border-2 border-dashed border-[#bcc9c6] hover:border-[#00685f] bg-[#f9f9ff] rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-colors">
-                <svg
-                  className="size-10 text-[#565e74] mb-2"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.5"
-                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                  />
-                </svg>
+              <label className="border-2 border-dashed border-[#bcc9c6] hover:border-[#00685f] bg-[#f9f9ff] rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-colors">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={handleBannerChange}
+                />
 
-                <span className="text-xs font-semibold text-[#00685f]">
-                  Click or drag image to upload banner
-                </span>
+                {bannerPreview ? (
+                  <div className="w-full flex flex-col items-center">
+                    <img
+                      src={bannerPreview}
+                      alt="Event banner preview"
+                      className="w-full max-h-64 object-cover rounded-lg"
+                    />
 
-                <span className="text-[11px] text-[#565e74] mt-1">
-                  Recommended 16:9 ratio (PNG, JPG, max 10MB)
+                    <span className="text-xs font-semibold text-[#00685f] mt-3">
+                      Click to change banner
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <svg
+                      className="size-10 text-[#565e74] mb-2"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.5"
+                        d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
+                    </svg>
+
+                    <span className="text-xs font-semibold text-[#00685f]">
+                      Click or drag image to upload banner
+                    </span>
+
+                    <span className="text-[11px] text-[#565e74] mt-1">
+                      Recommended 16:9 ratio (JPEG, PNG, WebP, max 5MB)
+                    </span>
+                  </>
+                )}
+              </label>
+
+              {bannerError && (
+                <span className="text-[11px] text-[#ba1a1a]">
+                  {bannerError}
                 </span>
-              </div>
-            </div>
+              )}
+            </div> 
 
             {/* Divider */}
             <hr className="border-t border-[#bcc9c6]/40 my-2" />

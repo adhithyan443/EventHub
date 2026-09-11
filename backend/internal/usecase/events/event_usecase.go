@@ -71,6 +71,10 @@ type CreateEventInput struct {
 	CancellationDeadlineHours int
 
 	Venue VenueInput
+
+	BannerReader      io.Reader
+	BannerContentType string
+	BannerSize        int64
 }
 
 type VenueInput struct {
@@ -93,10 +97,11 @@ type CreateEventOutput struct {
 }
 
 func (u *EventUsecase) CreateEvent(
+	ctx context.Context,
 	input CreateEventInput,
 ) (*CreateEventOutput, error) {
 	if err := validateCreateEventInput(input); err != nil {
-		u.logger.Error(
+		u.logger.Warn(
 			"event_create_validation_failed",
 			"user_id", input.UserID,
 			"event_type", input.EventType,
@@ -106,21 +111,27 @@ func (u *EventUsecase) CreateEvent(
 		return nil, err
 	}
 
-	var output CreateEventOutput
+	if u.storageService == nil {
+		u.logger.Error(
+			"event_banner_upload_storage_unavailable",
+			"user_id", input.UserID,
+		)
+
+		return nil, errors.New("storage service is unavailable")
+	}
+
+	// 1. Pre-verify that the user is an active organizer and category exists.
+	var organizer *domain.Organizer
 
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
-			// 1. Verify organizer.
-			organizer, err := tx.OrganizerRepository().
-				FindByUserID(input.UserID)
-
+			org, err := tx.OrganizerRepository().FindByUserID(input.UserID)
 			if err != nil {
 				if errors.Is(err, domain.ErrOrganizerNotFound) {
 					u.logger.Warn(
 						"event_create_organizer_not_found",
 						"user_id", input.UserID,
 					)
-
 					return ErrUnauthorizedOrganizer
 				}
 
@@ -129,22 +140,21 @@ func (u *EventUsecase) CreateEvent(
 					"user_id", input.UserID,
 					"error", err,
 				)
-
 				return err
 			}
 
-			if organizer.Status != "ACTIVE" {
+			if org.Status != "ACTIVE" {
 				u.logger.Warn(
 					"event_create_organizer_inactive",
 					"user_id", input.UserID,
-					"organizer_id", organizer.ID,
-					"status", organizer.Status,
+					"organizer_id", org.ID,
+					"status", org.Status,
 				)
-
 				return ErrUnauthorizedOrganizer
 			}
 
-			// 2. Verify active category.
+			organizer = org
+
 			categories, err := tx.CategoryRepository().FindActive()
 			if err != nil {
 				u.logger.Error(
@@ -153,12 +163,10 @@ func (u *EventUsecase) CreateEvent(
 					"category_id", input.CategoryID,
 					"error", err,
 				)
-
 				return err
 			}
 
 			categoryFound := false
-
 			for _, category := range categories {
 				if category.ID == input.CategoryID {
 					categoryFound = true
@@ -172,17 +180,96 @@ func (u *EventUsecase) CreateEvent(
 					"user_id", input.UserID,
 					"category_id", input.CategoryID,
 				)
-
 				return domain.ErrCategoryNotFound
 			}
 
-			// 3. Resolve venue only for physical/hybrid events.
+			return nil
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Generate Event ID before S3 upload.
+	eventID := uuid.New()
+
+	u.logger.Info(
+		"event_id_generated",
+		"event_id", eventID,
+		"organizer_id", organizer.ID,
+	)
+
+	// 3. Build S3 key.
+	extension := bannerExtension(input.BannerContentType)
+	if extension == "" {
+		u.logger.Warn(
+			"event_banner_invalid_extension",
+			"event_id", eventID,
+			"organizer_id", organizer.ID,
+			"content_type", input.BannerContentType,
+		)
+		return nil, ErrInvalidBanner
+	}
+
+	objectKey := fmt.Sprintf(
+		"event-banners/%s/%s%s",
+		organizer.ID.String(),
+		eventID.String(),
+		extension,
+	)
+
+	// 4. Upload banner to S3.
+	u.logger.Info(
+		"event_banner_upload_started",
+		"event_id", eventID,
+		"organizer_id", organizer.ID,
+		"banner_key", objectKey,
+		"content_type", input.BannerContentType,
+		"file_size", input.BannerSize,
+	)
+
+	if err := u.storageService.Upload(
+		ctx,
+		objectKey,
+		input.BannerReader,
+		input.BannerContentType,
+	); err != nil {
+		u.logger.Error(
+			"event_banner_upload_failed",
+			"event_id", eventID,
+			"organizer_id", organizer.ID,
+			"banner_key", objectKey,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	u.logger.Info(
+		"event_banner_upload_succeeded",
+		"event_id", eventID,
+		"organizer_id", organizer.ID,
+		"banner_key", objectKey,
+	)
+
+	// 5. Begin PostgreSQL transaction.
+	u.logger.Info(
+		"event_db_transaction_started",
+		"event_id", eventID,
+		"organizer_id", organizer.ID,
+	)
+
+	var output CreateEventOutput
+
+	txErr := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			// Resolve venue only for physical/hybrid events.
 			var venue *domain.Venue
 
 			if input.EventType == domain.EventTypePhysical ||
 				input.EventType == domain.EventTypeHybrid {
 
-				venue, err = tx.VenueRepository().
+				v, err := tx.VenueRepository().
 					FindByGooglePlaceID(input.Venue.GooglePlaceID)
 
 				if err != nil && !errors.Is(err, domain.ErrVenueNotFound) {
@@ -191,7 +278,6 @@ func (u *EventUsecase) CreateEvent(
 						"google_place_id", input.Venue.GooglePlaceID,
 						"error", err,
 					)
-
 					return err
 				}
 
@@ -215,7 +301,6 @@ func (u *EventUsecase) CreateEvent(
 							"google_place_id", input.Venue.GooglePlaceID,
 							"error", err,
 						)
-
 						return err
 					}
 
@@ -225,6 +310,7 @@ func (u *EventUsecase) CreateEvent(
 						"google_place_id", venue.GooglePlaceID,
 					)
 				} else {
+					venue = v
 					u.logger.Info(
 						"event_create_venue_reused",
 						"venue_id", venue.ID,
@@ -233,16 +319,15 @@ func (u *EventUsecase) CreateEvent(
 				}
 			}
 
-			// 4. Prepare nullable venue ID.
+			// Prepare nullable venue ID.
 			var venueID *uuid.UUID
-
 			if venue != nil {
 				venueID = &venue.ID
 			}
 
-			// 5. Create Event.
+			// Create Event with pre-generated eventID and objectKey in BannerURL.
 			event := &domain.Event{
-				ID:             uuid.New(),
+				ID:             eventID,
 				OrganizerID:    organizer.ID,
 				CategoryID:     input.CategoryID,
 				VenueID:        venueID,
@@ -250,7 +335,7 @@ func (u *EventUsecase) CreateEvent(
 				OnlineURL:      strings.TrimSpace(input.OnlineURL),
 				Title:          strings.TrimSpace(input.Title),
 				Description:    strings.TrimSpace(input.Description),
-				BannerURL:      strings.TrimSpace(input.BannerURL),
+				BannerURL:      objectKey,
 				Language:       strings.TrimSpace(input.Language),
 				AgeRestriction: input.AgeRestriction,
 				Status:         domain.EventStatusDraft,
@@ -261,19 +346,18 @@ func (u *EventUsecase) CreateEvent(
 					"event_create_failed",
 					"user_id", input.UserID,
 					"organizer_id", organizer.ID,
-					"event_id", event.ID,
+					"event_id", eventID,
 					"event_type", event.EventType,
 					"venue_id", venueID,
 					"error", err,
 				)
-
 				return err
 			}
 
-			// 6. Create Event Schedule.
+			// Create Event Schedule.
 			schedule := &domain.EventSchedule{
 				ID:        uuid.New(),
-				EventID:   event.ID,
+				EventID:   eventID,
 				EventDate: input.EventDate,
 				StartTime: input.StartTime,
 				EndTime:   input.EndTime,
@@ -282,17 +366,16 @@ func (u *EventUsecase) CreateEvent(
 			if err := tx.EventScheduleRepository().Create(schedule); err != nil {
 				u.logger.Error(
 					"event_schedule_create_failed",
-					"event_id", event.ID,
+					"event_id", eventID,
 					"error", err,
 				)
-
 				return err
 			}
 
-			// 7. Create Event Settings.
+			// Create Event Settings.
 			setting := &domain.EventSetting{
 				ID:                  uuid.New(),
-				EventID:             event.ID,
+				EventID:             eventID,
 				SeatLayoutType:      input.SeatLayoutType,
 				BookingLimitPerUser: input.BookingLimitPerUser,
 			}
@@ -300,17 +383,16 @@ func (u *EventUsecase) CreateEvent(
 			if err := tx.EventSettingRepository().Create(setting); err != nil {
 				u.logger.Error(
 					"event_setting_create_failed",
-					"event_id", event.ID,
+					"event_id", eventID,
 					"error", err,
 				)
-
 				return err
 			}
 
-			// 8. Create Event Cancellation Settings.
+			// Create Event Cancellation Settings.
 			cancellation := &domain.EventCancellation{
 				ID:                        uuid.New(),
-				EventID:                   event.ID,
+				EventID:                   eventID,
 				CancellationAllowed:       input.CancellationAllowed,
 				CancellationDeadlineHours: input.CancellationDeadlineHours,
 			}
@@ -318,10 +400,9 @@ func (u *EventUsecase) CreateEvent(
 			if err := tx.EventCancellationRepository().Create(cancellation); err != nil {
 				u.logger.Error(
 					"event_cancellation_create_failed",
-					"event_id", event.ID,
+					"event_id", eventID,
 					"error", err,
 				)
-
 				return err
 			}
 
@@ -336,19 +417,56 @@ func (u *EventUsecase) CreateEvent(
 		},
 	)
 
-	if err != nil {
+	// 6. Handle failure vs success.
+	if txErr != nil {
 		u.logger.Error(
-			"event_create_transaction_failed",
-			"user_id", input.UserID,
-			"event_type", input.EventType,
-			"error", err,
+			"event_db_transaction_failed",
+			"event_id", eventID,
+			"organizer_id", organizer.ID,
+			"error", txErr,
 		)
 
-		return nil, err
+		cleanupCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx),
+			10*time.Second,
+		)
+		defer cancel()
+
+		u.logger.Info(
+			"event_s3_compensation_delete_started",
+			"event_id", eventID,
+			"organizer_id", organizer.ID,
+			"banner_key", objectKey,
+		)
+
+		if delErr := u.storageService.Delete(cleanupCtx, objectKey); delErr != nil {
+			u.logger.Error(
+				"event_s3_compensation_delete_failed",
+				"event_id", eventID,
+				"organizer_id", organizer.ID,
+				"banner_key", objectKey,
+				"error", delErr,
+			)
+		} else {
+			u.logger.Info(
+				"event_s3_compensation_delete_succeeded",
+				"event_id", eventID,
+				"organizer_id", organizer.ID,
+				"banner_key", objectKey,
+			)
+		}
+
+		return nil, txErr
 	}
 
 	u.logger.Info(
-		"event_created",
+		"event_db_transaction_committed",
+		"event_id", eventID,
+		"organizer_id", organizer.ID,
+	)
+
+	u.logger.Info(
+		"event_created_successfully",
 		"event_id", output.Event.ID,
 		"organizer_id", output.Event.OrganizerID,
 		"event_type", output.Event.EventType,
@@ -357,142 +475,6 @@ func (u *EventUsecase) CreateEvent(
 	)
 
 	return &output, nil
-}
-
-func (u *EventUsecase) UploadBanner(
-	ctx context.Context,
-	userID uuid.UUID,
-	file io.Reader,
-	contentType string,
-) (string, error) {
-	if userID == uuid.Nil {
-		u.logger.Warn(
-			"event_banner_upload_unauthorized",
-		)
-
-		return "", ErrUnauthorizedOrganizer
-	}
-
-	if file == nil {
-		u.logger.Warn(
-			"event_banner_upload_missing_file",
-			"user_id", userID,
-		)
-
-		return "", ErrInvalidBanner
-	}
-
-	if u.storageService == nil {
-		u.logger.Error(
-			"event_banner_upload_storage_unavailable",
-			"user_id", userID,
-		)
-
-		return "", errors.New("storage service is unavailable")
-	}
-
-	if !isSupportedBannerContentType(contentType) {
-		u.logger.Warn(
-			"event_banner_upload_invalid_content_type",
-			"user_id", userID,
-			"content_type", contentType,
-		)
-
-		return "", ErrInvalidBanner
-	}
-
-	// Verify that the user is an active organizer.
-	var organizerID uuid.UUID
-
-	err := u.transactionManager.WithinTransaction(
-		func(tx domain.TransactionRepositories) error {
-			organizer, err := tx.OrganizerRepository().
-				FindByUserID(userID)
-
-			if err != nil {
-				if errors.Is(err, domain.ErrOrganizerNotFound) {
-					u.logger.Warn(
-						"event_banner_upload_organizer_not_found",
-						"user_id", userID,
-					)
-
-					return ErrUnauthorizedOrganizer
-				}
-
-				u.logger.Error(
-					"event_banner_upload_organizer_lookup_failed",
-					"user_id", userID,
-					"error", err,
-				)
-
-				return err
-			}
-
-			if organizer.Status != "ACTIVE" {
-				u.logger.Warn(
-					"event_banner_upload_organizer_inactive",
-					"user_id", userID,
-					"organizer_id", organizer.ID,
-					"status", organizer.Status,
-				)
-
-				return ErrUnauthorizedOrganizer
-			}
-
-			organizerID = organizer.ID
-
-			return nil
-		},
-	)
-
-	if err != nil {
-		return "", err
-	}
-
-	extension := bannerExtension(contentType)
-
-	if extension == "" {
-		u.logger.Warn(
-			"event_banner_upload_invalid_extension",
-			"user_id", userID,
-			"content_type", contentType,
-		)
-
-		return "", ErrInvalidBanner
-	}
-
-	objectKey := fmt.Sprintf(
-		"event-banners/%s/%s%s",
-		organizerID.String(),
-		uuid.New().String(),
-		extension,
-	)
-
-	if err := u.storageService.Upload(
-		ctx,
-		objectKey,
-		file,
-		contentType,
-	); err != nil {
-		u.logger.Error(
-			"event_banner_upload_failed",
-			"user_id", userID,
-			"organizer_id", organizerID,
-			"error", err,
-		)
-
-		return "", err
-	}
-
-	u.logger.Info(
-		"event_banner_upload_completed",
-		"user_id", userID,
-		"organizer_id", organizerID,
-		"object_key", objectKey,
-		"content_type", contentType,
-	)
-
-	return objectKey, nil
 }
 
 func isSupportedBannerContentType(contentType string) bool {
@@ -534,8 +516,16 @@ func validateCreateEventInput(input CreateEventInput) error {
 		return ErrInvalidEventInput
 	}
 
-	if strings.TrimSpace(input.BannerURL) == "" {
-		return ErrInvalidEventInput
+	if input.BannerReader == nil {
+		return ErrInvalidBanner
+	}
+
+	if !isSupportedBannerContentType(input.BannerContentType) {
+		return ErrInvalidBanner
+	}
+
+	if input.BannerSize <= 0 || input.BannerSize > 5*1024*1024 {
+		return ErrInvalidBanner
 	}
 
 	if input.AgeRestriction < 0 {

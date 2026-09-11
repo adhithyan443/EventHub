@@ -84,3 +84,29 @@ func (s *S3Service) Upload(
 
 	return nil
 }
+
+func (s *S3Service) Delete(ctx context.Context, key string) error {
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		s.logger.Error(
+			"s3_object_delete_failed",
+			"bucket", s.bucket,
+			"key", key,
+			"error", err,
+		)
+
+		return fmt.Errorf("failed to delete object from S3: %w", err)
+	}
+
+	s.logger.Info(
+		"s3_object_deleted",
+		"bucket", s.bucket,
+		"key", key,
+	)
+
+	return nil
+}
+

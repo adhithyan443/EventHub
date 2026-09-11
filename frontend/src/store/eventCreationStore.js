@@ -19,6 +19,8 @@ const initialBasicInfo = {
   categoryId: "",
   description: "",
   banner: "",
+  bannerFile: null,
+  bannerPreviewUrl: "",
   language: "",
   ageRestriction: "",
 };
@@ -740,7 +742,12 @@ const useEventCreationStore = create((set, get) => ({
     })),
 
   // Reset form to default
-  resetForm: () =>
+  resetForm: () => {
+    const currentPreview = get().basicInformation?.bannerPreviewUrl;
+    if (currentPreview) {
+      URL.revokeObjectURL(currentPreview);
+    }
+
     set({
       locationType: LOCATION_TYPES.PHYSICAL,
       eventType: LOCATION_TYPES.PHYSICAL,
@@ -752,7 +759,8 @@ const useEventCreationStore = create((set, get) => ({
       ticketTypes: initialTicketTypes,
       seatingConfiguration: initialSeatingConfig,
       payoutAccount: { ...initialPayoutAccount },
-    }),
+    });
+  },
 }));
 
 export default useEventCreationStore;
