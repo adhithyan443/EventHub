@@ -27,31 +27,29 @@ const initialBasicInfo = {
 
 
 const initialDateTime = {
-  eventDate: "2026-10-15",
-  startTime: "18:00",
-  endTime: "23:00",
+  eventDate: "",
+  startTime: "",
+  endTime: "",
   isAllDay: false,
 };
 
 const initialEventDetails = {
-  highlights:
-    "• 3 Live Stages with 20+ Artists\n• Dedicated Food & Beverage Village\n• VIP Lounge & Priority Stage Viewing",
-  rules:
-    "• Government ID required at the gate\n• No outside food or beverages allowed\n• Strictly 18+ event",
+  highlights: "",
+  rules: "",
   contactInformation: {
-    name: "Sunfield Operations Desk",
-    phone: "+1 (555) 234-5678",
-    email: "support@sunfieldfest.com",
+    name: "",
+    phone: "",
+    email: "",
   },
   cancellationPolicy: {
     allowCancellation: true,
     cancellationDeadline: "48 hours before event",
-    refundPolicy: "PARTIAL", // "FULL" | "PARTIAL" | "NO_REFUND"
+    refundPolicy: "PARTIAL",
     refundPercentage: 80,
-    organizerPolicyAccepted: true,
+    organizerPolicyAccepted: false,
   },
-  attendeeInformation: "Full Name, Email, Phone Number, Emergency Contact",
-  visibility: "PUBLIC", // "PUBLIC" | "PRIVATE"
+  attendeeInformation: "",
+  visibility: "PUBLIC",
 };
 
 const initialTicketTypes = [
