@@ -377,28 +377,41 @@ export default function CreateEventSeatConfigurationPage() {
                                       "size-[32px] rounded-full flex items-center justify-center text-[10px] cursor-pointer transition-all select-none ";
                                     let seatStyle = {};
 
-                                    if (isSelected) {
-                                      seatClasses +=
-                                        "bg-[rgba(0,104,95,0.1)] border-2 border-[#00685f] text-[#00685f] font-bold shadow-xs scale-105";
+                                    if (seat.status === "blocked") {
+                                      if (isSelected) {
+                                        seatClasses +=
+                                          "bg-[#dce2f7] border-2 border-[#00685f] text-[#00685f] font-bold shadow-xs scale-105 ring-1 ring-[#00685f]/30";
+                                      } else {
+                                        seatClasses +=
+                                          "bg-[#dce2f7] border border-[#bcc9c6] text-[#6d7a77] hover:border-[#00685f]";
+                                      }
                                     } else if (seat.status === "reserved") {
-                                      seatClasses += "text-white font-medium shadow-xs";
                                       seatStyle = {
                                         backgroundColor: seatCat.color || section.color || "#00685f",
                                       };
-                                    } else if (seat.status === "blocked") {
-                                      seatClasses +=
-                                        "bg-[#dce2f7] border border-[#bcc9c6] text-[#6d7a77]";
+                                      if (isSelected) {
+                                        seatClasses +=
+                                          "text-white font-bold shadow-md scale-105 border-2 border-white ring-2 ring-[#00685f]";
+                                      } else {
+                                        seatClasses +=
+                                          "text-white font-medium shadow-xs border border-transparent";
+                                      }
                                     } else {
                                       // Available
-                                      seatClasses +=
-                                        "bg-white border text-[#3d4947] hover:border-[#00685f] hover:text-[#00685f]";
-                                      if (seat.categoryId && seat.categoryId !== section.id) {
-                                        seatStyle = {
-                                          borderColor: seatCat.color || "#00685f",
-                                          boxShadow: `0 0 0 1px ${seatCat.color || "#00685f"}33`,
-                                        };
+                                      if (isSelected) {
+                                        seatClasses +=
+                                          "bg-[rgba(0,104,95,0.1)] border-2 border-[#00685f] text-[#00685f] font-bold shadow-xs scale-105";
                                       } else {
-                                        seatClasses += " border-[#6d7a77]";
+                                        seatClasses +=
+                                          "bg-white border text-[#3d4947] hover:border-[#00685f] hover:text-[#00685f]";
+                                        if (seat.categoryId && seat.categoryId !== section.id) {
+                                          seatStyle = {
+                                            borderColor: seatCat.color || "#00685f",
+                                            boxShadow: `0 0 0 1px ${seatCat.color || "#00685f"}33`,
+                                          };
+                                        } else {
+                                          seatClasses += " border-[#6d7a77]";
+                                        }
                                       }
                                     }
 
@@ -409,10 +422,14 @@ export default function CreateEventSeatConfigurationPage() {
                                         onClick={() => toggleSeatSelection(seat.id)}
                                         className={seatClasses}
                                         style={seatStyle}
-                                        title={`Seat ${seat.id} (${seatCat.name} - ${seat.status})`}
+                                        title={`Seat ${seat.id} (${seatCat.name} - ${seat.status}${isSelected ? " - selected" : ""})`}
                                       >
-                                        {seat.status === "blocked" && !isSelected ? (
-                                          <svg className="size-2.5 text-[#6d7a77]" fill="currentColor" viewBox="0 0 16 16">
+                                        {seat.status === "blocked" ? (
+                                          <svg
+                                            className={`size-2.5 ${isSelected ? "text-[#00685f]" : "text-[#6d7a77]"}`}
+                                            fill="currentColor"
+                                            viewBox="0 0 16 16"
+                                          >
                                             <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z" />
                                             <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z" />
                                           </svg>

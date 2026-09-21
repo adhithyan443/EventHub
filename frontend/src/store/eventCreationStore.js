@@ -69,6 +69,43 @@ const initialSeatingConfig = {
   totalCapacity: 0,
 };
 
+const pruneSelectedSeatIds = (oldCategories, newCategories, selectedSeatIds) => {
+  if (!selectedSeatIds || selectedSeatIds.length === 0) {
+    return [];
+  }
+
+  // Map old seat ID to its row ID
+  const oldSeatRowMap = new Map();
+  for (const cat of oldCategories || []) {
+    for (const row of cat.rows || []) {
+      for (const seat of row.seats || []) {
+        if (seat.id) {
+          oldSeatRowMap.set(seat.id, row.id);
+        }
+      }
+    }
+  }
+
+  // Map new seat ID to its row ID
+  const newSeatRowMap = new Map();
+  for (const cat of newCategories || []) {
+    for (const row of cat.rows || []) {
+      for (const seat of row.seats || []) {
+        if (seat.id) {
+          newSeatRowMap.set(seat.id, row.id);
+        }
+      }
+    }
+  }
+
+  // Only keep seatId if it exists in the new layout AND belongs to the exact same row
+  return selectedSeatIds.filter((seatId) => {
+    const oldRowId = oldSeatRowMap.get(seatId);
+    const newRowId = newSeatRowMap.get(seatId);
+    return oldRowId && newRowId && oldRowId === newRowId;
+  });
+};
+
 const rebuildLayout = (categories, seatsPerRow = 8) => {
   let rowIndex = 0;
 
@@ -93,7 +130,7 @@ const rebuildLayout = (categories, seatsPerRow = 8) => {
             id: `${rowLetter}${number}`,
             number,
             status: existingSeat?.status || "available",
-            categoryId: category.id,
+            categoryId: existingSeat?.categoryId || category.id,
           };
         }
       );
@@ -315,6 +352,11 @@ const useEventCreationStore = create((set, get) => ({
         seatsPerRow
       );
       const allRows = updatedCategories.flatMap((c) => c.rows);
+      const prunedSelected = pruneSelectedSeatIds(
+        state.seatingConfiguration.categories,
+        updatedCategories,
+        state.seatingConfiguration.selectedSeatIds
+      );
 
       return {
         seatingConfiguration: {
@@ -322,6 +364,7 @@ const useEventCreationStore = create((set, get) => ({
           categories: updatedCategories,
           sections: updatedCategories,
           rows: allRows,
+          selectedSeatIds: prunedSelected,
           totalCapacity: allRows.reduce((sum, r) => sum + r.seats.length, 0),
         },
       };
@@ -339,7 +382,11 @@ const useEventCreationStore = create((set, get) => ({
       const seatsPerRow = state.seatingConfiguration.seatsPerRow || 8;
       const updatedCategories = rebuildLayout(remainingCategories, seatsPerRow);
       const allRows = updatedCategories.flatMap((c) => c.rows);
-      const validSeatIds = new Set(allRows.flatMap((r) => r.seats.map((s) => s.id)));
+      const prunedSelected = pruneSelectedSeatIds(
+        state.seatingConfiguration.categories,
+        updatedCategories,
+        state.seatingConfiguration.selectedSeatIds
+      );
 
       return {
         seatingConfiguration: {
@@ -347,9 +394,7 @@ const useEventCreationStore = create((set, get) => ({
           categories: updatedCategories,
           sections: updatedCategories,
           rows: allRows,
-          selectedSeatIds: state.seatingConfiguration.selectedSeatIds.filter((id) =>
-            validSeatIds.has(id)
-          ),
+          selectedSeatIds: prunedSelected,
           totalCapacity: allRows.reduce((sum, r) => sum + r.seats.length, 0),
         },
       };
@@ -414,6 +459,11 @@ const useEventCreationStore = create((set, get) => ({
 
       const resequenced = rebuildLayout(updated, seatsPerRow);
       const allRows = resequenced.flatMap((c) => c.rows);
+      const prunedSelected = pruneSelectedSeatIds(
+        state.seatingConfiguration.categories,
+        resequenced,
+        state.seatingConfiguration.selectedSeatIds
+      );
 
       return {
         seatingConfiguration: {
@@ -421,6 +471,7 @@ const useEventCreationStore = create((set, get) => ({
           categories: resequenced,
           sections: resequenced,
           rows: allRows,
+          selectedSeatIds: prunedSelected,
           totalCapacity: allRows.reduce((sum, r) => sum + r.seats.length, 0),
         },
       };
@@ -453,7 +504,11 @@ const useEventCreationStore = create((set, get) => ({
 
       const resequenced = rebuildLayout(updated, seatsPerRow);
       const allRows = resequenced.flatMap((c) => c.rows);
-      const validSeatIds = new Set(allRows.flatMap((r) => r.seats.map((s) => s.id)));
+      const prunedSelected = pruneSelectedSeatIds(
+        state.seatingConfiguration.categories,
+        resequenced,
+        state.seatingConfiguration.selectedSeatIds
+      );
 
       return {
         seatingConfiguration: {
@@ -461,9 +516,7 @@ const useEventCreationStore = create((set, get) => ({
           categories: resequenced,
           sections: resequenced,
           rows: allRows,
-          selectedSeatIds: state.seatingConfiguration.selectedSeatIds.filter((id) =>
-            validSeatIds.has(id)
-          ),
+          selectedSeatIds: prunedSelected,
           totalCapacity: allRows.reduce((sum, r) => sum + r.seats.length, 0),
         },
       };
@@ -509,36 +562,16 @@ const useEventCreationStore = create((set, get) => ({
 
   toggleSeatSelection: (seatId) =>
     set((state) => {
-      const isSelected = state.seatingConfiguration.selectedSeatIds.includes(seatId);
+      const currentSelected = state.seatingConfiguration.selectedSeatIds || [];
+      const isSelected = currentSelected.includes(seatId);
       const newSelected = isSelected
-        ? state.seatingConfiguration.selectedSeatIds.filter((id) => id !== seatId)
-        : [...state.seatingConfiguration.selectedSeatIds, seatId];
-
-      const updatedCategories = state.seatingConfiguration.categories.map((cat) => ({
-        ...cat,
-        rows: cat.rows.map((row) => ({
-          ...row,
-          seats: row.seats.map((seat) => {
-            if (seat.id === seatId) {
-              return {
-                ...seat,
-                status: isSelected ? "available" : "selected",
-              };
-            }
-            return seat;
-          }),
-        })),
-      }));
-
-      const allRows = updatedCategories.flatMap((c) => c.rows);
+        ? currentSelected.filter((id) => id !== seatId)
+        : [...currentSelected, seatId];
 
       return {
         seatingConfiguration: {
           ...state.seatingConfiguration,
           selectedSeatIds: newSelected,
-          categories: updatedCategories,
-          sections: updatedCategories,
-          rows: allRows,
         },
       };
     }),
@@ -570,8 +603,7 @@ const useEventCreationStore = create((set, get) => ({
           categories: updatedCategories,
           sections: updatedCategories,
           rows: allRows,
-          selectedSeatIds:
-            newStatus === "available" ? [] : state.seatingConfiguration.selectedSeatIds,
+          selectedSeatIds: [],
         },
       };
     }),
