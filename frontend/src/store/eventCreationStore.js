@@ -60,68 +60,47 @@ const initialPayoutAccount = {
   accountNumberMasked: "•••• •••• •••• 4892",
 };
 
-const LETTERS = [
-  "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
-  "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
-  "U", "V", "W", "X", "Y", "Z",
-];
-
-const makeSeatsForRow = (rowLetter, seatsPerRow, categoryId) => {
-  const seats = [];
-  for (let s = 1; s <= seatsPerRow; s++) {
-    let status = "available";
-    let seatCatId = categoryId;
-
-    // Demo state matching Figma reference
-    if (rowLetter === "A" && (s === 4 || s === 5 || s === 6)) {
-      status = "selected";
-      seatCatId = "cat-vip";
-    } else if (rowLetter === "B" && (s === 2 || s === 3)) {
-      status = "reserved";
-      seatCatId = "cat-premium";
-    } else if (rowLetter === "B" && (s === 4 || s === 5)) {
-      status = "blocked";
-      seatCatId = "cat-premium";
-    }
-
-    seats.push({
-      id: `${rowLetter}${s}`,
-      number: s,
-      status,
-      categoryId: seatCatId,
-    });
-  }
-  return seats;
+const initialSeatingConfig = {
+  layoutName: "",
+  categories: [],
+  sections: [],
+  rows: [],
+  selectedSeatIds: [],
+  totalCapacity: 0,
 };
 
-export const resequenceLayout = (categories, seatsPerRow = 8) => {
-  let globalRowIdx = 0;
-  return categories.map((cat) => {
-    const updatedRows = (cat.rows || []).map((row) => {
-      const rowLetter = LETTERS[globalRowIdx] || `R${globalRowIdx + 1}`;
-      globalRowIdx++;
+const rebuildLayout = (categories, seatsPerRow = 8) => {
+  let rowIndex = 0;
 
-      const seats = (row.seats && row.seats.length > 0
-        ? row.seats
-        : Array.from({ length: seatsPerRow }, (_, i) => ({
-          id: `${rowLetter}${i + 1}`,
-          number: i + 1,
-          status: "available",
-          categoryId: cat.id,
-        }))
-      ).map((seat, sIdx) => {
-        const seatNum = seat.number || sIdx + 1;
-        return {
-          ...seat,
-          id: `${rowLetter}${seatNum}`,
-          number: seatNum,
-          categoryId: seat.categoryId || cat.id,
-        };
-      });
+  return categories.map((category) => {
+    const updatedRows = (category.rows || []).map((row) => {
+      const rowLetter =
+        rowIndex < 26
+          ? String.fromCharCode(65 + rowIndex)
+          : `R${rowIndex + 1}`;
+
+      rowIndex++;
+
+      const seats = Array.from(
+        { length: seatsPerRow },
+        (_, seatIndex) => {
+          const number = seatIndex + 1;
+
+          const existingSeat = row.seats?.[seatIndex];
+
+          return {
+            ...existingSeat,
+            id: `${rowLetter}${number}`,
+            number,
+            status: existingSeat?.status || "available",
+            categoryId: category.id,
+          };
+        }
+      );
 
       return {
         ...row,
-        id: row.id || `row-${rowLetter}-${cat.id}`,
+        id: row.id || `row-${rowLetter}-${category.id}`,
         name: `Row ${rowLetter}`,
         rowLetter,
         seats,
@@ -129,88 +108,19 @@ export const resequenceLayout = (categories, seatsPerRow = 8) => {
     });
 
     return {
-      ...cat,
+      ...category,
       rows: updatedRows,
     };
   });
 };
 
-const createInitialCategories = (seatsPerRow = 8) => {
-  const initial = [
-    {
-      id: "cat-vip",
-      name: "VIP",
-      tier: "VIP",
-      price: "₹1,499",
-      color: "#00685f",
-      rows: [
-        {
-          id: "row-A",
-          name: "Row A",
-          rowLetter: "A",
-          seats: makeSeatsForRow("A", seatsPerRow, "cat-vip"),
-        },
-      ],
-    },
-    {
-      id: "cat-premium",
-      name: "Premium",
-      tier: "Premium",
-      price: "₹2,499",
-      color: "#4648d4",
-      rows: [
-        {
-          id: "row-B",
-          name: "Row B",
-          rowLetter: "B",
-          seats: makeSeatsForRow("B", seatsPerRow, "cat-premium"),
-        },
-      ],
-    },
-    {
-      id: "cat-regular",
-      name: "Regular",
-      tier: "Regular",
-      price: "₹799",
-      color: "#6d7a77",
-      rows: [
-        {
-          id: "row-C",
-          name: "Row C",
-          rowLetter: "C",
-          seats: makeSeatsForRow("C", seatsPerRow, "cat-regular"),
-        },
-        {
-          id: "row-D",
-          name: "Row D",
-          rowLetter: "D",
-          seats: makeSeatsForRow("D", seatsPerRow, "cat-regular"),
-        },
-      ],
-    },
-  ];
 
-  return resequenceLayout(initial, seatsPerRow);
-};
-
-const initialCategories = createInitialCategories(8);
-const initialAllRows = initialCategories.flatMap((c) => c.rows);
-
-const initialSeatingConfig = {
-  stageName: "STAGE",
-  seatsPerRow: 8,
-  selectedSeatIds: ["A4", "A5", "A6"],
-  categories: initialCategories,
-  sections: initialCategories, // Alias for backwards compatibility
-  rows: initialAllRows,
-  totalCapacity: initialAllRows.reduce((sum, r) => sum + r.seats.length, 0),
-};
 
 const useEventCreationStore = create((set, get) => ({
   // Location & Event Type
   locationType: LOCATION_TYPES.PHYSICAL,
   eventType: LOCATION_TYPES.PHYSICAL,
-  onlineUrl: "https://zoom.us/j/sunfield-live-stream",
+  onlineUrl: "",
 
   // Venue (Google Places payload)
   venue: { ...initialVenue },
@@ -235,7 +145,9 @@ const useEventCreationStore = create((set, get) => ({
   payoutAccount: { ...initialPayoutAccount },
 
   // Step 4B: Seat Configuration (for Reserved Seating)
-  seatingConfiguration: initialSeatingConfig,
+  seatingConfiguration: {
+    ...initialSeatingConfig,
+  },
 
   // UI state actions
   setLocationType: (type) =>
@@ -250,17 +162,7 @@ const useEventCreationStore = create((set, get) => ({
         // Clear physical-only state
         nextVenue = { ...initialVenue };
         nextTicketMode = TICKET_MODES.GENERAL;
-        const freshCategories = createInitialCategories(8);
-        const freshRows = freshCategories.flatMap((c) => c.rows);
-        nextSeatingConfig = {
-          stageName: "STAGE",
-          seatsPerRow: 8,
-          selectedSeatIds: [],
-          categories: freshCategories,
-          sections: freshCategories,
-          rows: freshRows,
-          totalCapacity: freshRows.reduce((sum, r) => sum + r.seats.length, 0),
-        };
+        nextSeatingConfig = { ...initialSeatingConfig };
       }
 
       return {
@@ -408,7 +310,7 @@ const useEventCreationStore = create((set, get) => ({
         })),
       };
 
-      const updatedCategories = resequenceLayout(
+      const updatedCategories = rebuildLayout(
         [...state.seatingConfiguration.categories, newCategory],
         seatsPerRow
       );
@@ -435,7 +337,7 @@ const useEventCreationStore = create((set, get) => ({
         (c) => c.id !== categoryId
       );
       const seatsPerRow = state.seatingConfiguration.seatsPerRow || 8;
-      const updatedCategories = resequenceLayout(remainingCategories, seatsPerRow);
+      const updatedCategories = rebuildLayout(remainingCategories, seatsPerRow);
       const allRows = updatedCategories.flatMap((c) => c.rows);
       const validSeatIds = new Set(allRows.flatMap((r) => r.seats.map((s) => s.id)));
 
@@ -510,7 +412,7 @@ const useEventCreationStore = create((set, get) => ({
         };
       });
 
-      const resequenced = resequenceLayout(updated, seatsPerRow);
+      const resequenced = rebuildLayout(updated, seatsPerRow);
       const allRows = resequenced.flatMap((c) => c.rows);
 
       return {
@@ -549,7 +451,7 @@ const useEventCreationStore = create((set, get) => ({
         };
       });
 
-      const resequenced = resequenceLayout(updated, seatsPerRow);
+      const resequenced = rebuildLayout(updated, seatsPerRow);
       const allRows = resequenced.flatMap((c) => c.rows);
       const validSeatIds = new Set(allRows.flatMap((r) => r.seats.map((s) => s.id)));
 
@@ -589,7 +491,7 @@ const useEventCreationStore = create((set, get) => ({
         };
       });
 
-      const resequenced = resequenceLayout(updatedCategories, seatsPerRow);
+      const resequenced = rebuildLayout(updatedCategories, seatsPerRow);
       const allRows = resequenced.flatMap((c) => c.rows);
 
       return {
