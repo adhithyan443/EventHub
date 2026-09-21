@@ -16,6 +16,7 @@ func setupRouter(
 	logger *slog.Logger,
 	authHandler *handler.AuthHandler,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	organizerProfileHandler *handler.OrganizerProfileHandler,
 	categoryHandler *handler.CategoryHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
@@ -58,6 +59,7 @@ func setupRouter(
 	registerOrganizerRoutes(
 		router,
 		organizerApplicationHandler,
+		organizerProfileHandler,
 		eventHandler,
 		seatLayoutHandler,
 		jwtService,
@@ -161,6 +163,7 @@ func registerAuthRoutes(
 func registerOrganizerRoutes(
 	router *gin.Engine,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	organizerProfileHandler *handler.OrganizerProfileHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	jwtService *token.JWTService,
@@ -179,6 +182,11 @@ func registerOrganizerRoutes(
 	organizer.GET(
 		"/application",
 		organizerApplicationHandler.GetMyApplication,
+	)
+
+	organizer.GET(
+		"/profile",
+		organizerProfileHandler.GetProfile,
 	)
 
 	// Organizer event endpoints.

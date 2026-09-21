@@ -1,12 +1,8 @@
-import useEventCreationStore from "../../store/eventCreationStore";
 
-/**
- * Reusable Payout Bank Account Card.
- * Renders the event-level linked business bank account configuration
- * for both General Admission and Reserved Seating ticketing flows.
- */
-export default function PayoutBankAccountCard({ className = "" }) {
-  const payoutAccount = useEventCreationStore((state) => state.payoutAccount);
+
+
+export default function PayoutBankAccountCard({payoutAccount, className = ""}) {
+
 
   if (!payoutAccount) return null;
 

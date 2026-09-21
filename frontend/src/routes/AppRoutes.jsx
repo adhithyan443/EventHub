@@ -77,31 +77,32 @@ export default function AppRoutes() {
                 </Route>
             </Route>
 
-            {/* Organizer Portal */}
-            {/* Note: In this UI-only phase, accessible directly for UI review. Structured to allow wrapping in ProtectedRoute allowedRoles={["ORGANIZER"]} later. */}
-            <Route path="/organizer" element={<OrganizerLayout />}>
-                <Route index element={<Navigate to="/organizer/dashboard" replace />} />
-                <Route path="dashboard" element={<OrganizerDashboardPage />} />
+            {/* Protected Organizer Portal */}
+            <Route element={<ProtectedRoute allowedRoles={["ORGANIZER"]} />}>
+                <Route path="/organizer" element={<OrganizerLayout />}>
+                    <Route index element={<Navigate to="/organizer/dashboard" replace />} />
+                    <Route path="dashboard" element={<OrganizerDashboardPage />} />
 
-                {/* Multi-Step Event Creation Flow */}
-                <Route path="events/create" element={<Navigate to="/organizer/events/create/step-1" replace />} />
-                <Route path="events/create/step-1" element={<CreateEventStep1BasicInfoPage />} />
-                <Route path="events/create/step-2" element={<CreateEventStep2DetailsPage />} />
-                <Route path="events/create/step-3" element={<CreateEventStep3TicketSelectionPage />} />
-                <Route path="events/create/ticket-types" element={<CreateEventTicketTypesPage />} />
-                <Route path="events/create/seat-configuration" element={<CreateEventSeatConfigurationPage />} />
-                <Route path="events/create/review" element={<CreateEventReviewPublishPage />} />
+                    {/* Multi-Step Event Creation Flow */}
+                    <Route path="events/create" element={<Navigate to="/organizer/events/create/step-1" replace />} />
+                    <Route path="events/create/step-1" element={<CreateEventStep1BasicInfoPage />} />
+                    <Route path="events/create/step-2" element={<CreateEventStep2DetailsPage />} />
+                    <Route path="events/create/step-3" element={<CreateEventStep3TicketSelectionPage />} />
+                    <Route path="events/create/ticket-types" element={<CreateEventTicketTypesPage />} />
+                    <Route path="events/create/seat-configuration" element={<CreateEventSeatConfigurationPage />} />
+                    <Route path="events/create/review" element={<CreateEventReviewPublishPage />} />
 
-                {/* Organizer Placeholders */}
-                <Route path="events" element={<OrganizerPlaceholderPage title="My Events" />} />
-                <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
-                <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
-                <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />
-                <Route path="settings" element={<OrganizerPlaceholderPage title="Settings" />} />
+                    {/* Organizer Placeholders */}
+                    <Route path="events" element={<OrganizerPlaceholderPage title="My Events" />} />
+                    <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
+                    <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
+                    <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />
+                    <Route path="settings" element={<OrganizerPlaceholderPage title="Settings" />} />
+                </Route>
+
+                {/* Redirect alias: /organizer/create-event -> /organizer/events/create/step-1 */}
+                <Route path="/organizer/create-event" element={<Navigate to="/organizer/events/create/step-1" replace />} />
             </Route>
-
-            {/* Redirect alias: /organizer/create-event -> /organizer/events/create/step-1 */}
-            <Route path="/organizer/create-event" element={<Navigate to="/organizer/events/create/step-1" replace />} />
         </Routes>
     );
 }

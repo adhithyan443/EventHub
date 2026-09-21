@@ -157,6 +157,7 @@ func organizerApplicationToModel(
 		BankName:               application.BankName,
 		AccountHolderName:      application.AccountHolderName,
 		AccountNumberEncrypted: application.AccountNumberEncrypted,
+		AccountNumberLast4:     application.AccountNumberLast4,
 		IFSCCode:               application.IFSCCode,
 
 		GSTNumber:               application.GSTNumber,
@@ -192,6 +193,7 @@ func modelToOrganizerApplication(
 		BankName:               model.BankName,
 		AccountHolderName:      model.AccountHolderName,
 		AccountNumberEncrypted: model.AccountNumberEncrypted,
+		AccountNumberLast4:     model.AccountNumberLast4,
 		IFSCCode:               model.IFSCCode,
 
 		GSTNumber:               model.GSTNumber,

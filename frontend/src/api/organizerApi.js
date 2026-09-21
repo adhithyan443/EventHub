@@ -49,3 +49,10 @@ export const getCategories = async () => {
 
     return response.data;
 };
+
+
+export const getOrganizerProfile = async () => {
+    const response = await apiClient.get("/organizers/profile");
+
+    return response.data;
+};

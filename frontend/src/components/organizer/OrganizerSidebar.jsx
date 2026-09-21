@@ -1,12 +1,34 @@
-import { Link, useLocation } from "react-router-dom";
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
+import { LogoutIcon } from "../layout/icons";
+import { logout } from "../../api/authApi";
 import imgOrganizerAvatar from "../../assets/organizer/1d07f03676805f8fc5a4e6b472edc608cc3dfc63.png";
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
+import useEventCreationStore from "../../store/eventCreationStore";
 
 export default function OrganizerSidebar({ className = "" }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const resetEventForm = useEventCreationStore((state) => state.resetForm);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch (error) {
+      console.error("Logout request failed:", error?.message || error);
+    } finally {
+      clearAuth();
+      resetEventForm();
+      setIsLoggingOut(false);
+      navigate("/login", { replace: true });
+    }
+  }
 
   const navItems = [
     {
@@ -157,8 +179,8 @@ export default function OrganizerSidebar({ className = "" }) {
         </nav>
       </div>
 
-      {/* Organizer Profile Card at Bottom */}
-      <div className="p-4 border-t border-[#bcc9c6]/30">
+      {/* Organizer Profile Card & Logout at Bottom */}
+      <div className="p-4 border-t border-[#bcc9c6]/30 flex flex-col gap-2">
         <div className="flex items-center gap-3 p-2 rounded-xl bg-[#f9f9ff] border border-[#bcc9c6]/40">
           <div className="size-9 rounded-full overflow-hidden shrink-0 border border-[#bcc9c6]">
             <img
@@ -169,13 +191,24 @@ export default function OrganizerSidebar({ className = "" }) {
           </div>
           <div className="flex flex-col min-w-0">
             <span className="text-[13px] font-semibold text-[#141b2b] truncate">
-              {user?.name || "Event Masters"}
+              {user?.fullName || user?.name || "Event Masters"}
             </span>
             <span className="text-[11px] text-[#565e74] truncate">
               Verified Organizer
             </span>
           </div>
         </div>
+
+        <button
+          type="button"
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="w-full flex items-center justify-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 transition-colors cursor-pointer disabled:opacity-50"
+          title="Sign out of Organizer Portal"
+        >
+          <LogoutIcon className="w-4 h-4 text-[#ba1a1a]" />
+          <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
+        </button>
       </div>
     </aside>
   );

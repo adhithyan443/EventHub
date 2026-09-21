@@ -263,6 +263,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 			BankName:               application.BankName,
 			AccountHolderName:      application.AccountHolderName,
 			AccountNumberEncrypted: application.AccountNumberEncrypted,
+			AccountNumberLast4:     application.AccountNumberLast4,
 			IFSCCode:               application.IFSCCode,
 		}
 

@@ -57,6 +57,8 @@ func (u *ApplicationUsecase) SubmitApplication(
 		return fmt.Errorf("failed to secure account information")
 	}
 
+	accountNumberLast4 := getAccountNumberLast4(input.AccountNumber)
+
 	existing, err := u.repository.FindByUserID(userID)
 
 	if err != nil && !errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
@@ -80,6 +82,7 @@ func (u *ApplicationUsecase) SubmitApplication(
 			userID,
 			input,
 			encryptedAccountNumber,
+			accountNumberLast4,
 		)
 
 		if err := u.repository.Create(application); err != nil {
@@ -141,7 +144,8 @@ func (u *ApplicationUsecase) SubmitApplication(
 			return fmt.Errorf("failed to secure account information")
 		}
 
-		updateApplication(existing, input, encryptedAccountNumber)
+		accountNumberLast4 := getAccountNumberLast4(input.AccountNumber)
+		updateApplication(existing, input, encryptedAccountNumber, accountNumberLast4)
 
 		existing.Status = domain.ApplicationPending
 		existing.RejectionReason = ""
@@ -181,6 +185,7 @@ func (u *ApplicationUsecase) buildApplication(
 	userID uuid.UUID,
 	input SubmitApplicationInput,
 	encryptedAccountNumber string,
+	accountNumberLast4 string,
 ) *domain.OrganizerApplication {
 	return &domain.OrganizerApplication{
 		ID:     uuid.New(),
@@ -224,6 +229,7 @@ func (u *ApplicationUsecase) buildApplication(
 		),
 
 		AccountNumberEncrypted: encryptedAccountNumber,
+		AccountNumberLast4:     accountNumberLast4,
 
 		IFSCCode: strings.ToUpper(
 			strings.TrimSpace(input.IFSCCode),
@@ -245,6 +251,7 @@ func updateApplication(
 	application *domain.OrganizerApplication,
 	input SubmitApplicationInput,
 	encryptedAccountNumber string,
+	accountNumberLast4 string,
 ) {
 	application.BusinessName = strings.TrimSpace(
 		input.BusinessName,
@@ -284,6 +291,7 @@ func updateApplication(
 
 	// TODO: Encrypt before storing.
 	application.AccountNumberEncrypted = encryptedAccountNumber
+	application.AccountNumberLast4 = accountNumberLast4
 
 	application.IFSCCode = strings.ToUpper(
 		strings.TrimSpace(input.IFSCCode),

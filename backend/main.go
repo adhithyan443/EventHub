@@ -164,6 +164,39 @@ func main() {
 		logger,
 	)
 
+	organizerRepo := repository.NewOrganizerRepository(
+		db,
+		logger,
+	)
+
+	organizerProfileRepo := repository.NewOrganizerProfileRepository(
+		db,
+		logger,
+	)
+
+	organizerAddressRepo := repository.NewOrganizerAddressRepository(
+		db,
+		logger,
+	)
+
+	organizerBankAccountRepo := repository.NewOrganizerBankAccountRepository(
+		db,
+		logger,
+	)
+
+	organizerProfileUsecase := organizer.NewProfileUsecase(
+		organizerRepo,
+		organizerProfileRepo,
+		organizerAddressRepo,
+		organizerBankAccountRepo,
+		logger,
+	)
+
+	organizerProfileHandler := handler.NewOrganizerProfileHandler(
+		organizerProfileUsecase,
+		logger,
+	)
+
 	organizerApplicationUsecase := organizer.NewApplicationUsecase(
 		organizerApplicationRepo,
 		encryptionService,
@@ -186,6 +219,7 @@ func main() {
 		logger,
 		authHandler,
 		organizerApplicationHandler,
+		organizerProfileHandler,
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,

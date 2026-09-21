@@ -16,6 +16,7 @@ type OrganizerBankAccount struct {
 	BankName               string
 	AccountHolderName      string
 	AccountNumberEncrypted string
+	AccountNumberLast4     string
 	IFSCCode               string
 
 	CreatedAt time.Time

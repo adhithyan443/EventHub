@@ -1,11 +1,32 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
+import { LogoutIcon } from "../layout/icons";
+import { logout } from "../../api/authApi";
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
+import useEventCreationStore from "../../store/eventCreationStore";
 
 export default function OrganizerTopBar({ showCreateButton = true }) {
   const navigate = useNavigate();
   const user = useAuthStore((state) => state.user);
+  const clearAuth = useAuthStore((state) => state.clearAuth);
+  const resetEventForm = useEventCreationStore((state) => state.resetForm);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  async function handleLogout() {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch (error) {
+      console.error("Logout request failed:", error?.message || error);
+    } finally {
+      clearAuth();
+      resetEventForm();
+      setIsLoggingOut(false);
+      navigate("/login", { replace: true });
+    }
+  }
 
   return (
     <header className="h-16 bg-white border-b border-[#bcc9c6]/40 px-6 flex items-center justify-between shrink-0 sticky top-0 z-30">
@@ -65,9 +86,21 @@ export default function OrganizerTopBar({ showCreateButton = true }) {
             />
           </div>
           <span className="text-[13px] font-medium text-[#141b2b] hidden md:inline-block">
-            {user?.name || "Event Masters"}
+            {user?.fullName || user?.name || "Event Masters"}
           </span>
         </div>
+
+        {/* Logout Action */}
+        <button
+          type="button"
+          onClick={handleLogout}
+          disabled={isLoggingOut}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+          title="Sign out of Organizer Portal"
+        >
+          <LogoutIcon className="w-3.5 h-3.5 text-[#ba1a1a]" />
+          <span className="hidden sm:inline">{isLoggingOut ? "Logging out..." : "Logout"}</span>
+        </button>
 
         {/* Create Event Primary CTA */}
         {showCreateButton && (
