@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
 import { LogoutIcon } from "../layout/icons";
 import { logout } from "../../api/authApi";
-import imgOrganizerAvatar from "../../assets/organizer/1d07f03676805f8fc5a4e6b472edc608cc3dfc63.png";
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
 import useEventCreationStore from "../../store/eventCreationStore";
@@ -149,7 +148,7 @@ export default function OrganizerSidebar({ className = "" }) {
           <div className="flex items-center gap-3">
             <div className="relative size-10 rounded-full border border-[#bcc9c6] overflow-hidden bg-[#e1e8fd] shrink-0">
               <img
-                src={imgOrganizerAvatar}
+                src={profile?.logo_url || imgUserAvatar}
                 alt="EventHub Portal"
                 className="size-full object-cover"
               />

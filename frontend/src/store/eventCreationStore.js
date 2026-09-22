@@ -64,11 +64,11 @@ const initialTicketSalesSettings = {
   maxTicketsPerBooking: "",
 };
 
-const initialPayoutAccount = {
-  bankName: "",
-  accountHolder: "",
-  accountNumberMasked: "",
-};
+// const initialPayoutAccount = {
+//   bankName: "",
+//   accountHolder: "",
+//   accountNumberMasked: "",
+// };
 
 const initialSeatingConfig = {
   layoutName: "",
@@ -190,7 +190,7 @@ const useEventCreationStore = create((set, get) => ({
   },
 
   // Payout account
-  payoutAccount: { ...initialPayoutAccount },
+  // payoutAccount: { ...initialPayoutAccount },
 
   // Step 4B: Seat Configuration
   seatingConfiguration: {
@@ -753,7 +753,7 @@ const useEventCreationStore = create((set, get) => ({
 
 
   // Temporary Seat Selection
- 
+
 
   toggleSeatSelection: (seatId) =>
     set((state) => {
@@ -879,13 +879,13 @@ const useEventCreationStore = create((set, get) => ({
 
   // Payout Account
 
-  updatePayoutAccount: (accountData) =>
-    set((state) => ({
-      payoutAccount: {
-        ...state.payoutAccount,
-        ...accountData,
-      },
-    })),
+  // updatePayoutAccount: (accountData) =>
+  //   set((state) => ({
+  //     payoutAccount: {
+  //       ...state.payoutAccount,
+  //       ...accountData,
+  //     },
+  //   })),
 
 
   resetForm: () => {
@@ -912,9 +912,9 @@ const useEventCreationStore = create((set, get) => ({
       seatingConfiguration: {
         ...initialSeatingConfig,
       },
-      payoutAccount: {
-        ...initialPayoutAccount,
-      },
+      // payoutAccount: {
+      //   ...initialPayoutAccount,
+      // },
     });
   },
 }));
