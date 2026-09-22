@@ -1,17 +1,20 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
 import { LogoutIcon } from "../layout/icons";
 import { logout } from "../../api/authApi";
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
 import useEventCreationStore from "../../store/eventCreationStore";
+import useOrganizerStore from "../../store/organizerStore";
 
 export default function OrganizerTopBar({ showCreateButton = true }) {
   const navigate = useNavigate();
-  const user = useAuthStore((state) => state.user);
+  // const user = useAuthStore((state) => state.user);
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const resetEventForm = useEventCreationStore((state) => state.resetForm);
+  const profile = useOrganizerStore((state) => state.profile);
+
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   async function handleLogout() {
@@ -77,18 +80,22 @@ export default function OrganizerTopBar({ showCreateButton = true }) {
         </button>
 
         {/* User Profile Thumbnail */}
-        <div className="flex items-center gap-2">
+        <Link
+          to={ORGANIZER_ROUTES.PROFILE}
+          className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-gray-100/80 transition-colors cursor-pointer group"
+          title="View Organizer Profile"
+        >
           <div className="size-8 rounded-full border border-[#bcc9c6] overflow-hidden">
             <img
-              src={imgUserAvatar}
+              src={profile?.logo_url || imgUserAvatar}
               alt="Profile"
               className="size-full object-cover"
             />
           </div>
-          <span className="text-[13px] font-medium text-[#141b2b] hidden md:inline-block">
-            {user?.fullName || user?.name || "Event Masters"}
+          <span className="text-[13px] font-medium text-[#141b2b] group-hover:text-[#00685f] transition-colors hidden md:inline-block">
+            {profile?.business_name || profile?.email || "Event Masters"}
           </span>
-        </div>
+        </Link>
 
         {/* Logout Action */}
         <button

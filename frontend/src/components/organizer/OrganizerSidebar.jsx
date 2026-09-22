@@ -7,11 +7,14 @@ import imgOrganizerAvatar from "../../assets/organizer/1d07f03676805f8fc5a4e6b47
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
 import useEventCreationStore from "../../store/eventCreationStore";
+import useOrganizerStore from "../../store/organizerStore";
 
 export default function OrganizerSidebar({ className = "" }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const user = useAuthStore((state) => state.user);
+  // const user = useAuthStore((state) => state.user);
+  const profile = useOrganizerStore((state) => state.profile);
+
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const resetEventForm = useEventCreationStore((state) => state.resetForm);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -109,13 +112,25 @@ export default function OrganizerSidebar({ className = "" }) {
         </svg>
       ),
     },
+    // {
+    //   label: "Settings",
+    //   path: ORGANIZER_ROUTES.SETTINGS,
+    //   icon: (active) => (
+    //     <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+    //       <path
+    //         d="M16.2 11.8C16.3 11.2 16.4 10.6 16.4 10C16.4 9.4 16.3 8.8 16.2 8.2L18.1 6.7C18.3 6.5 18.3 6.3 18.2 6.1L16.4 3C16.3 2.8 16.1 2.7 15.9 2.8L13.7 3.7C13.2 3.3 12.7 3 12.1 2.8L11.8 0.4C11.7 0.2 11.5 0 11.3 0H7.7C7.5 0 7.3 0.2 7.2 0.4L6.9 2.8C6.3 3 5.8 3.3 5.3 3.7L3.1 2.8C2.9 2.7 2.7 2.8 2.6 3L0.8 6.1C0.7 6.3 0.7 6.5 0.9 6.7L2.8 8.2C2.7 8.8 2.6 9.4 2.6 10C2.6 10.6 2.7 11.2 2.8 11.8L0.9 13.3C0.7 13.5 0.7 13.7 0.8 13.9L2.6 17C2.7 17.2 2.9 17.3 3.1 17.2L5.3 16.3C5.8 16.7 6.3 17 6.9 17.2L7.2 19.6C7.3 19.8 7.5 20 7.7 20H11.3C11.5 20 11.7 19.8 11.8 19.6L12.1 17.2C12.7 17 13.2 16.7 13.7 16.3L15.9 17.2C16.1 17.3 16.3 17.2 16.4 17L18.2 13.9C18.3 13.7 18.3 13.5 18.1 13.3L16.2 11.8ZM9.5 13.5C7.6 13.5 6 11.9 6 10C6 8.1 7.6 6.5 9.5 6.5C11.4 6.5 13 8.1 13 10C13 11.9 11.4 13.5 9.5 13.5Z"
+    //         fill={active ? "#00685F" : "#3D4947"}
+    //       />
+    //     </svg>
+    //   ),
+    // },
     {
-      label: "Settings",
-      path: ORGANIZER_ROUTES.SETTINGS,
+      label: "Profile",
+      path: ORGANIZER_ROUTES.PROFILE,
       icon: (active) => (
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
           <path
-            d="M16.2 11.8C16.3 11.2 16.4 10.6 16.4 10C16.4 9.4 16.3 8.8 16.2 8.2L18.1 6.7C18.3 6.5 18.3 6.3 18.2 6.1L16.4 3C16.3 2.8 16.1 2.7 15.9 2.8L13.7 3.7C13.2 3.3 12.7 3 12.1 2.8L11.8 0.4C11.7 0.2 11.5 0 11.3 0H7.7C7.5 0 7.3 0.2 7.2 0.4L6.9 2.8C6.3 3 5.8 3.3 5.3 3.7L3.1 2.8C2.9 2.7 2.7 2.8 2.6 3L0.8 6.1C0.7 6.3 0.7 6.5 0.9 6.7L2.8 8.2C2.7 8.8 2.6 9.4 2.6 10C2.6 10.6 2.7 11.2 2.8 11.8L0.9 13.3C0.7 13.5 0.7 13.7 0.8 13.9L2.6 17C2.7 17.2 2.9 17.3 3.1 17.2L5.3 16.3C5.8 16.7 6.3 17 6.9 17.2L7.2 19.6C7.3 19.8 7.5 20 7.7 20H11.3C11.5 20 11.7 19.8 11.8 19.6L12.1 17.2C12.7 17 13.2 16.7 13.7 16.3L15.9 17.2C16.1 17.3 16.3 17.2 16.4 17L18.2 13.9C18.3 13.7 18.3 13.5 18.1 13.3L16.2 11.8ZM9.5 13.5C7.6 13.5 6 11.9 6 10C6 8.1 7.6 6.5 9.5 6.5C11.4 6.5 13 8.1 13 10C13 11.9 11.4 13.5 9.5 13.5Z"
+            d="M10 10C12.21 10 14 8.21 14 6C14 3.79 12.21 2 10 2C7.79 2 6 3.79 6 6C6 8.21 7.79 10 10 10ZM10 12C7.33 12 2 13.34 2 16V18H18V16C18 13.34 12.67 12 10 12Z"
             fill={active ? "#00685F" : "#3D4947"}
           />
         </svg>
@@ -156,18 +171,17 @@ export default function OrganizerSidebar({ className = "" }) {
             const active = item.isActive
               ? item.isActive(location.pathname)
               : item.exact
-              ? location.pathname === item.path
-              : location.pathname.startsWith(item.path);
+                ? location.pathname === item.path
+                : location.pathname.startsWith(item.path);
 
             return (
               <Link
                 key={item.label}
                 to={item.path}
-                className={`flex items-center gap-3 px-4 py-3 rounded-lg text-[14px] transition-all duration-150 ${
-                  active
-                    ? "bg-[#008378]/10 text-[#00685f] font-bold border-l-4 border-[#00685f] rounded-l-none"
-                    : "text-[#3d4947] font-semibold hover:bg-gray-100/70"
-                }`}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg text-[14px] transition-all duration-150 ${active
+                  ? "bg-[#008378]/10 text-[#00685f] font-bold border-l-4 border-[#00685f] rounded-l-none"
+                  : "text-[#3d4947] font-semibold hover:bg-gray-100/70"
+                  }`}
               >
                 <div className="size-[20px] flex items-center justify-center shrink-0">
                   {item.icon(active)}
@@ -181,23 +195,27 @@ export default function OrganizerSidebar({ className = "" }) {
 
       {/* Organizer Profile Card & Logout at Bottom */}
       <div className="p-4 border-t border-[#bcc9c6]/30 flex flex-col gap-2">
-        <div className="flex items-center gap-3 p-2 rounded-xl bg-[#f9f9ff] border border-[#bcc9c6]/40">
+        <Link
+          to={ORGANIZER_ROUTES.PROFILE}
+          className="flex items-center gap-3 p-2 rounded-xl bg-[#f9f9ff] hover:bg-gray-100/80 border border-[#bcc9c6]/40 transition-colors cursor-pointer group"
+          title="View Organizer Profile"
+        >
           <div className="size-9 rounded-full overflow-hidden shrink-0 border border-[#bcc9c6]">
             <img
-              src={imgUserAvatar}
+              src={profile?.logo_url || imgUserAvatar}
               alt="Organizer"
               className="size-full object-cover"
             />
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="text-[13px] font-semibold text-[#141b2b] truncate">
-              {user?.fullName || user?.name || "Event Masters"}
+            <span className="text-[13px] font-semibold text-[#141b2b] group-hover:text-[#00685f] transition-colors truncate">
+              {profile?.business_name || profile?.email || "Event Masters"}
             </span>
             <span className="text-[11px] text-[#565e74] truncate">
               Verified Organizer
             </span>
           </div>
-        </div>
+        </Link>
 
         <button
           type="button"

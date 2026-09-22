@@ -30,6 +30,7 @@ import CreateEventTicketTypesPage from "../pages/organizer/create-event/CreateEv
 import CreateEventSeatConfigurationPage from "../pages/organizer/create-event/CreateEventSeatConfigurationPage";
 import CreateEventReviewPublishPage from "../pages/organizer/create-event/CreateEventReviewPublishPage";
 import OrganizerPlaceholderPage from "../pages/organizer/OrganizerPlaceholderPage";
+import OrganizerProfilePage from "../pages/organizer/OrganizerProfilePage";
 
 export default function AppRoutes() {
     return (
@@ -98,6 +99,7 @@ export default function AppRoutes() {
                     <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
                     <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />
                     <Route path="settings" element={<OrganizerPlaceholderPage title="Settings" />} />
+                    <Route path="profile" element={<OrganizerProfilePage />} />
                 </Route>
 
                 {/* Redirect alias: /organizer/create-event -> /organizer/events/create/step-1 */}
