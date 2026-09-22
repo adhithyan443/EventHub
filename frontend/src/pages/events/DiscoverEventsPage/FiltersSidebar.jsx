@@ -9,18 +9,23 @@ const filters = [
 
 export default function FiltersSidebar({ activeFilter, onSelectFilter, onReset }) {
   return (
-    <aside className="w-64 shrink-0 flex flex-col gap-4">
-      <div>
-        <h2 className="font-display text-xl font-semibold text-primary">Filters</h2>
-        <p className="text-sm text-ink/60">Narrow your search</p>
+    <aside className="w-full lg:w-64 shrink-0 flex flex-col gap-4">
+      <div className="flex items-center justify-between lg:block">
+        <div>
+          <h2 className="font-display text-xl font-semibold text-primary">Filters</h2>
+          <p className="text-sm text-ink/60">Narrow your search</p>
+        </div>
+        <button onClick={onReset} className="lg:hidden text-sm font-semibold text-primary">
+          Reset All
+        </button>
       </div>
 
-      <nav className="flex flex-col gap-1">
+      <nav className="flex flex-row flex-wrap sm:flex-nowrap lg:flex-col gap-1 overflow-x-auto scrollbar-none">
         {filters.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => onSelectFilter(key)}
-            className={`flex items-center gap-2 px-2 py-2 rounded-md text-sm font-semibold transition-colors ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-md text-sm font-semibold whitespace-nowrap transition-colors ${
               activeFilter === key
                 ? "bg-primary/10 text-primary"
                 : "text-ink/70 hover:bg-background"
@@ -32,7 +37,7 @@ export default function FiltersSidebar({ activeFilter, onSelectFilter, onReset }
         ))}
       </nav>
 
-      <div className="border-t border-border pt-4">
+      <div className="hidden lg:block border-t border-border pt-4">
         <button onClick={onReset} className="text-sm font-semibold text-primary">
           Reset All
         </button>

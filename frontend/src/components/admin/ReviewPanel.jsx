@@ -28,7 +28,7 @@ export default function ReviewPanel({
       {/* Slide Drawer */}
       <div className="relative w-full max-w-[480px] bg-white shadow-2xl flex flex-col h-full overflow-hidden z-10 animate-in slide-in-from-right duration-200">
         {/* Header */}
-        <div className="px-6 py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
+        <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <h2 className="text-[#141b2b] text-xl font-bold">
@@ -412,7 +412,7 @@ export default function ReviewPanel({
         </div>
 
         {/* Footer Actions */}
-        <div className="border-t border-[#dce2f7] px-6 py-4 flex items-center justify-between bg-white shrink-0">
+        <div className="border-t border-[#dce2f7] px-4 sm:px-6 py-3.5 sm:py-4 flex flex-wrap items-center justify-between gap-2 bg-white shrink-0">
           <button
             type="button"
             onClick={onClose}

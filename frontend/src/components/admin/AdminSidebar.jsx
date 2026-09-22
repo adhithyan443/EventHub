@@ -115,7 +115,7 @@ const navItems = [
   },
 ];
 
-export default function AdminSidebar() {
+export default function AdminSidebar({ className = "", isOpen = false, onClose }) {
   const location = useLocation();
   const navigate = useNavigate();
   const clearAuth = useAuthStore((state) => state.clearAuth);
@@ -136,77 +136,105 @@ export default function AdminSidebar() {
   }
 
   return (
-    <aside className="bg-[#f9f9ff] border-r border-[#bcc9c6] flex flex-col h-full w-[239px] shrink-0 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
-      {/* Brand Header */}
-      <div className="px-4 pt-4 pb-6">
-        <Link to="/admin/dashboard" className="block">
-          <div className="text-[#00685f] text-2xl font-bold leading-8 tracking-tight">
-            EventHub
-          </div>
-          <div className="text-[#3d4947] text-xs font-medium tracking-[0.6px] mt-1">
-            Admin Console
-          </div>
-        </Link>
-      </div>
+    <>
+      {/* Mobile Backdrop */}
+      {isOpen && (
+        <div
+          onClick={onClose}
+          className="fixed inset-0 bg-black/40 backdrop-blur-xs z-40 lg:hidden transition-opacity"
+          aria-hidden="true"
+        />
+      )}
 
-      {/* Nav items */}
-      <nav className="flex-1 overflow-y-auto px-2 flex flex-col gap-1 pb-4">
-        {navItems.map(({ path, label, icon }) => {
-          const active =
-            location.pathname === path ||
-            (path === "/admin/dashboard" && location.pathname === "/admin");
-
-          return (
-            <Link
-              key={path}
-              to={path}
-              className={`flex items-center gap-4 w-full px-4 py-2 rounded-lg text-left transition-colors ${
-                active
-                  ? "bg-[#dae2fd] text-[#00685f]"
-                  : "text-[#3d4947] hover:bg-[#eef0fb]"
-              }`}
+      <aside
+        className={`fixed inset-y-0 left-0 z-50 lg:static lg:z-auto bg-[#f9f9ff] border-r border-[#bcc9c6] flex flex-col h-full w-[239px] shrink-0 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] transition-transform duration-200 ease-in-out ${
+          isOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"
+        } ${className}`}
+      >
+        {/* Brand Header */}
+        <div className="px-4 pt-4 pb-6 flex items-center justify-between">
+          <Link to="/admin/dashboard" className="block" onClick={onClose}>
+            <div className="text-[#00685f] text-2xl font-bold leading-8 tracking-tight">
+              EventHub
+            </div>
+            <div className="text-[#3d4947] text-xs font-medium tracking-[0.6px] mt-1">
+              Admin Console
+            </div>
+          </Link>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="lg:hidden p-1.5 rounded-lg text-gray-500 hover:bg-gray-200/60 transition-colors"
+              aria-label="Close sidebar"
             >
-              <span className={active ? "text-[#00685f]" : "text-[#3d4947]"}>
-                {icon}
-              </span>
-              <span
-                className={`text-sm font-semibold ${
-                  active ? "text-[#00685f]" : "text-[#3d4947]"
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {/* Nav items */}
+        <nav className="flex-1 overflow-y-auto px-2 flex flex-col gap-1 pb-4">
+          {navItems.map(({ path, label, icon }) => {
+            const active =
+              location.pathname === path ||
+              (path === "/admin/dashboard" && location.pathname === "/admin");
+
+            return (
+              <Link
+                key={path}
+                to={path}
+                onClick={onClose}
+                className={`flex items-center gap-4 w-full px-4 py-2 rounded-lg text-left transition-colors ${
+                  active
+                    ? "bg-[#dae2fd] text-[#00685f]"
+                    : "text-[#3d4947] hover:bg-[#eef0fb]"
                 }`}
               >
-                {label}
-              </span>
-            </Link>
-          );
-        })}
-      </nav>
+                <span className={active ? "text-[#00685f]" : "text-[#3d4947]"}>
+                  {icon}
+                </span>
+                <span
+                  className={`text-sm font-semibold ${
+                    active ? "text-[#00685f]" : "text-[#3d4947]"
+                  }`}
+                >
+                  {label}
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
 
-      {/* Bottom Actions: Create Event & Logout */}
-      <div className="px-4 py-4 border-t border-[#dce2f7] flex flex-col gap-2">
-        <button
-          type="button"
-          className="bg-[#00685f] text-white text-sm font-semibold w-full flex items-center justify-center gap-2 py-2 rounded-lg hover:bg-[#005a52] transition-colors cursor-pointer"
-        >
-          <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
-            <path
-              d="M10.5 4.5H6.5V0.5H4.5V4.5H0.5V6.5H4.5V10.5H6.5V6.5H10.5V4.5Z"
-              fill="white"
-            />
-          </svg>
-          Create Event
-        </button>
+        {/* Bottom Actions: Create Event & Logout */}
+        <div className="px-4 py-4 border-t border-[#dce2f7] flex flex-col gap-2">
+          <button
+            type="button"
+            className="bg-[#00685f] text-white text-sm font-semibold w-full flex items-center justify-center gap-2 py-2 rounded-lg hover:bg-[#005a52] transition-colors cursor-pointer"
+          >
+            <svg width="11" height="11" viewBox="0 0 11 11" fill="none">
+              <path
+                d="M10.5 4.5H6.5V0.5H4.5V4.5H0.5V6.5H4.5V10.5H6.5V6.5H10.5V4.5Z"
+                fill="white"
+              />
+            </svg>
+            Create Event
+          </button>
 
-        <button
-          type="button"
-          onClick={handleLogout}
-          disabled={isLoggingOut}
-          className="w-full flex items-center justify-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 transition-colors cursor-pointer disabled:opacity-50"
-          title="Sign out of Admin Console"
-        >
-          <LogoutIcon className="w-4 h-4 text-[#ba1a1a]" />
-          <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
-        </button>
-      </div>
-    </aside>
+          <button
+            type="button"
+            onClick={handleLogout}
+            disabled={isLoggingOut}
+            className="w-full flex items-center justify-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 transition-colors cursor-pointer disabled:opacity-50"
+            title="Sign out of Admin Console"
+          >
+            <LogoutIcon className="w-4 h-4 text-[#ba1a1a]" />
+            <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
+          </button>
+        </div>
+      </aside>
+    </>
   );
 }

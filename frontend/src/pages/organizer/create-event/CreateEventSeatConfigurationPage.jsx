@@ -430,12 +430,12 @@ export default function CreateEventSeatConfigurationPage() {
 
   return (
     <div className="min-h-full flex flex-col justify-between">
-      <div className="p-8 max-w-6xl mx-auto w-full flex flex-col gap-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto w-full flex flex-col gap-6">
         <EventCreationStepper currentStep={4} />
 
         <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
           {/* Header */}
-          <div className="p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff] flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="p-4 sm:p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff] flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex flex-col">
               <h1 className="text-xl font-bold text-[#141b2b]">
                 Seat Configuration & Layout
@@ -447,7 +447,7 @@ export default function CreateEventSeatConfigurationPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3 bg-white border border-[#bcc9c6]/60 rounded-xl px-4 py-2 shadow-xs">
+            <div className="flex items-center gap-3 bg-white border border-[#bcc9c6]/60 rounded-xl px-4 py-2 shadow-xs self-start md:self-auto">
               <span className="text-xs text-[#565e74]">
                 Total Venue Capacity:
               </span>
@@ -460,7 +460,7 @@ export default function CreateEventSeatConfigurationPage() {
 
           {/* Validation Error */}
           {validationError && (
-            <div className="mx-6 mt-6 rounded-lg border border-[#ffdad6] bg-[#fff5f3] px-4 py-3">
+            <div className="mx-4 sm:mx-6 mt-4 sm:mt-6 rounded-lg border border-[#ffdad6] bg-[#fff5f3] px-4 py-3">
               <p className="text-sm font-medium text-[#ba1a1a]">
                 {validationError}
               </p>
@@ -468,7 +468,7 @@ export default function CreateEventSeatConfigurationPage() {
           )}
 
           {/* Seating Builder Grid */}
-          <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+          <div className="p-3 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-start">
             {/* Left Column: Visual Editor */}
             <div className="lg:col-span-8 bg-[#f9f9ff] border border-[#dce2f7] rounded-xl shadow-xs overflow-hidden flex flex-col">
               {/* Editor Toolbar / Legend */}
@@ -545,7 +545,7 @@ export default function CreateEventSeatConfigurationPage() {
               </div>
 
               {/* Editor Canvas */}
-              <div className="p-8 flex flex-col items-center min-h-[520px] overflow-auto">
+              <div className="p-3 sm:p-6 md:p-8 flex flex-col items-center min-h-[400px] sm:min-h-[520px] overflow-x-auto w-full max-w-full">
                 <div
                   className="flex flex-col items-center transition-transform origin-top w-full"
                   style={{

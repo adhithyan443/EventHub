@@ -70,7 +70,7 @@ export default function AdminOrganizersPage() {
       o.email.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleConfirmSuspend = (id, reason) => {
+  const handleConfirmSuspend = (id) => {
     setOrgs((prev) =>
       prev.map((o) => (o.id === id ? { ...o, status: "SUSPENDED" } : o))
     );
@@ -83,19 +83,19 @@ export default function AdminOrganizersPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-white w-full">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-[#dce2f7] flex items-center justify-between shrink-0">
+      <div className="px-4 sm:px-6 py-4 border-b border-[#dce2f7] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
         <div>
           <h1 className="text-[#141b2b] text-xl font-bold tracking-tight">
             Organizers
           </h1>
-          <p className="text-[#3d4947] text-sm">
+          <p className="text-[#3d4947] text-xs sm:text-sm">
             Manage approved organizers and monitor their event activity.
           </p>
         </div>
         <button
           type="button"
           onClick={() => alert("Exporting organizers list...")}
-          className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer"
+          className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer self-start sm:self-auto shrink-0"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
             <path
@@ -108,7 +108,7 @@ export default function AdminOrganizersPage() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-5">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
         {/* Metric Cards (1 x 4) */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
@@ -157,8 +157,8 @@ export default function AdminOrganizersPage() {
         {/* Organizers Table Card */}
         <div className="bg-white border border-[#bcc9c6] rounded-xl overflow-hidden shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
           {/* Table Search & Filter Bar */}
-          <div className="px-4 py-3 border-b border-[#dce2f7] flex items-center justify-between gap-3 bg-[#f1f3ff]">
-            <div className="relative flex-1 max-w-xs">
+          <div className="px-4 py-3 border-b border-[#dce2f7] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#f1f3ff]">
+            <div className="relative flex-1 max-w-full sm:max-w-xs">
               <svg
                 className="absolute left-3 top-1/2 -translate-y-1/2"
                 width="13"
@@ -173,87 +173,69 @@ export default function AdminOrganizersPage() {
               </svg>
               <input
                 type="text"
-                placeholder="Search by organizer name..."
+                placeholder="Search organizers..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="bg-white border border-[#bcc9c6] rounded-lg pl-9 pr-3 py-2 text-sm text-[#141b2b] placeholder:text-[#6d7a77] w-full focus:outline-none focus:ring-1 focus:ring-[#00685f]/40"
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="w-full bg-white border border-[#bcc9c6] rounded-lg pl-9 pr-3 py-1.5 text-sm text-[#141b2b] placeholder:text-[#6d7a77] focus:outline-none focus:ring-1 focus:ring-[#00685f]/40"
               />
             </div>
-            <button
-              type="button"
-              className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-3 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] cursor-pointer"
-            >
-              <svg width="13" height="9" viewBox="0 0 13 9" fill="none">
-                <path
-                  d="M0 0H13V1.5H0V0ZM2 3.75H11V5.25H2V3.75ZM4.5 7.5H8.5V9H4.5V7.5Z"
-                  fill="currentColor"
-                />
-              </svg>
-              More Filters
-            </button>
+            <span className="text-xs text-[#6d7a77] font-medium">
+              {filtered.length} organizers found
+            </span>
           </div>
 
           {/* Table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="bg-white border-b border-[rgba(188,201,198,0.5)]">
-                  <th className="px-4 py-3 text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Organizer
-                  </th>
-                  <th className="px-4 py-3 text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Organization
-                  </th>
-                  <th className="px-4 py-3 text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Events
-                  </th>
-                  <th className="px-4 py-3 text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Revenue
-                  </th>
-                  <th className="px-4 py-3 text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-4 py-3 text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Joined
-                  </th>
-                  <th className="px-4 py-3 text-right text-[#3d4947] text-xs font-medium uppercase tracking-wider">
-                    Actions
-                  </th>
+            <table className="w-full text-xs">
+              <thead className="bg-[#f9f9ff] text-[#6d7a77] uppercase tracking-wide border-b border-[#bcc9c6]">
+                <tr>
+                  <th className="text-left px-4 py-3 font-semibold">Organizer</th>
+                  <th className="text-left px-4 py-3 font-semibold">Email</th>
+                  <th className="text-left px-4 py-3 font-semibold">Organization</th>
+                  <th className="text-left px-4 py-3 font-semibold">Events</th>
+                  <th className="text-left px-4 py-3 font-semibold">Revenue</th>
+                  <th className="text-left px-4 py-3 font-semibold">Status</th>
+                  <th className="text-left px-4 py-3 font-semibold">Joined</th>
+                  <th className="text-left px-4 py-3 font-semibold">Actions</th>
                 </tr>
               </thead>
-              <tbody>
-                {filtered.map((org, i) => (
+              <tbody className="divide-y divide-[rgba(188,201,198,0.25)]">
+                {filtered.map((org) => (
                   <tr
                     key={org.id}
-                    className={`border-t border-[rgba(188,201,198,0.3)] ${
-                      i % 2 === 0 ? "bg-white" : "bg-[#fafbff]"
-                    } hover:bg-[#f1f3ff] transition-colors`}
+                    className="hover:bg-[#f9f9ff]/70 transition-colors"
                   >
-                    <td className="px-4 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-[#e8eaf6] flex items-center justify-center text-sm font-bold text-[#5c6bc0]">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-xs font-bold text-[#5c6bc0]">
                           {org.name[0]}
                         </div>
                         <div>
-                          <div className="text-[#141b2b] text-sm font-medium">
+                          <div className="font-semibold text-[#141b2b]">
                             {org.name}
                           </div>
-                          <div className="text-[#6d7a77] text-xs">{org.email}</div>
+                          <div className="text-[10px] text-[#6d7a77] font-mono">
+                            {org.id}
+                          </div>
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-4 text-[#3d4947] text-sm font-medium">
+                    <td className="px-4 py-3 text-[#3d4947]">{org.email}</td>
+                    <td className="px-4 py-3 font-medium text-[#141b2b]">
                       {org.org}
                     </td>
-                    <td className="px-4 py-4 text-[#141b2b] text-sm font-semibold">
+                    <td className="px-4 py-3 text-[#141b2b] font-semibold">
                       {org.events}
                     </td>
-                    <td className="px-4 py-4 text-[#141b2b] text-sm font-semibold">
+                    <td className="px-4 py-3 text-[#141b2b] font-semibold">
                       {org.revenue}
                     </td>
-                    <td className="px-4 py-4">
+                    <td className="px-4 py-3">
                       <span
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
                           org.status === "ACTIVE"
                             ? "bg-[#dcfce7] text-[#166534]"
                             : "bg-[#ffdad6] text-[#93000a]"
@@ -262,10 +244,8 @@ export default function AdminOrganizersPage() {
                         {org.status}
                       </span>
                     </td>
-                    <td className="px-4 py-4 text-[#3d4947] text-sm">
-                      {org.joined}
-                    </td>
-                    <td className="px-4 py-4 text-right">
+                    <td className="px-4 py-3 text-[#6d7a77]">{org.joined}</td>
+                    <td className="px-4 py-3">
                       <button
                         type="button"
                         onClick={() => setActiveDrawerOrg(org)}
@@ -281,8 +261,8 @@ export default function AdminOrganizersPage() {
           </div>
 
           {/* Pagination Footer */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-[rgba(188,201,198,0.3)] bg-white">
-            <span className="text-[#3d4947] text-sm">
+          <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-3 border-t border-[rgba(188,201,198,0.3)] bg-white gap-3">
+            <span className="text-[#3d4947] text-sm text-center sm:text-left">
               Showing 1 to {filtered.length} of 428 organizers
             </span>
             <div className="flex items-center gap-1">

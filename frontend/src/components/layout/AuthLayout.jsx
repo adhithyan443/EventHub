@@ -21,7 +21,7 @@ export default function AuthLayout({ children, title, description, heroImage = d
         </div>
       </div>
 
-      <div className="flex-1 flex items-center justify-center bg-background p-8">
+      <div className="flex-1 flex items-center justify-center bg-background p-4 sm:p-6 md:p-8">
         {children}
       </div>
     </div>

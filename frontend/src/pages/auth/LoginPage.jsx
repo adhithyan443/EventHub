@@ -126,7 +126,7 @@ export default function LoginPage() {
             title={<>Discover.<br />Book.<br />Experience.</>}
             description="Find amazing events, book your tickets, and create unforgettable experiences with EventHub."
         >
-            <div className="bg-white rounded-lg shadow p-8 w-full max-w-md flex flex-col gap-6">
+            <div className="bg-white rounded-lg shadow p-5 sm:p-8 w-full max-w-md flex flex-col gap-6">
                 <div>
                     <h2 className="font-display text-2xl font-semibold text-ink">
                         Welcome Back

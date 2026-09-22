@@ -868,11 +868,11 @@ export default function CreateEventReviewPublishPage() {
 
   return (
     <div className="min-h-full flex flex-col justify-between">
-      <div className="p-8 max-w-5xl mx-auto w-full flex flex-col gap-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-5xl mx-auto w-full flex flex-col gap-6">
         <EventCreationStepper currentStep={5} />
 
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold text-[#141b2b]">
+          <h1 className="text-xl sm:text-2xl font-bold text-[#141b2b]">
             Review & Publish
           </h1>
 
@@ -889,7 +889,7 @@ export default function CreateEventReviewPublishPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8">
           <div className="lg:col-span-8 flex flex-col gap-6">
             <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl overflow-hidden shadow-xs">
               <div className="h-56 bg-gray-100 relative">

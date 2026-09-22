@@ -119,7 +119,7 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
         {/* 2x2 Review Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {/* Card 1: Business Information */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 sm:p-6 flex flex-col justify-between">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 sm:p-6 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
                 <div className="flex items-center gap-2 text-primary">
@@ -158,7 +158,7 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
           </div>
 
           {/* Card 2: Verification Details */}
-          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-5 sm:p-6 flex flex-col justify-between">
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 sm:p-6 flex flex-col justify-between">
             <div>
               <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
                 <div className="flex items-center gap-2 text-primary">

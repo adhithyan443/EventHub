@@ -41,14 +41,14 @@ export default function CreateEventStep3TicketSelectionPage() {
 
   return (
     <div className="min-h-full flex flex-col justify-between">
-      <div className="p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
         {/* Stepper Progress Bar */}
         <EventCreationStepper currentStep={3} />
 
         {/* Card Container */}
         <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
           {/* Header */}
-          <div className="p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff]">
+          <div className="p-4 sm:p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff]">
             <h1 className="text-xl font-bold text-[#141b2b]">
               How should attendees select tickets?
             </h1>
@@ -57,7 +57,7 @@ export default function CreateEventStep3TicketSelectionPage() {
             </p>
           </div>
 
-          <div className="p-8 flex flex-col gap-6">
+          <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6">
             {isOnline && (
               <div className="flex items-center gap-3 p-4 rounded-xl bg-[#00685f]/5 border border-[#00685f]/20 text-xs text-[#00685f]">
                 <span className="text-base">ℹ️</span>
@@ -71,7 +71,7 @@ export default function CreateEventStep3TicketSelectionPage() {
               {/* Option 1: General Admission */}
               <div
                 onClick={() => setTicketMode(TICKET_MODES.GENERAL)}
-                className={`rounded-xl p-6 border-2 transition-all cursor-pointer flex flex-col justify-between gap-4 ${ticketMode === TICKET_MODES.GENERAL
+                className={`rounded-xl p-4 sm:p-6 border-2 transition-all cursor-pointer flex flex-col justify-between gap-4 ${ticketMode === TICKET_MODES.GENERAL
                   ? "bg-[#00685f]/5 border-[#00685f] shadow-md ring-1 ring-[#00685f]/20"
                   : "bg-white border-[#bcc9c6] hover:border-gray-400 hover:shadow-xs"
                   }`}
@@ -123,7 +123,7 @@ export default function CreateEventStep3TicketSelectionPage() {
               {/* Option 2: Reserved Seating */}
               <div
                 onClick={!isOnline ? () => setTicketMode(TICKET_MODES.SEATED) : undefined}
-                className={`rounded-xl p-6 border-2 transition-all flex flex-col justify-between gap-4 ${isOnline
+                className={`rounded-xl p-4 sm:p-6 border-2 transition-all flex flex-col justify-between gap-4 ${isOnline
                   ? "bg-gray-50/80 border-gray-200 opacity-60 cursor-not-allowed"
                   : ticketMode === TICKET_MODES.SEATED
                     ? "bg-[#00685f]/5 border-[#00685f] shadow-md ring-1 ring-[#00685f]/20 cursor-pointer"

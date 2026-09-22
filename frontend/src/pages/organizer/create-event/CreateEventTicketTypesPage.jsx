@@ -455,7 +455,7 @@ export default function CreateEventTicketTypesPage() {
 
   return (
     <div className="min-h-full flex flex-col justify-between">
-      <div className="p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
         {/* Stepper Progress Bar */}
         <EventCreationStepper currentStep={4} />
 
@@ -470,7 +470,7 @@ export default function CreateEventTicketTypesPage() {
 
         {/* Card 1: Ticket Types */}
         <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
-          <div className="p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff] flex items-center justify-between">
+          <div className="p-4 sm:p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex flex-col">
               <h1 className="text-xl font-bold text-[#141b2b]">
                 Ticket Types
@@ -485,7 +485,7 @@ export default function CreateEventTicketTypesPage() {
             <button
               type="button"
               onClick={openAddTicketModal}
-              className="flex items-center gap-2 bg-[#00685f] hover:bg-[#005550] text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-colors cursor-pointer"
+              className="flex items-center gap-2 bg-[#00685f] hover:bg-[#005550] text-white text-xs font-semibold px-4 py-2.5 rounded-lg shadow-sm transition-colors cursor-pointer self-start sm:self-auto shrink-0"
             >
               <svg
                 className="size-4"
@@ -505,7 +505,7 @@ export default function CreateEventTicketTypesPage() {
             </button>
           </div>
 
-          <div className="p-6 flex flex-col gap-4">
+          <div className="p-4 sm:p-6 flex flex-col gap-4">
             {ticketTypes.length === 0 ? (
               <div className="p-8 text-center text-xs text-[#565e74] border border-dashed border-[#bcc9c6] rounded-xl">
                 No ticket types created yet. Click &quot;Add Ticket Type&quot;

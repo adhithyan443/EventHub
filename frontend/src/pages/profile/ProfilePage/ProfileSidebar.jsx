@@ -13,8 +13,8 @@ export default function ProfileSidebar({ user }) {
     const navigate = useNavigate();
 
     return (
-        <aside className="w-64 shrink-0 bg-[#f0f4fa] border border-slate-200/70 rounded-2xl p-5 flex flex-col justify-between self-stretch">
-            <div className="flex flex-col gap-6">
+        <aside className="w-full lg:w-64 shrink-0 bg-[#f0f4fa] border border-slate-200/70 rounded-2xl p-4 sm:p-5 flex flex-col justify-between self-stretch gap-6">
+            <div className="flex flex-col gap-4 sm:gap-6">
                 <div className="flex items-center gap-3">
                     <img
                         src={avatarUrl}
@@ -27,27 +27,27 @@ export default function ProfileSidebar({ user }) {
                     </div>
                 </div>
 
-                <nav className="flex flex-col gap-1.5">
+                <nav className="grid grid-cols-2 sm:grid-cols-4 lg:flex lg:flex-col gap-1.5">
                     {navItems.map(({ label, to, icon: Icon }) => (
                         <NavLink
                             key={to}
                             to={to}
                             end={to === "/profile"}
                             className={({ isActive }) =>
-                                `flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${isActive
+                                `flex items-center gap-2 sm:gap-3 px-3 py-2 sm:px-3.5 sm:py-2.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${isActive
                                     ? "bg-primary text-white font-semibold shadow-sm"
                                     : "text-slate-600 hover:bg-white/80 hover:text-slate-900"
                                 }`
                             }
                         >
                             <Icon />
-                            {label}
+                            <span>{label}</span>
                         </NavLink>
                     ))}
                 </nav>
             </div>
 
-            <div className="pt-8">
+            <div className="pt-2 lg:pt-8">
                 {user?.role === "ORGANIZER" ? (
                     <div className="w-full py-2.5 px-3 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold text-center border border-emerald-200 flex items-center justify-center gap-1.5 shadow-xs">
                         <span className="w-2 h-2 rounded-full bg-emerald-500" />

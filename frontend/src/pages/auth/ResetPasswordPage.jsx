@@ -99,7 +99,7 @@ export default function ResetPasswordPage() {
             }
             description="Create a new password for your EventHub account."
         >
-            <div className="bg-white rounded-lg shadow p-8 w-full max-w-md flex flex-col gap-6">
+            <div className="bg-white rounded-lg shadow p-5 sm:p-8 w-full max-w-md flex flex-col gap-6">
 
                 <div>
                     <h2 className="font-display text-2xl font-semibold text-ink">

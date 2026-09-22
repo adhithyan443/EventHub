@@ -1,5 +1,4 @@
 import { useState } from "react";
-import Input from "../../../components/ui/Input";
 
 export default function PersonalInfoCard({ user }) {
     const [form, setForm] = useState({

@@ -304,7 +304,7 @@ export default function AdminApplicationsPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-white w-full">
       {/* Page Header */}
-      <div className="px-6 py-4 border-b border-[#dce2f7] flex items-center justify-between shrink-0">
+      <div className="px-4 sm:px-6 py-4 border-b border-[#dce2f7] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
         <div>
           <h1 className="text-[#141b2b] text-xl font-bold tracking-tight">
             Organizer Applications
@@ -320,7 +320,7 @@ export default function AdminApplicationsPage() {
           onClick={() =>
             alert("Exporting applications data...")
           }
-          className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer"
+          className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer self-start sm:self-auto shrink-0"
         >
           <svg
             width="12"
@@ -339,7 +339,7 @@ export default function AdminApplicationsPage() {
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-5">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
         {/* API Error */}
         {error && (
           <div className="flex items-center justify-between rounded-lg border border-[#ffdad6] bg-[#fff5f4] px-4 py-3">
@@ -679,8 +679,8 @@ export default function AdminApplicationsPage() {
           </div>
 
           {/* Pagination Footer */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-[rgba(188,201,198,0.3)] bg-white">
-            <span className="text-[#3d4947] text-sm">
+          <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-3 border-t border-[rgba(188,201,198,0.3)] bg-white gap-3">
+            <span className="text-[#3d4947] text-sm text-center sm:text-left">
               Showing{" "}
               {total === 0
                 ? 0

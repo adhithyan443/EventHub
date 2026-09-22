@@ -237,14 +237,14 @@ export default function CreateEventStep1BasicInfoPage() {
 
   return (
     <div className="min-h-full flex flex-col justify-between">
-      <div className="p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
+      <div className="p-4 sm:p-6 lg:p-8 max-w-4xl mx-auto w-full flex flex-col gap-6">
         {/* Stepper Progress Bar */}
         <EventCreationStepper currentStep={1} />
 
         {/* Form Container Card */}
         <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
           {/* Header */}
-          <div className="p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff]">
+          <div className="p-4 sm:p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff]">
             <h1 className="text-xl font-bold text-[#141b2b]">
               Basic Event Information
             </h1>
@@ -255,7 +255,7 @@ export default function CreateEventStep1BasicInfoPage() {
             </p>
           </div>
 
-          <div className="p-8 flex flex-col gap-8">
+          <div className="p-4 sm:p-6 md:p-8 flex flex-col gap-6 sm:gap-8">
             {/* Validation Error */}
             {validationError && (
               <div className="rounded-lg border border-[#ba1a1a]/30 bg-[#ba1a1a]/5 px-4 py-3 text-sm text-[#ba1a1a]">
