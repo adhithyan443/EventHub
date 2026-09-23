@@ -22,6 +22,11 @@ type EventModel struct {
 	Language       string `gorm:"type:varchar(100)"`
 	AgeRestriction int    `gorm:"not null;default:0"`
 
+	Visibility          string `gorm:"type:varchar(20)"`
+	Highlights          string `gorm:"type:text"`
+	Rules               string `gorm:"type:text"`
+	AttendeeInformation string `gorm:"type:text"`
+
 	Status string `gorm:"type:varchar(30);not null;index"`
 
 	CreatedAt time.Time `gorm:"not null;autoCreateTime"`
