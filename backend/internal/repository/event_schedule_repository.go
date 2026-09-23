@@ -77,6 +77,54 @@ func (r *EventScheduleRepository) FindByEventID(
 	return toEventScheduleDomain(&scheduleModel), nil
 }
 
+func (r *EventScheduleRepository) Update(
+	schedule *domain.EventSchedule,
+) error {
+	if schedule == nil {
+		return errors.New("event schedule cannot be nil")
+	}
+
+	scheduleModel := toEventScheduleModel(schedule)
+
+	result := r.db.
+		Model(&models.EventScheduleModel{}).
+		Where("event_id = ?", schedule.EventID).
+		Updates(map[string]interface{}{
+			"event_date": scheduleModel.EventDate,
+			"start_time": scheduleModel.StartTime,
+			"end_time":   scheduleModel.EndTime,
+			"is_all_day": scheduleModel.IsAllDay,
+			"updated_at": time.Now(),
+		})
+
+	if result.Error != nil {
+		r.logger.Error(
+			"event_schedule_update_failed",
+			"event_id", schedule.EventID,
+			"error", result.Error,
+		)
+
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_schedule_update_not_found",
+			"event_id", schedule.EventID,
+		)
+
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info(
+		"event_schedule_updated",
+		"event_id", schedule.EventID,
+		"schedule_id", schedule.ID,
+	)
+
+	return nil
+}
+
 func toEventScheduleModel(
 	schedule *domain.EventSchedule,
 ) *models.EventScheduleModel {

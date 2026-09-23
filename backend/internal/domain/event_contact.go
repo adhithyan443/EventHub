@@ -19,4 +19,6 @@ type EventContact struct {
 type EventContactRepository interface {
 	Create(contact *EventContact) error
 	FindByEventID(eventID uuid.UUID) (*EventContact, error)
+	Update(contact *EventContact) error
+	DeleteByEventID(eventID uuid.UUID) error
 }

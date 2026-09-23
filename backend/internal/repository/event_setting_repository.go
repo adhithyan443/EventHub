@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -74,6 +75,54 @@ func (r *EventSettingRepository) FindByEventID(
 	}
 
 	return toEventSettingDomain(&settingModel), nil
+}
+
+func (r *EventSettingRepository) Update(
+	setting *domain.EventSetting,
+) error {
+	if setting == nil {
+		return errors.New("event setting cannot be nil")
+	}
+
+	settingModel := toEventSettingModel(setting)
+
+	result := r.db.
+		Model(&models.EventSettingModel{}).
+		Where("event_id = ?", setting.EventID).
+		Updates(map[string]interface{}{
+			"seat_layout_type":       settingModel.SeatLayoutType,
+			"booking_limit_per_user": settingModel.BookingLimitPerUser,
+			"sales_start_date":       settingModel.SalesStartDate,
+			"sales_end_date":         settingModel.SalesEndDate,
+			"updated_at":             time.Now(),
+		})
+
+	if result.Error != nil {
+		r.logger.Error(
+			"event_setting_update_failed",
+			"event_id", setting.EventID,
+			"error", result.Error,
+		)
+
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_setting_update_not_found",
+			"event_id", setting.EventID,
+		)
+
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info(
+		"event_setting_updated",
+		"event_id", setting.EventID,
+		"setting_id", setting.ID,
+	)
+
+	return nil
 }
 
 func toEventSettingModel(

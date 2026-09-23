@@ -73,18 +73,36 @@ type CreateEventRequest struct {
 }
 
 type UpdateEventRequest struct {
-	CategoryID          uuid.UUID  `json:"category_id"`
-	VenueID             *uuid.UUID `json:"venue_id"`
-	EventType           string     `json:"event_type"`
-	OnlineURL           string     `json:"online_url"`
-	Title               string     `json:"title"`
-	Description         string     `json:"description"`
-	Language            string     `json:"language"`
-	AgeRestriction      int        `json:"age_restriction"`
-	Visibility          string     `json:"visibility"`
-	Highlights          string     `json:"highlights"`
-	Rules               string     `json:"rules"`
-	AttendeeInformation string     `json:"attendee_information"`
+	CategoryID          uuid.UUID    `json:"category_id"`
+	VenueID             *uuid.UUID   `json:"venue_id"`
+	Venue               VenueRequest `json:"venue"`
+	EventType           string       `json:"event_type"`
+	OnlineURL           string       `json:"online_url"`
+	Title               string       `json:"title"`
+	Description         string       `json:"description"`
+	Language            string       `json:"language"`
+	AgeRestriction      int          `json:"age_restriction"`
+	Visibility          string       `json:"visibility"`
+	Highlights          string       `json:"highlights"`
+	Rules               string       `json:"rules"`
+	AttendeeInformation string       `json:"attendee_information"`
+
+	EventDate string `json:"event_date"`
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+	IsAllDay  bool   `json:"is_all_day"`
+
+	SeatLayoutType      string `json:"seat_layout_type"`
+	BookingLimitPerUser int    `json:"booking_limit_per_user"`
+	SalesStartDate      string `json:"sales_start_date"`
+	SalesEndDate        string `json:"sales_end_date"`
+
+	CancellationAllowed       bool   `json:"cancellation_allowed"`
+	CancellationDeadlineHours int    `json:"cancellation_deadline_hours"`
+	RefundPolicy              string `json:"refund_policy"`
+	RefundPercentage          int    `json:"refund_percentage"`
+
+	Contact EventContactRequest `json:"contact"`
 }
 
 type EventContactRequest struct {
@@ -534,13 +552,114 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 		return
 	}
 
+	eventDate, err := parseDate(req.EventDate)
+	if err != nil {
+		h.logger.Warn(
+			"event_update_invalid_event_date",
+			"user_id", userID,
+			"event_date", req.EventDate,
+			"error", err,
+		)
+
+		c.Error(
+			appErrors.NewValidationError(
+				"invalid event date",
+			),
+		)
+		return
+	}
+
+	salesStartDate, err := parseOptionalDate(req.SalesStartDate)
+	if err != nil {
+		h.logger.Warn(
+			"event_update_invalid_sales_start_date",
+			"user_id", userID,
+			"sales_start_date", req.SalesStartDate,
+			"error", err,
+		)
+
+		c.Error(
+			appErrors.NewValidationError(
+				"invalid sales start date",
+			),
+		)
+		return
+	}
+
+	salesEndDate, err := parseOptionalDate(req.SalesEndDate)
+	if err != nil {
+		h.logger.Warn(
+			"event_update_invalid_sales_end_date",
+			"user_id", userID,
+			"sales_end_date", req.SalesEndDate,
+			"error", err,
+		)
+
+		c.Error(
+			appErrors.NewValidationError(
+				"invalid sales end date",
+			),
+		)
+		return
+	}
+
+	var startTime time.Time
+	var endTime time.Time
+
+	if !req.IsAllDay {
+		startTime, err = parseTime(req.StartTime)
+		if err != nil {
+			h.logger.Warn(
+				"event_update_invalid_start_time",
+				"user_id", userID,
+				"start_time", req.StartTime,
+				"error", err,
+			)
+
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid start time",
+				),
+			)
+			return
+		}
+
+		endTime, err = parseTime(req.EndTime)
+		if err != nil {
+			h.logger.Warn(
+				"event_update_invalid_end_time",
+				"user_id", userID,
+				"end_time", req.EndTime,
+				"error", err,
+			)
+
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid end time",
+				),
+			)
+			return
+		}
+	}
+
 	output, err := h.eventUsecase.UpdateEvent(
 		c.Request.Context(),
 		eventUsecase.UpdateEventInput{
-			UserID:              userID,
-			EventID:             eventID,
-			CategoryID:          req.CategoryID,
-			VenueID:             req.VenueID,
+			UserID:     userID,
+			EventID:    eventID,
+			CategoryID: req.CategoryID,
+			VenueID:    req.VenueID,
+			Venue: eventUsecase.VenueInput{
+				GooglePlaceID: req.Venue.GooglePlaceID,
+				Name:          req.Venue.Name,
+				Address:       req.Venue.Address,
+				City:          req.Venue.City,
+				State:         req.Venue.State,
+				Country:       req.Venue.Country,
+				PostalCode:    req.Venue.PostalCode,
+				Latitude:      req.Venue.Latitude,
+				Longitude:     req.Venue.Longitude,
+			},
 			EventType:           req.EventType,
 			OnlineURL:           req.OnlineURL,
 			Title:               req.Title,
@@ -551,6 +670,27 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 			Highlights:          req.Highlights,
 			Rules:               req.Rules,
 			AttendeeInformation: req.AttendeeInformation,
+
+			EventDate: eventDate,
+			StartTime: startTime,
+			EndTime:   endTime,
+			IsAllDay:  req.IsAllDay,
+
+			SeatLayoutType:      req.SeatLayoutType,
+			BookingLimitPerUser: req.BookingLimitPerUser,
+			SalesStartDate:      salesStartDate,
+			SalesEndDate:        salesEndDate,
+
+			CancellationAllowed:       req.CancellationAllowed,
+			CancellationDeadlineHours: req.CancellationDeadlineHours,
+			RefundPolicy:              req.RefundPolicy,
+			RefundPercentage:          req.RefundPercentage,
+
+			Contact: eventUsecase.EventContactInput{
+				Name:  req.Contact.Name,
+				Phone: req.Contact.Phone,
+				Email: req.Contact.Email,
+			},
 		},
 	)
 	if err != nil {
@@ -569,6 +709,36 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 			c.Error(
 				appErrors.NewValidationError(
 					"invalid event data",
+				),
+			)
+
+		case errors.Is(
+			err,
+			eventUsecase.ErrInvalidEventSchedule,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event schedule",
+				),
+			)
+
+		case errors.Is(
+			err,
+			eventUsecase.ErrInvalidEventSettings,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event settings",
+				),
+			)
+
+		case errors.Is(
+			err,
+			eventUsecase.ErrInvalidCancellation,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid cancellation settings",
 				),
 			)
 
@@ -612,6 +782,16 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 				),
 			)
 
+		case errors.Is(
+			err,
+			domain.ErrVenueNotFound,
+		):
+			c.Error(
+				appErrors.NewNotFoundError(
+					"venue not found",
+				),
+			)
+
 		default:
 			c.Error(err)
 		}
@@ -629,10 +809,15 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"event": output.Event,
+			"event":        output.Event,
+			"schedule":     output.Schedule,
+			"setting":      output.Setting,
+			"cancellation": output.Cancellation,
+			"contact":      output.Contact,
 		},
 	})
 }
+
 func detectBannerContentType(file io.ReadSeeker) (string, error) {
 	buffer := make([]byte, 512)
 
@@ -662,9 +847,59 @@ func parseOptionalDate(value string) (*time.Time, error) {
 	}
 
 	parsed, err := time.Parse("2006-01-02", value)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return &parsed, nil
 	}
 
-	return &parsed, nil
+	parsed, err = time.Parse(time.RFC3339, value)
+	if err == nil {
+		return &parsed, nil
+	}
+
+	return nil, err
+}
+
+func parseDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+
+	if value == "" {
+		return time.Time{}, errors.New("date is required")
+	}
+
+	parsed, err := time.Parse("2006-01-02", value)
+	if err == nil {
+		return parsed, nil
+	}
+
+	parsed, err = time.Parse(time.RFC3339, value)
+	if err == nil {
+		return parsed, nil
+	}
+
+	return time.Time{}, err
+}
+
+func parseTime(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+
+	if value == "" {
+		return time.Time{}, errors.New("time is required")
+	}
+
+	parsed, err := time.Parse("15:04", value)
+	if err == nil {
+		return parsed, nil
+	}
+
+	parsed, err = time.Parse("15:04:05", value)
+	if err == nil {
+		return parsed, nil
+	}
+
+	parsed, err = time.Parse(time.RFC3339, value)
+	if err == nil {
+		return parsed, nil
+	}
+
+	return time.Time{}, err
 }

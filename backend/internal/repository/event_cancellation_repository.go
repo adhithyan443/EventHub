@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -74,6 +75,54 @@ func (r *EventCancellationRepository) FindByEventID(
 	}
 
 	return toEventCancellationDomain(&cancellationModel), nil
+}
+
+func (r *EventCancellationRepository) Update(
+	cancellation *domain.EventCancellation,
+) error {
+	if cancellation == nil {
+		return errors.New("event cancellation cannot be nil")
+	}
+
+	cancellationModel := toEventCancellationModel(cancellation)
+
+	result := r.db.
+		Model(&models.EventCancellationModel{}).
+		Where("event_id = ?", cancellation.EventID).
+		Updates(map[string]interface{}{
+			"cancellation_allowed":        cancellationModel.CancellationAllowed,
+			"cancellation_deadline_hours": cancellationModel.CancellationDeadlineHours,
+			"refund_policy":               cancellationModel.RefundPolicy,
+			"refund_percentage":           cancellationModel.RefundPercentage,
+			"updated_at":                  time.Now(),
+		})
+
+	if result.Error != nil {
+		r.logger.Error(
+			"event_cancellation_update_failed",
+			"event_id", cancellation.EventID,
+			"error", result.Error,
+		)
+
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_cancellation_update_not_found",
+			"event_id", cancellation.EventID,
+		)
+
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info(
+		"event_cancellation_updated",
+		"event_id", cancellation.EventID,
+		"cancellation_id", cancellation.ID,
+	)
+
+	return nil
 }
 
 func toEventCancellationModel(

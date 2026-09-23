@@ -86,14 +86,17 @@ type EventRepository interface {
 type EventScheduleRepository interface {
 	Create(schedule *EventSchedule) error
 	FindByEventID(eventID uuid.UUID) (*EventSchedule, error)
+	Update(schedule *EventSchedule) error
 }
 
 type EventSettingRepository interface {
 	Create(setting *EventSetting) error
 	FindByEventID(eventID uuid.UUID) (*EventSetting, error)
+	Update(setting *EventSetting) error
 }
 
 type EventCancellationRepository interface {
 	Create(cancellation *EventCancellation) error
 	FindByEventID(eventID uuid.UUID) (*EventCancellation, error)
+	Update(cancellation *EventCancellation) error
 }
