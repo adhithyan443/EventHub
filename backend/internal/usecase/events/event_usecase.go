@@ -47,9 +47,16 @@ func NewEventUsecase(
 	}
 }
 
+type EventContactInput struct {
+	Name  string
+	Phone string
+	Email string
+}
+
 type CreateEventInput struct {
 	UserID     uuid.UUID
 	CategoryID uuid.UUID
+	Contact    EventContactInput
 
 	EventType string
 	OnlineURL string
@@ -60,6 +67,11 @@ type CreateEventInput struct {
 	Language       string
 	AgeRestriction int
 
+	Visibility          string
+	Highlights          string
+	Rules               string
+	AttendeeInformation string
+
 	EventDate time.Time
 	StartTime time.Time
 	EndTime   time.Time
@@ -67,9 +79,13 @@ type CreateEventInput struct {
 
 	SeatLayoutType      string
 	BookingLimitPerUser int
+	SalesStartDate      *time.Time
+	SalesEndDate        *time.Time
 
 	CancellationAllowed       bool
 	CancellationDeadlineHours int
+	RefundPolicy              string
+	RefundPercentage          int
 
 	Venue VenueInput
 
@@ -95,6 +111,7 @@ type CreateEventOutput struct {
 	Schedule     *domain.EventSchedule
 	Setting      *domain.EventSetting
 	Cancellation *domain.EventCancellation
+	Contact      *domain.EventContact
 }
 
 func (u *EventUsecase) CreateEvent(
@@ -328,18 +345,22 @@ func (u *EventUsecase) CreateEvent(
 
 			// Create Event with pre-generated eventID and objectKey in BannerURL.
 			event := &domain.Event{
-				ID:             eventID,
-				OrganizerID:    organizer.ID,
-				CategoryID:     input.CategoryID,
-				VenueID:        venueID,
-				EventType:      input.EventType,
-				OnlineURL:      strings.TrimSpace(input.OnlineURL),
-				Title:          strings.TrimSpace(input.Title),
-				Description:    strings.TrimSpace(input.Description),
-				BannerURL:      objectKey,
-				Language:       strings.TrimSpace(input.Language),
-				AgeRestriction: input.AgeRestriction,
-				Status:         domain.EventStatusDraft,
+				ID:                  eventID,
+				OrganizerID:         organizer.ID,
+				CategoryID:          input.CategoryID,
+				VenueID:             venueID,
+				EventType:           input.EventType,
+				OnlineURL:           strings.TrimSpace(input.OnlineURL),
+				Title:               strings.TrimSpace(input.Title),
+				Description:         strings.TrimSpace(input.Description),
+				BannerURL:           objectKey,
+				Language:            strings.TrimSpace(input.Language),
+				AgeRestriction:      input.AgeRestriction,
+				Visibility:          strings.TrimSpace(input.Visibility),
+				Highlights:          strings.TrimSpace(input.Highlights),
+				Rules:               strings.TrimSpace(input.Rules),
+				AttendeeInformation: strings.TrimSpace(input.AttendeeInformation),
+				Status:              domain.EventStatusDraft,
 			}
 
 			if err := tx.EventRepository().Create(event); err != nil {
@@ -380,6 +401,8 @@ func (u *EventUsecase) CreateEvent(
 				EventID:             eventID,
 				SeatLayoutType:      input.SeatLayoutType,
 				BookingLimitPerUser: input.BookingLimitPerUser,
+				SalesStartDate:      input.SalesStartDate,
+				SalesEndDate:        input.SalesEndDate,
 			}
 
 			if err := tx.EventSettingRepository().Create(setting); err != nil {
@@ -395,6 +418,8 @@ func (u *EventUsecase) CreateEvent(
 			cancellation := &domain.EventCancellation{
 				ID:                        uuid.New(),
 				EventID:                   eventID,
+				RefundPolicy:              input.RefundPolicy,
+				RefundPercentage:          input.RefundPercentage,
 				CancellationAllowed:       input.CancellationAllowed,
 				CancellationDeadlineHours: input.CancellationDeadlineHours,
 			}
@@ -408,11 +433,44 @@ func (u *EventUsecase) CreateEvent(
 				return err
 			}
 
+			// Contact information is optional. Only create a database row
+			// when at least one contact field is supplied.
+			var contact *domain.EventContact
+
+			contactName := strings.TrimSpace(input.Contact.Name)
+			contactPhone := strings.TrimSpace(input.Contact.Phone)
+			contactEmail := strings.TrimSpace(input.Contact.Email)
+
+			if contactName != "" || contactPhone != "" || contactEmail != "" {
+				contact = &domain.EventContact{
+					ID:      uuid.New(),
+					EventID: eventID,
+					Name:    contactName,
+					Phone:   contactPhone,
+					Email:   contactEmail,
+				}
+
+				if err := tx.EventContactRepository().Create(contact); err != nil {
+					u.logger.Error(
+						"event_contact_create_failed",
+						"event_id", eventID,
+						"error", err,
+					)
+					return err
+				}
+
+				u.logger.Info(
+					"event_contact_created",
+					"event_id", eventID,
+				)
+			}
+
 			output = CreateEventOutput{
 				Event:        event,
 				Schedule:     schedule,
 				Setting:      setting,
 				Cancellation: cancellation,
+				Contact:      contact,
 			}
 
 			return nil
@@ -560,6 +618,10 @@ func validateCreateEventInput(input CreateEventInput) error {
 		}
 	}
 
+	if err := validateSalesWindow(input); err != nil {
+		return ErrInvalidEventSettings
+	}
+
 	if input.SeatLayoutType != SeatLayoutTypeSeated &&
 		input.SeatLayoutType != SeatLayoutTypeGeneral {
 		return ErrInvalidEventSettings
@@ -583,6 +645,43 @@ func validateCreateEventInput(input CreateEventInput) error {
 	if !input.CancellationAllowed &&
 		input.CancellationDeadlineHours != 0 {
 		return ErrInvalidCancellation
+	}
+
+	if err := validateEventContact(input.Contact); err != nil {
+		return ErrInvalidEventInput
+	}
+
+	return nil
+}
+
+func validateEventContact(input EventContactInput) error {
+	name := strings.TrimSpace(input.Name)
+	phone := strings.TrimSpace(input.Phone)
+	email := strings.TrimSpace(input.Email)
+
+	// Contact information is optional, but must be complete when provided.
+	if name == "" && phone == "" && email == "" {
+		return nil
+	}
+
+	if name == "" || phone == "" || email == "" {
+		return errors.New("event contact information must be complete")
+	}
+
+	if len(name) > 100 {
+		return errors.New("event contact name is too long")
+	}
+
+	if len(phone) > 20 {
+		return errors.New("event contact phone is too long")
+	}
+
+	if len(email) > 255 {
+		return errors.New("event contact email is too long")
+	}
+
+	if !strings.Contains(email, "@") {
+		return errors.New("invalid event contact email")
 	}
 
 	return nil
@@ -686,6 +785,32 @@ func validateVenueInput(input VenueInput) error {
 
 	if input.Longitude < -180 || input.Longitude > 180 {
 		return errors.New("invalid venue longitude")
+	}
+
+	return nil
+}
+
+func validateSalesWindow(input CreateEventInput) error {
+	if input.SalesStartDate == nil && input.SalesEndDate == nil {
+		return nil
+	}
+
+	if input.SalesStartDate == nil || input.SalesEndDate == nil {
+		return errors.New("sales start and end dates must both be provided")
+	}
+
+	if input.SalesStartDate.After(*input.SalesEndDate) {
+		return errors.New("sales start date cannot be after sales end date")
+	}
+
+	eventDate := input.EventDate.Truncate(24 * time.Hour)
+
+	if input.SalesStartDate.After(eventDate) {
+		return errors.New("sales start date cannot be after event date")
+	}
+
+	if input.SalesEndDate.After(eventDate) {
+		return errors.New("sales end date cannot be after event date")
 	}
 
 	return nil

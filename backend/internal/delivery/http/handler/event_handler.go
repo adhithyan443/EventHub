@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
@@ -55,6 +56,26 @@ type CreateEventRequest struct {
 	CancellationDeadlineHours int  `json:"cancellation_deadline_hours"`
 
 	Venue VenueRequest `json:"venue"`
+
+	Contact             EventContactRequest `json:"contact"`
+	Visibility          string              `json:"visibility"`
+	Highlights          string              `json:"highlights"`
+	Rules               string              `json:"rules"`
+	AttendeeInformation string              `json:"attendee_information"`
+
+	IsAllDay bool `json:"is_all_day"`
+
+	SalesStartDate string `json:"sales_start_date"`
+	SalesEndDate   string `json:"sales_end_date"`
+
+	RefundPolicy     string `json:"refund_policy"`
+	RefundPercentage int    `json:"refund_percentage"`
+}
+
+type EventContactRequest struct {
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+	Email string `json:"email"`
 }
 
 type VenueRequest struct {
@@ -218,44 +239,77 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 		return
 	}
 
-	startTime, err := time.Parse(
-		"15:04",
-		req.StartTime,
-	)
+	salesStartDate, err := parseOptionalDate(req.SalesStartDate)
 	if err != nil {
 		h.logger.Warn(
-			"event_create_invalid_start_time",
+			"event_create_invalid_sales_start_date",
 			"user_id", userID,
-			"start_time", req.StartTime,
+			"sales_start_date", req.SalesStartDate,
 			"error", err,
 		)
 
 		ctx.Error(
 			appErrors.NewValidationError(
-				"invalid start time",
+				"invalid sales start date",
 			),
 		)
 		return
 	}
 
-	endTime, err := time.Parse(
-		"15:04",
-		req.EndTime,
-	)
+	salesEndDate, err := parseOptionalDate(req.SalesEndDate)
 	if err != nil {
 		h.logger.Warn(
-			"event_create_invalid_end_time",
+			"event_create_invalid_sales_end_date",
 			"user_id", userID,
-			"end_time", req.EndTime,
+			"sales_end_date", req.SalesEndDate,
 			"error", err,
 		)
 
 		ctx.Error(
 			appErrors.NewValidationError(
-				"invalid end time",
+				"invalid sales end date",
 			),
 		)
 		return
+	}
+
+	var startTime time.Time
+	var endTime time.Time
+
+	if !req.IsAllDay {
+		startTime, err = time.Parse("15:04", req.StartTime)
+		if err != nil {
+			h.logger.Warn(
+				"event_create_invalid_start_time",
+				"user_id", userID,
+				"start_time", req.StartTime,
+				"error", err,
+			)
+
+			ctx.Error(
+				appErrors.NewValidationError(
+					"invalid start time",
+				),
+			)
+			return
+		}
+
+		endTime, err = time.Parse("15:04", req.EndTime)
+		if err != nil {
+			h.logger.Warn(
+				"event_create_invalid_end_time",
+				"user_id", userID,
+				"end_time", req.EndTime,
+				"error", err,
+			)
+
+			ctx.Error(
+				appErrors.NewValidationError(
+					"invalid end time",
+				),
+			)
+			return
+		}
 	}
 
 	input := eventUsecase.CreateEventInput{
@@ -292,6 +346,24 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			Latitude:      req.Venue.Latitude,
 			Longitude:     req.Venue.Longitude,
 		},
+
+		Contact: eventUsecase.EventContactInput{
+			Name:  req.Contact.Name,
+			Phone: req.Contact.Phone,
+			Email: req.Contact.Email,
+		},
+
+		Visibility:          req.Visibility,
+		Highlights:          req.Highlights,
+		Rules:               req.Rules,
+		AttendeeInformation: req.AttendeeInformation,
+
+		IsAllDay: req.IsAllDay,
+
+		SalesStartDate:   salesStartDate,
+		SalesEndDate:     salesEndDate,
+		RefundPolicy:     req.RefundPolicy,
+		RefundPercentage: req.RefundPercentage,
 
 		BannerReader:      bannerFile,
 		BannerContentType: contentType,
@@ -400,6 +472,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			"schedule":     output.Schedule,
 			"setting":      output.Setting,
 			"cancellation": output.Cancellation,
+			"contact":      output.Contact,
 		},
 	})
 }
@@ -423,4 +496,19 @@ func detectBannerContentType(file io.ReadSeeker) (string, error) {
 	}
 
 	return contentType, nil
+}
+
+func parseOptionalDate(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+
+	if value == "" {
+		return nil, nil
+	}
+
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return nil, err
+	}
+
+	return &parsed, nil
 }
