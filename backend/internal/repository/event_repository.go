@@ -47,6 +47,63 @@ func (r *EventRepository) Create(event *domain.Event) error {
 	return nil
 }
 
+func (r *EventRepository) Update(event *domain.Event) error {
+	if event == nil {
+		return errors.New("event cannot be nil")
+	}
+
+	model := toEventModel(event)
+
+	result := r.db.
+		Model(&models.EventModel{}).
+		Where("id = ?", event.ID).
+		Updates(map[string]interface{}{
+			"organizer_id":         model.OrganizerID,
+			"category_id":          model.CategoryID,
+			"venue_id":             model.VenueID,
+			"event_type":           model.EventType,
+			"online_url":           model.OnlineURL,
+			"title":                model.Title,
+			"description":          model.Description,
+			"banner_url":           model.BannerURL,
+			"language":             model.Language,
+			"age_restriction":      model.AgeRestriction,
+			"visibility":           model.Visibility,
+			"highlights":           model.Highlights,
+			"rules":                model.Rules,
+			"attendee_information": model.AttendeeInformation,
+			"status":               model.Status,
+			"updated_at":           model.UpdatedAt,
+		})
+
+	if result.Error != nil {
+		r.logger.Error(
+			"event_update_failed",
+			"event_id", event.ID,
+			"error", result.Error,
+		)
+
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_update_not_found",
+			"event_id", event.ID,
+		)
+
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info(
+		"event_updated",
+		"event_id", event.ID,
+		"organizer_id", event.OrganizerID,
+	)
+
+	return nil
+}
+
 func (r *EventRepository) FindByID(id uuid.UUID) (*domain.Event, error) {
 	var eventModel models.EventModel
 

@@ -80,6 +80,7 @@ type EventCancellation struct {
 type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)
+	Update(event *Event) error
 }
 
 type EventScheduleRepository interface {
