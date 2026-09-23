@@ -27,6 +27,7 @@ func Migrate(db *gorm.DB) error {
 		&models.EventScheduleModel{},
 		&models.EventSettingModel{},
 		&models.EventCancellationModel{},
+		&models.EventContactModel{},
 
 		&models.SeatLayoutModel{},
 		&models.SeatSectionModel{},

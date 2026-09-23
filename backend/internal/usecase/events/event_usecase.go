@@ -63,6 +63,7 @@ type CreateEventInput struct {
 	EventDate time.Time
 	StartTime time.Time
 	EndTime   time.Time
+	IsAllDay  bool
 
 	SeatLayoutType      string
 	BookingLimitPerUser int
@@ -361,6 +362,7 @@ func (u *EventUsecase) CreateEvent(
 				EventDate: input.EventDate,
 				StartTime: input.StartTime,
 				EndTime:   input.EndTime,
+				IsAllDay:  input.IsAllDay,
 			}
 
 			if err := tx.EventScheduleRepository().Create(schedule); err != nil {
@@ -540,16 +542,22 @@ func validateCreateEventInput(input CreateEventInput) error {
 		return ErrInvalidEventSchedule
 	}
 
-	if input.StartTime.IsZero() {
-		return ErrInvalidEventSchedule
-	}
+	if input.IsAllDay {
+		if !input.StartTime.IsZero() || !input.EndTime.IsZero() {
+			return ErrInvalidEventSchedule
+		}
+	} else {
+		if input.StartTime.IsZero() {
+			return ErrInvalidEventSchedule
+		}
 
-	if input.EndTime.IsZero() {
-		return ErrInvalidEventSchedule
-	}
+		if input.EndTime.IsZero() {
+			return ErrInvalidEventSchedule
+		}
 
-	if !input.EndTime.After(input.StartTime) {
-		return ErrInvalidEventSchedule
+		if !input.EndTime.After(input.StartTime) {
+			return ErrInvalidEventSchedule
+		}
 	}
 
 	if input.SeatLayoutType != SeatLayoutTypeSeated &&

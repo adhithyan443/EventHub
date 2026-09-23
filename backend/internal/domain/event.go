@@ -22,20 +22,24 @@ const (
 )
 
 type Event struct {
-	ID             uuid.UUID
-	OrganizerID    uuid.UUID
-	CategoryID     uuid.UUID
-	VenueID        *uuid.UUID
-	EventType      string
-	OnlineURL      string
-	Title          string
-	Description    string
-	BannerURL      string
-	Language       string
-	AgeRestriction int
-	Status         string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                  uuid.UUID
+	OrganizerID         uuid.UUID
+	CategoryID          uuid.UUID
+	VenueID             *uuid.UUID
+	EventType           string
+	OnlineURL           string
+	Title               string
+	Description         string
+	BannerURL           string
+	Language            string
+	AgeRestriction      int
+	Visibility          string
+	Highlights          string
+	Rules               string
+	AttendeeInformation string
+	Status              string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type EventSchedule struct {
@@ -43,6 +47,7 @@ type EventSchedule struct {
 	EventID   uuid.UUID
 	EventDate time.Time
 	StartTime time.Time
+	IsAllDay  bool
 	EndTime   time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -53,6 +58,8 @@ type EventSetting struct {
 	EventID             uuid.UUID
 	SeatLayoutType      string
 	BookingLimitPerUser int
+	SalesStartDate      *time.Time
+	SalesEndDate        *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -62,6 +69,8 @@ type EventCancellation struct {
 	EventID                   uuid.UUID
 	CancellationAllowed       bool
 	CancellationDeadlineHours int
+	RefundPolicy              string
+	RefundPercentage          int
 	CancelledAt               *time.Time
 	CancellationReason        *string
 	CreatedAt                 time.Time

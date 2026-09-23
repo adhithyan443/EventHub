@@ -84,6 +84,8 @@ func toEventSettingModel(
 		EventID:             setting.EventID,
 		SeatLayoutType:      setting.SeatLayoutType,
 		BookingLimitPerUser: setting.BookingLimitPerUser,
+		SalesStartDate:      setting.SalesStartDate,
+		SalesEndDate:        setting.SalesEndDate,
 		CreatedAt:           setting.CreatedAt,
 		UpdatedAt:           setting.UpdatedAt,
 	}
@@ -97,6 +99,8 @@ func toEventSettingDomain(
 		EventID:             settingModel.EventID,
 		SeatLayoutType:      settingModel.SeatLayoutType,
 		BookingLimitPerUser: settingModel.BookingLimitPerUser,
+		SalesStartDate:      settingModel.SalesStartDate,
+		SalesEndDate:        settingModel.SalesEndDate,
 		CreatedAt:           settingModel.CreatedAt,
 		UpdatedAt:           settingModel.UpdatedAt,
 	}

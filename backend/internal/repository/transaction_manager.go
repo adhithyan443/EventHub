@@ -85,6 +85,11 @@ func (m *TransactionManager) WithinTransaction(
 				m.logger,
 			),
 
+			eventContactRepo: NewEventContactRepository(
+				txDB,
+				m.logger,
+			),
+
 			seatLayoutRepository:  NewSeatLayoutRepository(txDB, m.logger),
 			seatSectionRepository: NewSeatSectionRepository(txDB, m.logger),
 			seatRowRepository:     NewSeatRowRepository(txDB, m.logger),
@@ -113,6 +118,7 @@ type transactionRepositories struct {
 	eventScheduleRepo     domain.EventScheduleRepository
 	eventSettingRepo      domain.EventSettingRepository
 	eventCancellationRepo domain.EventCancellationRepository
+	eventContactRepo      domain.EventContactRepository
 
 	seatLayoutRepository  domain.SeatLayoutRepository
 	seatSectionRepository domain.SeatSectionRepository
@@ -190,4 +196,8 @@ func (r *transactionRepositories) SeatRowRepository() domain.SeatRowRepository {
 
 func (r *transactionRepositories) SeatRepository() domain.SeatRepository {
 	return r.seatRepository
+}
+
+func (r *transactionRepositories) EventContactRepository() domain.EventContactRepository {
+	return r.eventContactRepo
 }

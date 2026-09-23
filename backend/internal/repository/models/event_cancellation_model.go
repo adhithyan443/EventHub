@@ -11,8 +11,10 @@ type EventCancellationModel struct {
 
 	EventID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex"`
 
-	CancellationAllowed       bool `gorm:"not null;default:false"`
-	CancellationDeadlineHours int  `gorm:"not null;default:0"`
+	CancellationAllowed       bool   `gorm:"not null;default:false"`
+	CancellationDeadlineHours int    `gorm:"not null;default:0"`
+	RefundPolicy              string `gorm:"type:varchar(50);not null"`
+	RefundPercentage          int    `gorm:"not null;default:0"`
 
 	CancelledAt        *time.Time `gorm:"type:timestamp"`
 	CancellationReason *string    `gorm:"type:text"`
