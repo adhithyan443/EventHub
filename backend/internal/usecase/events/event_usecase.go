@@ -15,6 +15,8 @@ import (
 	"github.com/google/uuid"
 )
 
+var ErrEventNotEditable = errors.New("event is not editable")
+
 var (
 	ErrUnauthorizedOrganizer = errors.New("user is not an active organizer")
 	ErrInvalidEventInput     = errors.New("invalid event input")
@@ -537,6 +539,128 @@ func (u *EventUsecase) CreateEvent(
 	return &output, nil
 }
 
+type UpdateEventInput struct {
+	UserID              uuid.UUID
+	EventID             uuid.UUID
+	CategoryID          uuid.UUID
+	VenueID             *uuid.UUID
+	EventType           string
+	OnlineURL           string
+	Title               string
+	Description         string
+	Language            string
+	AgeRestriction      int
+	Visibility          string
+	Highlights          string
+	Rules               string
+	AttendeeInformation string
+}
+
+type UpdateEventOutput struct {
+	Event *domain.Event
+}
+
+func (u *EventUsecase) UpdateEvent(
+	ctx context.Context,
+	input UpdateEventInput,
+) (*UpdateEventOutput, error) {
+	u.logger.Info(
+		"event_update_started",
+		"event_id", input.EventID,
+		"user_id", input.UserID,
+	)
+
+	if input.EventID == uuid.Nil {
+		return nil, ErrInvalidEventInput
+	}
+
+	var event *domain.Event
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			// Find the event.
+			foundEvent, err := tx.EventRepository().FindByID(input.EventID)
+			if err != nil {
+				u.logger.Warn(
+					"event_update_lookup_failed",
+					"event_id", input.EventID,
+					"user_id", input.UserID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			// Ensure the authenticated organizer owns the event.
+			if foundEvent.OrganizerID != input.UserID {
+				u.logger.Warn(
+					"event_update_ownership_denied",
+					"event_id", input.EventID,
+					"user_id", input.UserID,
+					"organizer_id", foundEvent.OrganizerID,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			// Only draft events can currently be edited.
+			if foundEvent.Status != domain.EventStatusDraft {
+				u.logger.Warn(
+					"event_update_status_denied",
+					"event_id", input.EventID,
+					"user_id", input.UserID,
+					"status", foundEvent.Status,
+				)
+
+				return ErrEventNotEditable
+			}
+
+			// Update editable fields.
+			foundEvent.CategoryID = input.CategoryID
+			foundEvent.VenueID = input.VenueID
+			foundEvent.EventType = strings.TrimSpace(input.EventType)
+			foundEvent.OnlineURL = strings.TrimSpace(input.OnlineURL)
+			foundEvent.Title = strings.TrimSpace(input.Title)
+			foundEvent.Description = strings.TrimSpace(input.Description)
+			foundEvent.Language = strings.TrimSpace(input.Language)
+			foundEvent.AgeRestriction = input.AgeRestriction
+			foundEvent.Visibility = strings.TrimSpace(input.Visibility)
+			foundEvent.Highlights = strings.TrimSpace(input.Highlights)
+			foundEvent.Rules = strings.TrimSpace(input.Rules)
+			foundEvent.AttendeeInformation = strings.TrimSpace(input.AttendeeInformation)
+			foundEvent.UpdatedAt = time.Now()
+
+			if err := tx.EventRepository().Update(foundEvent); err != nil {
+				u.logger.Error(
+					"event_update_failed",
+					"event_id", input.EventID,
+					"user_id", input.UserID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			event = foundEvent
+
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	u.logger.Info(
+		"event_updated_successfully",
+		"event_id", event.ID,
+		"user_id", input.UserID,
+		"status", event.Status,
+	)
+
+	return &UpdateEventOutput{
+		Event: event,
+	}, nil
+}
 func isSupportedBannerContentType(contentType string) bool {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
 	case "image/jpeg", "image/png", "image/webp":
