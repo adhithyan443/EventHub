@@ -592,14 +592,45 @@ func (u *EventUsecase) UpdateEvent(
 			}
 
 			// Ensure the authenticated organizer owns the event.
-			if foundEvent.OrganizerID != input.UserID {
+			organizer, err := tx.OrganizerRepository().FindByUserID(input.UserID)
+			if err != nil {
+				if errors.Is(err, domain.ErrOrganizerNotFound) {
+					u.logger.Warn(
+						"event_update_organizer_not_found",
+						"event_id", input.EventID,
+						"user_id", input.UserID,
+					)
+					return ErrUnauthorizedOrganizer
+				}
+
+				u.logger.Error(
+					"event_update_organizer_lookup_failed",
+					"event_id", input.EventID,
+					"user_id", input.UserID,
+					"error", err,
+				)
+				return err
+			}
+
+			if organizer.Status != "ACTIVE" {
+				u.logger.Warn(
+					"event_update_organizer_inactive",
+					"event_id", input.EventID,
+					"user_id", input.UserID,
+					"organizer_id", organizer.ID,
+					"status", organizer.Status,
+				)
+				return ErrUnauthorizedOrganizer
+			}
+
+			if foundEvent.OrganizerID != organizer.ID {
 				u.logger.Warn(
 					"event_update_ownership_denied",
 					"event_id", input.EventID,
 					"user_id", input.UserID,
-					"organizer_id", foundEvent.OrganizerID,
+					"event_organizer_id", foundEvent.OrganizerID,
+					"user_organizer_id", organizer.ID,
 				)
-
 				return ErrUnauthorizedOrganizer
 			}
 
