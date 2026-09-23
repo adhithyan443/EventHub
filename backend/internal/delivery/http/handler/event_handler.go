@@ -72,6 +72,21 @@ type CreateEventRequest struct {
 	RefundPercentage int    `json:"refund_percentage"`
 }
 
+type UpdateEventRequest struct {
+	CategoryID          uuid.UUID  `json:"category_id"`
+	VenueID             *uuid.UUID `json:"venue_id"`
+	EventType           string     `json:"event_type"`
+	OnlineURL           string     `json:"online_url"`
+	Title               string     `json:"title"`
+	Description         string     `json:"description"`
+	Language            string     `json:"language"`
+	AgeRestriction      int        `json:"age_restriction"`
+	Visibility          string     `json:"visibility"`
+	Highlights          string     `json:"highlights"`
+	Rules               string     `json:"rules"`
+	AttendeeInformation string     `json:"attendee_information"`
+}
+
 type EventContactRequest struct {
 	Name  string `json:"name"`
 	Phone string `json:"phone"`
@@ -477,6 +492,147 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 	})
 }
 
+func (h *EventHandler) UpdateEvent(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_update_invalid_event_id",
+			"event_id", c.Param("id"),
+			"user_id", userID,
+			"error", err,
+		)
+
+		c.Error(
+			appErrors.NewValidationError(
+				"invalid event id",
+			),
+		)
+		return
+	}
+
+	var req UpdateEventRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.logger.Warn(
+			"event_update_invalid_request",
+			"event_id", eventID,
+			"user_id", userID,
+			"error", err,
+		)
+
+		c.Error(
+			appErrors.NewValidationError(
+				"invalid event data",
+			),
+		)
+		return
+	}
+
+	output, err := h.eventUsecase.UpdateEvent(
+		c.Request.Context(),
+		eventUsecase.UpdateEventInput{
+			UserID:              userID,
+			EventID:             eventID,
+			CategoryID:          req.CategoryID,
+			VenueID:             req.VenueID,
+			EventType:           req.EventType,
+			OnlineURL:           req.OnlineURL,
+			Title:               req.Title,
+			Description:         req.Description,
+			Language:            req.Language,
+			AgeRestriction:      req.AgeRestriction,
+			Visibility:          req.Visibility,
+			Highlights:          req.Highlights,
+			Rules:               req.Rules,
+			AttendeeInformation: req.AttendeeInformation,
+		},
+	)
+	if err != nil {
+		h.logger.Warn(
+			"event_update_request_failed",
+			"event_id", eventID,
+			"user_id", userID,
+			"error", err,
+		)
+
+		switch {
+		case errors.Is(
+			err,
+			eventUsecase.ErrInvalidEventInput,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+
+		case errors.Is(
+			err,
+			eventUsecase.ErrUnauthorizedOrganizer,
+		):
+			c.Error(
+				appErrors.NewForbiddenError(
+					"you are not authorized to update this event",
+				),
+			)
+
+		case errors.Is(
+			err,
+			eventUsecase.ErrEventNotEditable,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"event is not editable",
+				),
+			)
+
+		case errors.Is(
+			err,
+			domain.ErrEventNotFound,
+		):
+			c.Error(
+				appErrors.NewNotFoundError(
+					"event not found",
+				),
+			)
+
+		case errors.Is(
+			err,
+			domain.ErrCategoryNotFound,
+		):
+			c.Error(
+				appErrors.NewNotFoundError(
+					"category not found",
+				),
+			)
+
+		default:
+			c.Error(err)
+		}
+
+		return
+	}
+
+	h.logger.Info(
+		"event_update_request_completed",
+		"event_id", output.Event.ID,
+		"user_id", userID,
+		"status", output.Event.Status,
+	)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"event": output.Event,
+		},
+	})
+}
 func detectBannerContentType(file io.ReadSeeker) (string, error) {
 	buffer := make([]byte, 512)
 
