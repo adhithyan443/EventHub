@@ -49,8 +49,9 @@ type CreateEventRequest struct {
 	StartTime string `json:"start_time"`
 	EndTime   string `json:"end_time"`
 
-	SeatLayoutType      string `json:"seat_layout_type"`
-	BookingLimitPerUser int    `json:"booking_limit_per_user"`
+	SeatLayoutType      string              `json:"seat_layout_type"`
+	BookingLimitPerUser int                 `json:"booking_limit_per_user"`
+	TicketTypes         []TicketTypeRequest `json:"ticket_types"`
 
 	CancellationAllowed       bool `json:"cancellation_allowed"`
 	CancellationDeadlineHours int  `json:"cancellation_deadline_hours"`
@@ -92,7 +93,8 @@ type UpdateEventRequest struct {
 	EndTime   string `json:"end_time"`
 	IsAllDay  bool   `json:"is_all_day"`
 
-	SeatLayoutType      string `json:"seat_layout_type"`
+	SeatLayoutType string `json:"seat_layout_type"`
+
 	BookingLimitPerUser int    `json:"booking_limit_per_user"`
 	SalesStartDate      string `json:"sales_start_date"`
 	SalesEndDate        string `json:"sales_end_date"`
@@ -102,7 +104,8 @@ type UpdateEventRequest struct {
 	RefundPolicy              string `json:"refund_policy"`
 	RefundPercentage          int    `json:"refund_percentage"`
 
-	Contact EventContactRequest `json:"contact"`
+	Contact     EventContactRequest `json:"contact"`
+	TicketTypes []TicketTypeRequest `json:"ticket_types"`
 }
 
 type EventContactRequest struct {
@@ -121,6 +124,14 @@ type VenueRequest struct {
 	PostalCode    string  `json:"postal_code"`
 	Latitude      float64 `json:"latitude"`
 	Longitude     float64 `json:"longitude"`
+}
+
+type TicketTypeRequest struct {
+	ID          *uuid.UUID `json:"id,omitempty"`
+	Name        string     `json:"name"`
+	Price       float64    `json:"price"`
+	Capacity    int        `json:"capacity"`
+	Description string     `json:"description"`
 }
 
 func (h *EventHandler) CreateEvent(ctx *gin.Context) {
@@ -345,9 +356,22 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 		}
 	}
 
+	ticketTypes := make([]eventUsecase.TicketTypeInput, 0, len(req.TicketTypes))
+
+	for _, ticketType := range req.TicketTypes {
+		ticketTypes = append(ticketTypes, eventUsecase.TicketTypeInput{
+			ID:          ticketType.ID,
+			Name:        ticketType.Name,
+			Price:       ticketType.Price,
+			Capacity:    ticketType.Capacity,
+			Description: ticketType.Description,
+		})
+	}
+
 	input := eventUsecase.CreateEventInput{
-		UserID:     userID,
-		CategoryID: req.CategoryID,
+		UserID:      userID,
+		CategoryID:  req.CategoryID,
+		TicketTypes: ticketTypes,
 
 		EventType: req.EventType,
 		OnlineURL: req.OnlineURL,
@@ -480,6 +504,16 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			ctx.Error(
 				appErrors.NewNotFoundError(
 					"category not found",
+				),
+			)
+
+		case errors.Is(
+			err,
+			domain.ErrTicketTypeNotFound,
+		):
+			ctx.Error(
+				appErrors.NewNotFoundError(
+					"ticket type not found",
 				),
 			)
 
@@ -691,6 +725,22 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 				Phone: req.Contact.Phone,
 				Email: req.Contact.Email,
 			},
+
+			TicketTypes: func() []eventUsecase.TicketTypeInput {
+				ticketTypes := make([]eventUsecase.TicketTypeInput, 0, len(req.TicketTypes))
+
+				for _, ticketType := range req.TicketTypes {
+					ticketTypes = append(ticketTypes, eventUsecase.TicketTypeInput{
+						ID:          ticketType.ID,
+						Name:        ticketType.Name,
+						Price:       ticketType.Price,
+						Capacity:    ticketType.Capacity,
+						Description: ticketType.Description,
+					})
+				}
+
+				return ticketTypes
+			}(),
 		},
 	)
 	if err != nil {
@@ -792,6 +842,16 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 				),
 			)
 
+		case errors.Is(
+			err,
+			domain.ErrTicketTypeNotFound,
+		):
+			c.Error(
+				appErrors.NewNotFoundError(
+					"ticket type not found",
+				),
+			)
+
 		default:
 			c.Error(err)
 		}
@@ -814,6 +874,7 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 			"setting":      output.Setting,
 			"cancellation": output.Cancellation,
 			"contact":      output.Contact,
+			"ticket_types": output.TicketTypes,
 		},
 	})
 }

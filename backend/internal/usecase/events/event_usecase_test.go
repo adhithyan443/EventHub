@@ -52,6 +52,8 @@ type mockTxRepos struct {
 	seatSectionRepo domain.SeatSectionRepository
 	seatRowRepo     domain.SeatRowRepository
 	seatRepo        domain.SeatRepository
+
+	ticketTypeRepo domain.TicketTypeRepository
 }
 
 func (r *mockTxRepos) UserRepository() domain.UserRepository { return r.userRepo }
@@ -93,6 +95,12 @@ func (r *mockTxRepos) SeatLayoutRepository() domain.SeatLayoutRepository   { ret
 func (r *mockTxRepos) SeatSectionRepository() domain.SeatSectionRepository { return r.seatSectionRepo }
 func (r *mockTxRepos) SeatRowRepository() domain.SeatRowRepository         { return r.seatRowRepo }
 func (r *mockTxRepos) SeatRepository() domain.SeatRepository               { return r.seatRepo }
+func (r *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
+	if r.ticketTypeRepo == nil {
+		return &mockTicketTypeRepo{}
+	}
+	return r.ticketTypeRepo
+}
 
 // --- Specific Mocks ---
 
@@ -299,6 +307,87 @@ func (m *mockEventContactRepo) DeleteByEventID(eventID uuid.UUID) error {
 	return nil
 }
 
+type mockTicketTypeRepo struct {
+	ticketTypes      []*domain.TicketType
+	findByEventIDErr error
+	createErr        error
+	updateErr        error
+	deleteErr        error
+	created          []*domain.TicketType
+	updated          []*domain.TicketType
+	deleted          []uuid.UUID
+}
+
+func (m *mockTicketTypeRepo) Create(ctx context.Context, t *domain.TicketType) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	m.created = append(m.created, t)
+	m.ticketTypes = append(m.ticketTypes, t)
+	return nil
+}
+
+func (m *mockTicketTypeRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.TicketType, error) {
+	for _, t := range m.ticketTypes {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+	return nil, domain.ErrTicketTypeNotFound
+}
+
+func (m *mockTicketTypeRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]*domain.TicketType, error) {
+	if m.findByEventIDErr != nil {
+		return nil, m.findByEventIDErr
+	}
+	var res []*domain.TicketType
+	for _, t := range m.ticketTypes {
+		if t.EventID == eventID {
+			res = append(res, t)
+		}
+	}
+	return res, nil
+}
+
+func (m *mockTicketTypeRepo) Update(ctx context.Context, t *domain.TicketType) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	for i, existing := range m.ticketTypes {
+		if existing.ID == t.ID {
+			m.ticketTypes[i] = t
+			m.updated = append(m.updated, t)
+			return nil
+		}
+	}
+	return domain.ErrTicketTypeNotFound
+}
+
+func (m *mockTicketTypeRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	for i, t := range m.ticketTypes {
+		if t.ID == id {
+			m.ticketTypes = append(m.ticketTypes[:i], m.ticketTypes[i+1:]...)
+			m.deleted = append(m.deleted, id)
+			return nil
+		}
+	}
+	return domain.ErrTicketTypeNotFound
+}
+
+func (m *mockTicketTypeRepo) DeleteByEventID(ctx context.Context, eventID uuid.UUID) error {
+	var remaining []*domain.TicketType
+	for _, t := range m.ticketTypes {
+		if t.EventID != eventID {
+			remaining = append(remaining, t)
+		}
+	}
+	m.ticketTypes = remaining
+	return nil
+}
+
 // --- Test helper ---
 
 func setupTestUsecase(repos *mockTxRepos, onRollback func()) *usecase.EventUsecase {
@@ -345,6 +434,14 @@ func validUpdateInput(userID, eventID, categoryID uuid.UUID, venueID *uuid.UUID)
 			Name:  "Jane Organizer",
 			Phone: "+1987654321",
 			Email: "jane@example.com",
+		},
+		TicketTypes: []usecase.TicketTypeInput{
+			{
+				Name:        "General Admission",
+				Price:       50.0,
+				Capacity:    100,
+				Description: "Standard ticket",
+			},
 		},
 	}
 }
@@ -821,6 +918,55 @@ func TestUpdateEvent_ValidationFailures(t *testing.T) {
 			t.Fatalf("expected ErrInvalidEventInput, got %v", err)
 		}
 	})
+
+	t.Run("general admission without ticket types", func(t *testing.T) {
+		input := validUpdateInput(userID, eventID, categoryID, &venueID)
+		input.SeatLayoutType = usecase.SeatLayoutTypeGeneral
+		input.TicketTypes = nil
+		_, err := uc.UpdateEvent(context.Background(), input)
+		if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+			t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+		}
+	})
+
+	t.Run("ticket type with empty name", func(t *testing.T) {
+		input := validUpdateInput(userID, eventID, categoryID, &venueID)
+		input.TicketTypes = []usecase.TicketTypeInput{{Name: "   ", Price: 10, Capacity: 50}}
+		_, err := uc.UpdateEvent(context.Background(), input)
+		if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+			t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+		}
+	})
+
+	t.Run("ticket type with negative price", func(t *testing.T) {
+		input := validUpdateInput(userID, eventID, categoryID, &venueID)
+		input.TicketTypes = []usecase.TicketTypeInput{{Name: "VIP", Price: -1, Capacity: 50}}
+		_, err := uc.UpdateEvent(context.Background(), input)
+		if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+			t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+		}
+	})
+
+	t.Run("ticket type with zero capacity", func(t *testing.T) {
+		input := validUpdateInput(userID, eventID, categoryID, &venueID)
+		input.TicketTypes = []usecase.TicketTypeInput{{Name: "VIP", Price: 100, Capacity: 0}}
+		_, err := uc.UpdateEvent(context.Background(), input)
+		if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+			t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+		}
+	})
+
+	t.Run("duplicate ticket type names", func(t *testing.T) {
+		input := validUpdateInput(userID, eventID, categoryID, &venueID)
+		input.TicketTypes = []usecase.TicketTypeInput{
+			{Name: "General", Price: 10, Capacity: 50},
+			{Name: "general", Price: 20, Capacity: 50},
+		}
+		_, err := uc.UpdateEvent(context.Background(), input)
+		if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+			t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+		}
+	})
 }
 
 func TestUpdateEvent_CategoryNotFound(t *testing.T) {
@@ -963,5 +1109,503 @@ func TestUpdateEvent_MissingRelatedRecords_CreatesThem(t *testing.T) {
 	}
 	if output.Schedule == nil || output.Setting == nil || output.Cancellation == nil || output.Contact == nil {
 		t.Error("expected all related outputs to be non-nil")
+	}
+}
+
+func TestUpdateEvent_AtomicRollback_OnTicketSync_TicketTypeNotFound(t *testing.T) {
+	// Reproduces the exact reported bug:
+	// When ticket synchronization fails with ticket type not found,
+	// all prior updates (event, schedule, setting, cancellation, contact)
+	// must be rolled back atomically.
+	userID := uuid.New()
+	organizerID := uuid.New()
+	eventID, _ := uuid.Parse("ded204c0-f0b6-42b9-9b00-f15a9cd6b322")
+	categoryID := uuid.New()
+	venueID := uuid.New()
+	missingTicketID, _ := uuid.Parse("d01ee545-806a-4d1c-a39f-263a82f8bb36")
+
+	existingEvent := &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+		CategoryID:  categoryID,
+		VenueID:     &venueID,
+		EventType:   domain.EventTypePhysical,
+		Title:       "Original Title In DB",
+		Status:      domain.EventStatusDraft,
+	}
+
+	existingSchedule := &domain.EventSchedule{
+		ID:        uuid.New(),
+		EventID:   eventID,
+		EventDate: time.Now().Add(24 * time.Hour),
+	}
+
+	existingSetting := &domain.EventSetting{
+		ID:             uuid.New(),
+		EventID:        eventID,
+		SeatLayoutType: usecase.SeatLayoutTypeGeneral,
+	}
+
+	existingCancellation := &domain.EventCancellation{
+		ID:      uuid.New(),
+		EventID: eventID,
+	}
+
+	existingContact := &domain.EventContact{
+		ID:      uuid.New(),
+		EventID: eventID,
+		Name:    "Original Contact",
+	}
+
+	// The event in DB has an existing ticket with a DIFFERENT ID
+	dbTicketID := uuid.New()
+	existingTicket := &domain.TicketType{
+		ID:                dbTicketID,
+		EventID:           eventID,
+		Name:              "Old Ticket",
+		Price:             25.0,
+		TotalQuantity:     50,
+		AvailableQuantity: 50,
+	}
+
+	ticketRepo := &mockTicketTypeRepo{
+		ticketTypes: []*domain.TicketType{existingTicket},
+	}
+
+	eventRepo := &mockEventRepo{event: existingEvent}
+
+	repos := &mockTxRepos{
+		organizerRepo: &mockOrganizerRepo{
+			organizer: &domain.Organizer{ID: organizerID, UserID: userID, Status: "ACTIVE"},
+		},
+		categoryRepo: &mockCategoryRepo{
+			categories: []*domain.Category{{ID: categoryID, Name: "Tech", Status: domain.CategoryStatusActive}},
+		},
+		venueRepo: &mockVenueRepo{
+			venue: &domain.Venue{ID: venueID, Name: "Hall A"},
+		},
+		eventRepo:             eventRepo,
+		eventScheduleRepo:     &mockEventScheduleRepo{schedule: existingSchedule},
+		eventSettingRepo:      &mockEventSettingRepo{setting: existingSetting},
+		eventCancellationRepo: &mockEventCancellationRepo{cancellation: existingCancellation},
+		eventContactRepo:      &mockEventContactRepo{contact: existingContact},
+		ticketTypeRepo:        ticketRepo,
+	}
+
+	rolledBack := false
+	uc := setupTestUsecase(repos, func() {
+		rolledBack = true
+	})
+
+	input := validUpdateInput(userID, eventID, categoryID, &venueID)
+	input.Title = "Attempted Updated Title"
+	// Request refers to a ticket_type_id that does not exist in existingTicketTypes for this event
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			ID:          &missingTicketID,
+			Name:        "Nonexistent Ticket",
+			Price:       99.0,
+			Capacity:    200,
+			Description: "Does not exist",
+		},
+	}
+
+	output, err := uc.UpdateEvent(context.Background(), input)
+	if !errors.Is(err, domain.ErrTicketTypeNotFound) {
+		t.Fatalf("expected ErrTicketTypeNotFound, got %v", err)
+	}
+
+	if output != nil {
+		t.Errorf("expected output to be nil on error, got %+v", output)
+	}
+
+	if !rolledBack {
+		t.Fatal("expected atomic transaction rollback when ticket sync fails with ticket type not found")
+	}
+}
+
+func TestUpdateEvent_AtomicRollback_OnTicketSync_CreateFailure(t *testing.T) {
+	userID := uuid.New()
+	organizerID := uuid.New()
+	eventID := uuid.New()
+	categoryID := uuid.New()
+	venueID := uuid.New()
+
+	existingEvent := &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+		CategoryID:  categoryID,
+		VenueID:     &venueID,
+		EventType:   domain.EventTypePhysical,
+		Title:       "Original Title",
+		Status:      domain.EventStatusDraft,
+	}
+
+	createErr := errors.New("db insert ticket failure")
+	ticketRepo := &mockTicketTypeRepo{
+		createErr: createErr,
+	}
+
+	repos := &mockTxRepos{
+		organizerRepo: &mockOrganizerRepo{
+			organizer: &domain.Organizer{ID: organizerID, UserID: userID, Status: "ACTIVE"},
+		},
+		categoryRepo: &mockCategoryRepo{
+			categories: []*domain.Category{{ID: categoryID, Name: "Tech", Status: domain.CategoryStatusActive}},
+		},
+		venueRepo: &mockVenueRepo{
+			venue: &domain.Venue{ID: venueID, Name: "Hall A"},
+		},
+		eventRepo:             &mockEventRepo{event: existingEvent},
+		eventScheduleRepo:     &mockEventScheduleRepo{schedule: &domain.EventSchedule{ID: uuid.New(), EventID: eventID}},
+		eventSettingRepo:      &mockEventSettingRepo{setting: &domain.EventSetting{ID: uuid.New(), EventID: eventID}},
+		eventCancellationRepo: &mockEventCancellationRepo{cancellation: &domain.EventCancellation{ID: uuid.New(), EventID: eventID}},
+		eventContactRepo:      &mockEventContactRepo{contact: &domain.EventContact{ID: uuid.New(), EventID: eventID}},
+		ticketTypeRepo:        ticketRepo,
+	}
+
+	rolledBack := false
+	uc := setupTestUsecase(repos, func() {
+		rolledBack = true
+	})
+
+	input := validUpdateInput(userID, eventID, categoryID, &venueID)
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			ID:          nil,
+			Name:        "New Ticket",
+			Price:       30.0,
+			Capacity:    50,
+			Description: "Brand new",
+		},
+	}
+
+	_, err := uc.UpdateEvent(context.Background(), input)
+	if !errors.Is(err, createErr) {
+		t.Fatalf("expected createErr %v, got %v", createErr, err)
+	}
+
+	if !rolledBack {
+		t.Fatal("expected atomic transaction rollback when ticket create fails")
+	}
+}
+
+func TestUpdateEvent_AtomicRollback_OnTicketSync_UpdateFailure(t *testing.T) {
+	userID := uuid.New()
+	organizerID := uuid.New()
+	eventID := uuid.New()
+	categoryID := uuid.New()
+	venueID := uuid.New()
+	existingTicketID := uuid.New()
+
+	existingEvent := &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+		CategoryID:  categoryID,
+		VenueID:     &venueID,
+		EventType:   domain.EventTypePhysical,
+		Title:       "Original Title",
+		Status:      domain.EventStatusDraft,
+	}
+
+	existingTicket := &domain.TicketType{
+		ID:                existingTicketID,
+		EventID:           eventID,
+		Name:              "General",
+		Price:             20.0,
+		TotalQuantity:     100,
+		AvailableQuantity: 100,
+	}
+
+	updateErr := errors.New("db update ticket failure")
+	ticketRepo := &mockTicketTypeRepo{
+		ticketTypes: []*domain.TicketType{existingTicket},
+		updateErr:   updateErr,
+	}
+
+	repos := &mockTxRepos{
+		organizerRepo: &mockOrganizerRepo{
+			organizer: &domain.Organizer{ID: organizerID, UserID: userID, Status: "ACTIVE"},
+		},
+		categoryRepo: &mockCategoryRepo{
+			categories: []*domain.Category{{ID: categoryID, Name: "Tech", Status: domain.CategoryStatusActive}},
+		},
+		venueRepo: &mockVenueRepo{
+			venue: &domain.Venue{ID: venueID, Name: "Hall A"},
+		},
+		eventRepo:             &mockEventRepo{event: existingEvent},
+		eventScheduleRepo:     &mockEventScheduleRepo{schedule: &domain.EventSchedule{ID: uuid.New(), EventID: eventID}},
+		eventSettingRepo:      &mockEventSettingRepo{setting: &domain.EventSetting{ID: uuid.New(), EventID: eventID}},
+		eventCancellationRepo: &mockEventCancellationRepo{cancellation: &domain.EventCancellation{ID: uuid.New(), EventID: eventID}},
+		eventContactRepo:      &mockEventContactRepo{contact: &domain.EventContact{ID: uuid.New(), EventID: eventID}},
+		ticketTypeRepo:        ticketRepo,
+	}
+
+	rolledBack := false
+	uc := setupTestUsecase(repos, func() {
+		rolledBack = true
+	})
+
+	input := validUpdateInput(userID, eventID, categoryID, &venueID)
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			ID:          &existingTicketID,
+			Name:        "General Updated",
+			Price:       25.0,
+			Capacity:    100,
+			Description: "Updated desc",
+		},
+	}
+
+	_, err := uc.UpdateEvent(context.Background(), input)
+	if !errors.Is(err, updateErr) {
+		t.Fatalf("expected updateErr %v, got %v", updateErr, err)
+	}
+
+	if !rolledBack {
+		t.Fatal("expected atomic transaction rollback when ticket update fails")
+	}
+}
+
+func TestUpdateEvent_AtomicRollback_OnTicketSync_DeleteFailure(t *testing.T) {
+	userID := uuid.New()
+	organizerID := uuid.New()
+	eventID := uuid.New()
+	categoryID := uuid.New()
+	venueID := uuid.New()
+	existingTicketID := uuid.New()
+
+	existingEvent := &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+		CategoryID:  categoryID,
+		VenueID:     &venueID,
+		EventType:   domain.EventTypePhysical,
+		Title:       "Original Title",
+		Status:      domain.EventStatusDraft,
+	}
+
+	existingTicket := &domain.TicketType{
+		ID:                existingTicketID,
+		EventID:           eventID,
+		Name:              "General",
+		Price:             20.0,
+		TotalQuantity:     100,
+		AvailableQuantity: 100,
+	}
+
+	deleteErr := errors.New("db delete ticket failure")
+	ticketRepo := &mockTicketTypeRepo{
+		ticketTypes: []*domain.TicketType{existingTicket},
+		deleteErr:   deleteErr,
+	}
+
+	repos := &mockTxRepos{
+		organizerRepo: &mockOrganizerRepo{
+			organizer: &domain.Organizer{ID: organizerID, UserID: userID, Status: "ACTIVE"},
+		},
+		categoryRepo: &mockCategoryRepo{
+			categories: []*domain.Category{{ID: categoryID, Name: "Tech", Status: domain.CategoryStatusActive}},
+		},
+		venueRepo: &mockVenueRepo{
+			venue: &domain.Venue{ID: venueID, Name: "Hall A"},
+		},
+		eventRepo:             &mockEventRepo{event: existingEvent},
+		eventScheduleRepo:     &mockEventScheduleRepo{schedule: &domain.EventSchedule{ID: uuid.New(), EventID: eventID}},
+		eventSettingRepo:      &mockEventSettingRepo{setting: &domain.EventSetting{ID: uuid.New(), EventID: eventID}},
+		eventCancellationRepo: &mockEventCancellationRepo{cancellation: &domain.EventCancellation{ID: uuid.New(), EventID: eventID}},
+		eventContactRepo:      &mockEventContactRepo{contact: &domain.EventContact{ID: uuid.New(), EventID: eventID}},
+		ticketTypeRepo:        ticketRepo,
+	}
+
+	rolledBack := false
+	uc := setupTestUsecase(repos, func() {
+		rolledBack = true
+	})
+
+	input := validUpdateInput(userID, eventID, categoryID, &venueID)
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			ID:          nil,
+			Name:        "Replacement Ticket",
+			Price:       35.0,
+			Capacity:    80,
+			Description: "Brand new replacement",
+		},
+	}
+
+	_, err := uc.UpdateEvent(context.Background(), input)
+	if !errors.Is(err, deleteErr) {
+		t.Fatalf("expected deleteErr %v, got %v", deleteErr, err)
+	}
+
+	if !rolledBack {
+		t.Fatal("expected atomic transaction rollback when ticket delete fails")
+	}
+}
+
+func TestUpdateEvent_AtomicRollback_OnTicketSync_FindFailure(t *testing.T) {
+	userID := uuid.New()
+	organizerID := uuid.New()
+	eventID := uuid.New()
+	categoryID := uuid.New()
+	venueID := uuid.New()
+
+	existingEvent := &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+		CategoryID:  categoryID,
+		VenueID:     &venueID,
+		EventType:   domain.EventTypePhysical,
+		Title:       "Original Title",
+		Status:      domain.EventStatusDraft,
+	}
+
+	findErr := errors.New("db find ticket types failure")
+	ticketRepo := &mockTicketTypeRepo{
+		findByEventIDErr: findErr,
+	}
+
+	repos := &mockTxRepos{
+		organizerRepo: &mockOrganizerRepo{
+			organizer: &domain.Organizer{ID: organizerID, UserID: userID, Status: "ACTIVE"},
+		},
+		categoryRepo: &mockCategoryRepo{
+			categories: []*domain.Category{{ID: categoryID, Name: "Tech", Status: domain.CategoryStatusActive}},
+		},
+		venueRepo: &mockVenueRepo{
+			venue: &domain.Venue{ID: venueID, Name: "Hall A"},
+		},
+		eventRepo:             &mockEventRepo{event: existingEvent},
+		eventScheduleRepo:     &mockEventScheduleRepo{schedule: &domain.EventSchedule{ID: uuid.New(), EventID: eventID}},
+		eventSettingRepo:      &mockEventSettingRepo{setting: &domain.EventSetting{ID: uuid.New(), EventID: eventID}},
+		eventCancellationRepo: &mockEventCancellationRepo{cancellation: &domain.EventCancellation{ID: uuid.New(), EventID: eventID}},
+		eventContactRepo:      &mockEventContactRepo{contact: &domain.EventContact{ID: uuid.New(), EventID: eventID}},
+		ticketTypeRepo:        ticketRepo,
+	}
+
+	rolledBack := false
+	uc := setupTestUsecase(repos, func() {
+		rolledBack = true
+	})
+
+	input := validUpdateInput(userID, eventID, categoryID, &venueID)
+
+	_, err := uc.UpdateEvent(context.Background(), input)
+	if !errors.Is(err, findErr) {
+		t.Fatalf("expected findErr %v, got %v", findErr, err)
+	}
+
+	if !rolledBack {
+		t.Fatal("expected atomic transaction rollback when ticket FindByEventID fails")
+	}
+}
+
+func TestUpdateEvent_TicketSync_Success_CreatesUpdatesDeletes(t *testing.T) {
+	userID := uuid.New()
+	organizerID := uuid.New()
+	eventID := uuid.New()
+	categoryID := uuid.New()
+	venueID := uuid.New()
+
+	existingEvent := &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+		CategoryID:  categoryID,
+		VenueID:     &venueID,
+		EventType:   domain.EventTypePhysical,
+		Title:       "Original Title",
+		Status:      domain.EventStatusDraft,
+	}
+
+	ticketA := &domain.TicketType{
+		ID:                uuid.New(),
+		EventID:           eventID,
+		Name:              "Ticket A",
+		Price:             20.0,
+		TotalQuantity:     100,
+		AvailableQuantity: 100,
+	}
+	ticketB := &domain.TicketType{
+		ID:                uuid.New(),
+		EventID:           eventID,
+		Name:              "Ticket B",
+		Price:             50.0,
+		TotalQuantity:     50,
+		AvailableQuantity: 50,
+	}
+
+	ticketRepo := &mockTicketTypeRepo{
+		ticketTypes: []*domain.TicketType{ticketA, ticketB},
+	}
+
+	repos := &mockTxRepos{
+		organizerRepo: &mockOrganizerRepo{
+			organizer: &domain.Organizer{ID: organizerID, UserID: userID, Status: "ACTIVE"},
+		},
+		categoryRepo: &mockCategoryRepo{
+			categories: []*domain.Category{{ID: categoryID, Name: "Tech", Status: domain.CategoryStatusActive}},
+		},
+		venueRepo: &mockVenueRepo{
+			venue: &domain.Venue{ID: venueID, Name: "Hall A"},
+		},
+		eventRepo:             &mockEventRepo{event: existingEvent},
+		eventScheduleRepo:     &mockEventScheduleRepo{schedule: &domain.EventSchedule{ID: uuid.New(), EventID: eventID}},
+		eventSettingRepo:      &mockEventSettingRepo{setting: &domain.EventSetting{ID: uuid.New(), EventID: eventID}},
+		eventCancellationRepo: &mockEventCancellationRepo{cancellation: &domain.EventCancellation{ID: uuid.New(), EventID: eventID}},
+		eventContactRepo:      &mockEventContactRepo{contact: &domain.EventContact{ID: uuid.New(), EventID: eventID}},
+		ticketTypeRepo:        ticketRepo,
+	}
+
+	rolledBack := false
+	uc := setupTestUsecase(repos, func() {
+		rolledBack = true
+	})
+
+	input := validUpdateInput(userID, eventID, categoryID, &venueID)
+	// Ticket A is updated, Ticket C is created, Ticket B is omitted (should be deleted)
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			ID:          &ticketA.ID,
+			Name:        "Ticket A Updated",
+			Price:       25.0,
+			Capacity:    120,
+			Description: "Updated desc",
+		},
+		{
+			ID:          nil,
+			Name:        "Ticket C New",
+			Price:       75.0,
+			Capacity:    40,
+			Description: "New VIP ticket",
+		},
+	}
+
+	output, err := uc.UpdateEvent(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if rolledBack {
+		t.Fatal("transaction should not roll back on success")
+	}
+
+	if len(output.TicketTypes) != 2 {
+		t.Fatalf("expected 2 ticket types in output, got %d", len(output.TicketTypes))
+	}
+
+	// Verify Ticket B was deleted
+	if len(ticketRepo.deleted) != 1 || ticketRepo.deleted[0] != ticketB.ID {
+		t.Errorf("expected Ticket B (%s) to be deleted, got %v", ticketB.ID, ticketRepo.deleted)
+	}
+
+	// Verify Ticket A was updated
+	if len(ticketRepo.updated) != 1 || ticketRepo.updated[0].Name != "Ticket A Updated" {
+		t.Errorf("expected Ticket A to be updated, got %v", ticketRepo.updated)
+	}
+
+	// Verify Ticket C was created
+	if len(ticketRepo.created) != 1 || ticketRepo.created[0].Name != "Ticket C New" {
+		t.Errorf("expected Ticket C to be created, got %v", ticketRepo.created)
 	}
 }

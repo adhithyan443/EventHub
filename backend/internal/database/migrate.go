@@ -33,5 +33,7 @@ func Migrate(db *gorm.DB) error {
 		&models.SeatSectionModel{},
 		&models.SeatRowModel{},
 		&models.SeatModel{},
+
+		&models.TicketTypeModel{},
 	)
 }

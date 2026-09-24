@@ -91,9 +91,19 @@ type CreateEventInput struct {
 
 	Venue VenueInput
 
+	TicketTypes []TicketTypeInput
+
 	BannerReader      io.Reader
 	BannerContentType string
 	BannerSize        int64
+}
+
+type TicketTypeInput struct {
+	ID          *uuid.UUID
+	Name        string
+	Price       float64
+	Capacity    int
+	Description string
 }
 
 type VenueInput struct {
@@ -114,6 +124,7 @@ type CreateEventOutput struct {
 	Setting      *domain.EventSetting
 	Cancellation *domain.EventCancellation
 	Contact      *domain.EventContact
+	TicketTypes  []*domain.TicketType
 }
 
 func (u *EventUsecase) CreateEvent(
@@ -467,12 +478,110 @@ func (u *EventUsecase) CreateEvent(
 				)
 			}
 
+			var ticketTypes []*domain.TicketType
+
+			if input.SeatLayoutType == SeatLayoutTypeGeneral {
+				existingTicketTypes, err := tx.TicketTypeRepository().FindByEventID(ctx, event.ID)
+				if err != nil {
+					u.logger.Error(
+						"event_ticket_types_find_failed",
+						"event_id", event.ID,
+						"error", err,
+					)
+					return err
+				}
+
+				requestedTicketIDs := make(map[uuid.UUID]struct{}, len(input.TicketTypes))
+
+				for _, ticketInput := range input.TicketTypes {
+					if ticketInput.ID != nil {
+						requestedTicketIDs[*ticketInput.ID] = struct{}{}
+					}
+				}
+
+				for _, ticketInput := range input.TicketTypes {
+					if ticketInput.ID == nil {
+						ticketType := &domain.TicketType{
+							ID:                uuid.New(),
+							EventID:           event.ID,
+							Name:              strings.TrimSpace(ticketInput.Name),
+							Price:             ticketInput.Price,
+							TotalQuantity:     ticketInput.Capacity,
+							AvailableQuantity: ticketInput.Capacity,
+							Description:       strings.TrimSpace(ticketInput.Description),
+						}
+
+						if err := tx.TicketTypeRepository().Create(ctx, ticketType); err != nil {
+							u.logger.Error(
+								"event_ticket_type_create_failed",
+								"event_id", event.ID,
+								"ticket_type_id", ticketType.ID,
+								"error", err,
+							)
+							return err
+						}
+
+						ticketTypes = append(ticketTypes, ticketType)
+						continue
+					}
+
+					existingTicket := findTicketTypeByID(
+						existingTicketTypes,
+						*ticketInput.ID,
+					)
+
+					if existingTicket == nil {
+						u.logger.Warn(
+							"event_ticket_type_not_found",
+							"event_id", event.ID,
+							"ticket_type_id", *ticketInput.ID,
+						)
+						return domain.ErrTicketTypeNotFound
+					}
+
+					existingTicket.Name = strings.TrimSpace(ticketInput.Name)
+					existingTicket.Price = ticketInput.Price
+					existingTicket.TotalQuantity = ticketInput.Capacity
+					existingTicket.AvailableQuantity = ticketInput.Capacity
+					existingTicket.Description = strings.TrimSpace(ticketInput.Description)
+
+					if err := tx.TicketTypeRepository().Update(ctx, existingTicket); err != nil {
+						u.logger.Error(
+							"event_ticket_type_update_failed",
+							"event_id", event.ID,
+							"ticket_type_id", existingTicket.ID,
+							"error", err,
+						)
+						return err
+					}
+
+					ticketTypes = append(ticketTypes, existingTicket)
+				}
+
+				for _, existingTicket := range existingTicketTypes {
+					if _, exists := requestedTicketIDs[existingTicket.ID]; exists {
+						continue
+					}
+
+					if err := tx.TicketTypeRepository().Delete(ctx, existingTicket.ID); err != nil {
+						u.logger.Error(
+							"event_ticket_type_delete_failed",
+							"event_id", event.ID,
+							"ticket_type_id", existingTicket.ID,
+							"error", err,
+						)
+						return err
+					}
+				}
+			}
+
 			output = CreateEventOutput{
 				Event:        event,
 				Schedule:     schedule,
 				Setting:      setting,
 				Cancellation: cancellation,
 				Contact:      contact,
+				TicketTypes:  ticketTypes,
 			}
 
 			return nil
@@ -574,7 +683,8 @@ type UpdateEventInput struct {
 	RefundPolicy              string
 	RefundPercentage          int
 
-	Contact EventContactInput
+	Contact     EventContactInput
+	TicketTypes []TicketTypeInput
 }
 
 type UpdateEventOutput struct {
@@ -583,6 +693,7 @@ type UpdateEventOutput struct {
 	Setting      *domain.EventSetting
 	Cancellation *domain.EventCancellation
 	Contact      *domain.EventContact
+	TicketTypes  []*domain.TicketType
 }
 
 func (u *EventUsecase) UpdateEvent(
@@ -1009,12 +1120,106 @@ func (u *EventUsecase) UpdateEvent(
 				}
 			}
 
+			var ticketTypes []*domain.TicketType
+
+			if input.SeatLayoutType == SeatLayoutTypeGeneral {
+				existingTicketTypes, err := tx.TicketTypeRepository().FindByEventID(ctx, foundEvent.ID)
+				if err != nil {
+					u.logger.Error(
+						"event_ticket_types_find_failed",
+						"event_id", foundEvent.ID,
+						"error", err,
+					)
+					return err
+				}
+
+				requestedTicketIDs := make(map[uuid.UUID]struct{}, len(input.TicketTypes))
+
+				for _, ticketInput := range input.TicketTypes {
+					if ticketInput.ID != nil {
+						requestedTicketIDs[*ticketInput.ID] = struct{}{}
+					}
+				}
+
+				for _, ticketInput := range input.TicketTypes {
+					if ticketInput.ID == nil {
+						ticketType := &domain.TicketType{
+							ID:                uuid.New(),
+							EventID:           foundEvent.ID,
+							Name:              strings.TrimSpace(ticketInput.Name),
+							Price:             ticketInput.Price,
+							TotalQuantity:     ticketInput.Capacity,
+							AvailableQuantity: ticketInput.Capacity,
+							Description:       strings.TrimSpace(ticketInput.Description),
+						}
+
+						if err := tx.TicketTypeRepository().Create(ctx, ticketType); err != nil {
+							u.logger.Error(
+								"event_ticket_type_create_failed",
+								"event_id", foundEvent.ID,
+								"ticket_type_id", ticketType.ID,
+								"error", err,
+							)
+							return err
+						}
+
+						ticketTypes = append(ticketTypes, ticketType)
+						continue
+					}
+
+					existingTicket := findTicketTypeByID(existingTicketTypes, *ticketInput.ID)
+					if existingTicket == nil {
+						u.logger.Warn(
+							"event_ticket_type_not_found",
+							"event_id", foundEvent.ID,
+							"ticket_type_id", *ticketInput.ID,
+						)
+						return domain.ErrTicketTypeNotFound
+					}
+
+					existingTicket.Name = strings.TrimSpace(ticketInput.Name)
+					existingTicket.Price = ticketInput.Price
+					existingTicket.TotalQuantity = ticketInput.Capacity
+					existingTicket.AvailableQuantity = ticketInput.Capacity
+					existingTicket.Description = strings.TrimSpace(ticketInput.Description)
+
+					if err := tx.TicketTypeRepository().Update(ctx, existingTicket); err != nil {
+						u.logger.Error(
+							"event_ticket_type_update_failed",
+							"event_id", foundEvent.ID,
+							"ticket_type_id", existingTicket.ID,
+							"error", err,
+						)
+						return err
+					}
+
+					ticketTypes = append(ticketTypes, existingTicket)
+				}
+
+				for _, existingTicket := range existingTicketTypes {
+					if _, exists := requestedTicketIDs[existingTicket.ID]; exists {
+						continue
+					}
+
+					if err := tx.TicketTypeRepository().Delete(ctx, existingTicket.ID); err != nil {
+						u.logger.Error(
+							"event_ticket_type_delete_failed",
+							"event_id", foundEvent.ID,
+							"ticket_type_id", existingTicket.ID,
+							"error", err,
+						)
+						return err
+					}
+				}
+			}
+
 			output = UpdateEventOutput{
 				Event:        foundEvent,
 				Schedule:     schedule,
 				Setting:      setting,
 				Cancellation: cancellation,
 				Contact:      contact,
+				TicketTypes:  ticketTypes,
 			}
 
 			return nil
@@ -1127,6 +1332,12 @@ func validateCreateEventInput(input CreateEventInput) error {
 	if input.EventType == domain.EventTypeOnline &&
 		input.SeatLayoutType == SeatLayoutTypeSeated {
 		return ErrInvalidEventSettings
+	}
+
+	if input.SeatLayoutType == SeatLayoutTypeGeneral {
+		if err := validateTicketTypes(input.TicketTypes); err != nil {
+			return ErrInvalidEventSettings
+		}
 	}
 
 	if input.BookingLimitPerUser <= 0 {
@@ -1400,6 +1611,12 @@ func validateUpdateEventInput(input UpdateEventInput) error {
 		return ErrInvalidEventInput
 	}
 
+	if input.SeatLayoutType == SeatLayoutTypeGeneral {
+		if err := validateTicketTypes(input.TicketTypes); err != nil {
+			return ErrInvalidEventSettings
+		}
+	}
+
 	return nil
 }
 
@@ -1447,4 +1664,55 @@ func validateUpdateEventType(input UpdateEventInput) error {
 	default:
 		return errors.New("invalid event type")
 	}
+}
+
+func validateTicketTypes(ticketTypes []TicketTypeInput) error {
+	if len(ticketTypes) == 0 {
+		return errors.New("at least one ticket type is required")
+	}
+
+	seenNames := make(map[string]struct{}, len(ticketTypes))
+
+	for _, ticket := range ticketTypes {
+		name := strings.TrimSpace(ticket.Name)
+
+		if name == "" {
+			return errors.New("ticket type name is required")
+		}
+
+		if len(name) > 100 {
+			return errors.New("ticket type name must not exceed 100 characters")
+		}
+
+		if ticket.Price < 0 {
+			return errors.New("ticket type price cannot be negative")
+		}
+
+		if ticket.Capacity <= 0 {
+			return errors.New("ticket type capacity must be greater than zero")
+		}
+
+		key := strings.ToLower(name)
+
+		if _, exists := seenNames[key]; exists {
+			return errors.New("duplicate ticket type name")
+		}
+
+		seenNames[key] = struct{}{}
+	}
+
+	return nil
+}
+
+func findTicketTypeByID(
+	ticketTypes []*domain.TicketType,
+	id uuid.UUID,
+) *domain.TicketType {
+	for _, ticketType := range ticketTypes {
+		if ticketType.ID == id {
+			return ticketType
+		}
+	}
+
+	return nil
 }

@@ -12,6 +12,34 @@ type TransactionManager struct {
 	logger *slog.Logger
 }
 
+type transactionRepositories struct {
+	userRepo                 *UserRepository
+	pendingRegistrationRepo  *PendingRegistrationRepository
+	passwordResetTokenRepo   domain.PasswordResetTokenRepository
+	organizerApplicationRepo domain.OrganizerApplicationRepository
+
+	organizerRepo            domain.OrganizerRepository
+	organizerProfileRepo     domain.OrganizerProfileRepository
+	organizerAddressRepo     domain.OrganizerAddressRepository
+	organizerBankAccountRepo domain.OrganizerBankAccountRepository
+
+	categoryRepo domain.CategoryRepository
+	venueRepo    domain.VenueRepository
+
+	eventRepo             domain.EventRepository
+	eventScheduleRepo     domain.EventScheduleRepository
+	eventSettingRepo      domain.EventSettingRepository
+	eventCancellationRepo domain.EventCancellationRepository
+	eventContactRepo      domain.EventContactRepository
+
+	seatLayoutRepository  domain.SeatLayoutRepository
+	seatSectionRepository domain.SeatSectionRepository
+	seatRowRepository     domain.SeatRowRepository
+	seatRepository        domain.SeatRepository
+
+	ticketTypeRepo domain.TicketTypeRepository
+}
+
 func NewTransactionManager(
 	db *gorm.DB,
 	logger *slog.Logger,
@@ -94,36 +122,11 @@ func (m *TransactionManager) WithinTransaction(
 			seatSectionRepository: NewSeatSectionRepository(txDB, m.logger),
 			seatRowRepository:     NewSeatRowRepository(txDB, m.logger),
 			seatRepository:        NewSeatRepository(txDB, m.logger),
+			ticketTypeRepo:        NewTicketTypeRepository(txDB, m.logger),
 		}
 
 		return fn(txRepos)
 	})
-}
-
-type transactionRepositories struct {
-	userRepo                 *UserRepository
-	pendingRegistrationRepo  *PendingRegistrationRepository
-	passwordResetTokenRepo   domain.PasswordResetTokenRepository
-	organizerApplicationRepo domain.OrganizerApplicationRepository
-
-	organizerRepo            domain.OrganizerRepository
-	organizerProfileRepo     domain.OrganizerProfileRepository
-	organizerAddressRepo     domain.OrganizerAddressRepository
-	organizerBankAccountRepo domain.OrganizerBankAccountRepository
-
-	categoryRepo domain.CategoryRepository
-	venueRepo    domain.VenueRepository
-
-	eventRepo             domain.EventRepository
-	eventScheduleRepo     domain.EventScheduleRepository
-	eventSettingRepo      domain.EventSettingRepository
-	eventCancellationRepo domain.EventCancellationRepository
-	eventContactRepo      domain.EventContactRepository
-
-	seatLayoutRepository  domain.SeatLayoutRepository
-	seatSectionRepository domain.SeatSectionRepository
-	seatRowRepository     domain.SeatRowRepository
-	seatRepository        domain.SeatRepository
 }
 
 func (r *transactionRepositories) UserRepository() domain.UserRepository {
@@ -200,4 +203,8 @@ func (r *transactionRepositories) SeatRepository() domain.SeatRepository {
 
 func (r *transactionRepositories) EventContactRepository() domain.EventContactRepository {
 	return r.eventContactRepo
+}
+
+func (r *transactionRepositories) TicketTypeRepository() domain.TicketTypeRepository {
+	return r.ticketTypeRepo
 }
