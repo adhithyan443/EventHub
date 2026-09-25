@@ -22,7 +22,7 @@ export default function SuspendModal({ organizer, onConfirm, onCancel }) {
 
       {/* Modal Card */}
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[500px] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        <form onSubmit={handleSubmit} className="p-6">
+        <form onSubmit={handleSubmit} className="p-4 sm:p-6">
           {/* Header */}
           <div className="flex items-start gap-4 mb-5">
             <div className="bg-[#fef3c7] w-10 h-10 rounded-full flex items-center justify-center shrink-0 mt-0.5">
@@ -72,18 +72,18 @@ export default function SuspendModal({ organizer, onConfirm, onCancel }) {
           </div>
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-3">
+          <div className="flex flex-col-reverse sm:flex-row items-center justify-end gap-2 sm:gap-3">
             <button
               type="button"
               onClick={onCancel}
-              className="border border-[#bcc9c6] bg-white text-[#141b2b] text-sm font-medium px-5 py-2 rounded-lg hover:bg-[#f9f9ff] transition-colors cursor-pointer"
+              className="w-full sm:w-auto border border-[#bcc9c6] bg-white text-[#141b2b] text-sm font-medium px-5 py-2.5 sm:py-2 rounded-lg hover:bg-[#f9f9ff] transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!reason.trim()}
-              className="bg-[#93000a] text-white text-sm font-semibold px-5 py-2 rounded-lg hover:bg-[#7d000a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 cursor-pointer shadow-sm"
+              className="w-full sm:w-auto bg-[#93000a] text-white text-sm font-semibold px-5 py-2.5 sm:py-2 rounded-lg hover:bg-[#7d000a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer shadow-sm"
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
                 <path

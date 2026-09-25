@@ -136,11 +136,11 @@ export default function OrganizerDashboardPage() {
   ];
 
   return (
-    <div className="p-8 max-w-7xl mx-auto flex flex-col gap-8">
+    <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6 sm:gap-8">
       {/* Welcome Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-[#bcc9c6]/50 rounded-2xl p-6 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white border border-[#bcc9c6]/50 rounded-2xl p-4 sm:p-6 shadow-sm">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold text-[#141b2b]">
+          <h1 className="text-xl sm:text-2xl font-bold text-[#141b2b]">
             Welcome back, Event Masters 👋
           </h1>
           <p className="text-[14px] text-[#565e74]">
@@ -219,7 +219,7 @@ export default function OrganizerDashboardPage() {
           </div>
 
           {/* Graphical Bar Preview */}
-          <div className="h-56 flex items-end justify-between gap-3 pt-6 pb-2 px-2">
+          <div className="h-56 flex items-end justify-between gap-1.5 sm:gap-3 pt-6 pb-2 px-2">
             {[45, 62, 58, 85, 92, 78, 95, 68, 82, 105, 90, 115].map((val, idx) => (
               <div key={idx} className="flex-1 flex flex-col items-center gap-2 group">
                 <div
@@ -282,7 +282,7 @@ export default function OrganizerDashboardPage() {
           </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
           {upcomingEvents.map((ev) => {
             const pct = Math.round((ev.sold / ev.capacity) * 100);
             return (

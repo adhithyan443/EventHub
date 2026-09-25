@@ -27,6 +27,7 @@ export const ORGANIZER_ROUTES = Object.freeze({
   ATTENDEES: "/organizer/attendees",
   REPORTS: "/organizer/reports",
   SETTINGS: "/organizer/settings",
+  PROFILE: "/organizer/profile",
 });
 
 // Alias EVENT_TYPES to LOCATION_TYPES

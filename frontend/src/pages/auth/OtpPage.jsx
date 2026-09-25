@@ -133,7 +133,7 @@ export default function OtpPage() {
             description="Your events are waiting for you."
         >
             <div className="flex flex-col items-center gap-6 w-full max-w-md">
-                <div className="bg-white rounded-lg shadow p-8 w-full flex flex-col gap-8">
+                <div className="bg-white rounded-lg shadow p-5 sm:p-8 w-full flex flex-col gap-8">
                     <div className="flex flex-col items-center gap-1 text-center">
                         <span className="font-display text-xl font-semibold text-primary">
                             EventHub

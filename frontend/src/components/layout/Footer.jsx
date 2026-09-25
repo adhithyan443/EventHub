@@ -3,12 +3,12 @@ import { Link } from "react-router-dom";
 export default function Footer() {
   return (
     <footer className="w-full bg-[#eef2fb] border-t border-slate-200/60 mt-auto">
-      <div className="max-w-7xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs sm:text-sm text-slate-600">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs sm:text-sm text-slate-600 text-center sm:text-left">
         <Link to="/events" className="font-display font-bold text-slate-900 text-lg">
           EventHub
         </Link>
 
-        <nav className="flex items-center gap-6">
+        <nav className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
           <Link to="/about" className="hover:text-slate-900 underline underline-offset-4 decoration-slate-300">
             About
           </Link>

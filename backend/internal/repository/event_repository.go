@@ -47,6 +47,63 @@ func (r *EventRepository) Create(event *domain.Event) error {
 	return nil
 }
 
+func (r *EventRepository) Update(event *domain.Event) error {
+	if event == nil {
+		return errors.New("event cannot be nil")
+	}
+
+	model := toEventModel(event)
+
+	result := r.db.
+		Model(&models.EventModel{}).
+		Where("id = ?", event.ID).
+		Updates(map[string]interface{}{
+			"organizer_id":         model.OrganizerID,
+			"category_id":          model.CategoryID,
+			"venue_id":             model.VenueID,
+			"event_type":           model.EventType,
+			"online_url":           model.OnlineURL,
+			"title":                model.Title,
+			"description":          model.Description,
+			"banner_url":           model.BannerURL,
+			"language":             model.Language,
+			"age_restriction":      model.AgeRestriction,
+			"visibility":           model.Visibility,
+			"highlights":           model.Highlights,
+			"rules":                model.Rules,
+			"attendee_information": model.AttendeeInformation,
+			"status":               model.Status,
+			"updated_at":           model.UpdatedAt,
+		})
+
+	if result.Error != nil {
+		r.logger.Error(
+			"event_update_failed",
+			"event_id", event.ID,
+			"error", result.Error,
+		)
+
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_update_not_found",
+			"event_id", event.ID,
+		)
+
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info(
+		"event_updated",
+		"event_id", event.ID,
+		"organizer_id", event.OrganizerID,
+	)
+
+	return nil
+}
+
 func (r *EventRepository) FindByID(id uuid.UUID) (*domain.Event, error) {
 	var eventModel models.EventModel
 
@@ -72,18 +129,24 @@ func (r *EventRepository) FindByID(id uuid.UUID) (*domain.Event, error) {
 
 func toEventModel(event *domain.Event) *models.EventModel {
 	return &models.EventModel{
-		ID:             event.ID,
-		OrganizerID:    event.OrganizerID,
-		CategoryID:     event.CategoryID,
-		VenueID:        event.VenueID,
-		Title:          event.Title,
-		Description:    event.Description,
-		BannerURL:      event.BannerURL,
-		Language:       event.Language,
-		AgeRestriction: event.AgeRestriction,
-		Status:         event.Status,
-		CreatedAt:      event.CreatedAt,
-		UpdatedAt:      event.UpdatedAt,
+		ID:                  event.ID,
+		OrganizerID:         event.OrganizerID,
+		CategoryID:          event.CategoryID,
+		VenueID:             event.VenueID,
+		EventType:           event.EventType,
+		OnlineURL:           event.OnlineURL,
+		Title:               event.Title,
+		Description:         event.Description,
+		BannerURL:           event.BannerURL,
+		Language:            event.Language,
+		AgeRestriction:      event.AgeRestriction,
+		Visibility:          event.Visibility,
+		Highlights:          event.Highlights,
+		Rules:               event.Rules,
+		AttendeeInformation: event.AttendeeInformation,
+		Status:              event.Status,
+		CreatedAt:           event.CreatedAt,
+		UpdatedAt:           event.UpdatedAt,
 	}
 }
 
@@ -91,17 +154,23 @@ func toEventDomain(
 	eventModel *models.EventModel,
 ) *domain.Event {
 	return &domain.Event{
-		ID:             eventModel.ID,
-		OrganizerID:    eventModel.OrganizerID,
-		CategoryID:     eventModel.CategoryID,
-		VenueID:        eventModel.VenueID,
-		Title:          eventModel.Title,
-		Description:    eventModel.Description,
-		BannerURL:      eventModel.BannerURL,
-		Language:       eventModel.Language,
-		AgeRestriction: eventModel.AgeRestriction,
-		Status:         eventModel.Status,
-		CreatedAt:      eventModel.CreatedAt,
-		UpdatedAt:      eventModel.UpdatedAt,
+		ID:                  eventModel.ID,
+		OrganizerID:         eventModel.OrganizerID,
+		CategoryID:          eventModel.CategoryID,
+		VenueID:             eventModel.VenueID,
+		EventType:           eventModel.EventType,
+		OnlineURL:           eventModel.OnlineURL,
+		Title:               eventModel.Title,
+		Description:         eventModel.Description,
+		BannerURL:           eventModel.BannerURL,
+		Language:            eventModel.Language,
+		AgeRestriction:      eventModel.AgeRestriction,
+		Visibility:          eventModel.Visibility,
+		Highlights:          eventModel.Highlights,
+		Rules:               eventModel.Rules,
+		AttendeeInformation: eventModel.AttendeeInformation,
+		Status:              eventModel.Status,
+		CreatedAt:           eventModel.CreatedAt,
+		UpdatedAt:           eventModel.UpdatedAt,
 	}
 }

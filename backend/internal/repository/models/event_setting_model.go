@@ -11,8 +11,10 @@ type EventSettingModel struct {
 
 	EventID uuid.UUID `gorm:"type:uuid;not null;uniqueIndex"`
 
-	SeatLayoutType      string `gorm:"type:varchar(50);not null"`
-	BookingLimitPerUser int    `gorm:"not null"`
+	SeatLayoutType      string     `gorm:"type:varchar(50);not null"`
+	BookingLimitPerUser int        `gorm:"not null"`
+	SalesStartDate      *time.Time `gorm:"type:date"`
+	SalesEndDate        *time.Time `gorm:"type:date"`
 
 	CreatedAt time.Time `gorm:"not null;autoCreateTime"`
 	UpdatedAt time.Time `gorm:"not null;autoUpdateTime"`

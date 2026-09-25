@@ -1,41 +1,55 @@
 import { useState } from "react";
 
-export default function AdminTopBar() {
+export default function AdminTopBar({ onMenuToggle }) {
   const [searchValue, setSearchValue] = useState("");
 
   return (
-    <header className="bg-white border-b border-[#bcc9c6] h-16 flex items-center justify-between px-6 shrink-0 shadow-[0px_1px_1px_rgba(0,0,0,0.05)] z-10">
-      {/* Search */}
-      <div className="relative w-64 md:w-80">
-        <svg
-          className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-          width="18"
-          height="18"
-          viewBox="0 0 18 18"
-          fill="none"
-        >
-          <path
-            d="M11.5 10H10.71L10.43 9.73C11.41 8.59 12 7.11 12 5.5C12 1.91 9.09 -1 5.5 -1C1.91 -1 -1 1.91 -1 5.5C-1 9.09 1.91 12 5.5 12C7.11 12 8.59 11.41 9.73 10.43L10 10.71V11.5L15 16.49L16.49 15L11.5 10ZM5.5 10C3.01 10 1 7.99 1 5.5C1 3.01 3.01 1 5.5 1C7.99 1 10 3.01 10 5.5C10 7.99 7.99 10 5.5 10Z"
-            fill="#3D4947"
+    <header className="bg-white border-b border-[#bcc9c6] h-16 flex items-center justify-between px-3 sm:px-6 shrink-0 shadow-[0px_1px_1px_rgba(0,0,0,0.05)] z-10 gap-2">
+      {/* Left: Hamburger & Search */}
+      <div className="flex items-center gap-2">
+        {onMenuToggle && (
+          <button
+            type="button"
+            onClick={onMenuToggle}
+            className="lg:hidden p-1.5 text-[#3d4947] hover:bg-gray-100 rounded-lg transition-colors shrink-0"
+            aria-label="Open sidebar"
+          >
+            <svg className="size-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        )}
+        <div className="relative w-36 sm:w-64 md:w-80">
+          <svg
+            className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            width="18"
+            height="18"
+            viewBox="0 0 18 18"
+            fill="none"
+          >
+            <path
+              d="M11.5 10H10.71L10.43 9.73C11.41 8.59 12 7.11 12 5.5C12 1.91 9.09 -1 5.5 -1C1.91 -1 -1 1.91 -1 5.5C-1 9.09 1.91 12 5.5 12C7.11 12 8.59 11.41 9.73 10.43L10 10.71V11.5L15 16.49L16.49 15L11.5 10ZM5.5 10C3.01 10 1 7.99 1 5.5C1 3.01 3.01 1 5.5 1C7.99 1 10 3.01 10 5.5C10 7.99 7.99 10 5.5 10Z"
+              fill="#3D4947"
+            />
+          </svg>
+          <input
+            type="text"
+            value={searchValue}
+            onChange={(e) => setSearchValue(e.target.value)}
+            placeholder="Search globally..."
+            className="bg-[#f1f3ff] border border-[#bcc9c6] rounded-lg pl-9 sm:pl-10 pr-3 sm:pr-4 py-1.5 sm:py-2 text-xs sm:text-sm text-[#141b2b] placeholder:text-[#6b7280] w-full focus:outline-none focus:ring-2 focus:ring-[#00685f]/30 focus:border-[#00685f] transition-all"
           />
-        </svg>
-        <input
-          type="text"
-          value={searchValue}
-          onChange={(e) => setSearchValue(e.target.value)}
-          placeholder="Search globally..."
-          className="bg-[#f1f3ff] border border-[#bcc9c6] rounded-lg pl-10 pr-4 py-2 text-sm text-[#141b2b] placeholder:text-[#6b7280] w-full focus:outline-none focus:ring-2 focus:ring-[#00685f]/30 focus:border-[#00685f] transition-all"
-        />
+        </div>
       </div>
 
       {/* Right actions */}
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-3">
+      <div className="flex items-center gap-2 sm:gap-6 shrink-0">
+        <div className="flex items-center gap-1 sm:gap-3">
           {/* Bell Notifications */}
           <button
             type="button"
             title="Notifications"
-            className="p-2 rounded-full hover:bg-[#f1f3ff] text-[#3D4947] transition-colors relative cursor-pointer"
+            className="p-1.5 sm:p-2 rounded-full hover:bg-[#f1f3ff] text-[#3D4947] transition-colors relative cursor-pointer"
           >
             <svg width="16" height="20" viewBox="0 0 16 20" fill="none">
               <path
@@ -50,7 +64,7 @@ export default function AdminTopBar() {
           <button
             type="button"
             title="Settings"
-            className="p-2 rounded-full hover:bg-[#f1f3ff] text-[#3D4947] transition-colors cursor-pointer"
+            className="p-1.5 sm:p-2 rounded-full hover:bg-[#f1f3ff] text-[#3D4947] transition-colors cursor-pointer hidden sm:inline-flex"
           >
             <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
               <path
@@ -61,11 +75,11 @@ export default function AdminTopBar() {
           </button>
         </div>
 
-        <div className="w-px h-8 bg-[#bcc9c6]" />
+        <div className="w-px h-8 bg-[#bcc9c6] hidden sm:block" />
 
         {/* Admin Avatar */}
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-[#5c6bc0] font-bold text-sm select-none shadow-sm">
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-[#5c6bc0] font-bold text-xs sm:text-sm select-none shadow-sm">
             A
           </div>
           <div className="hidden sm:block text-left">

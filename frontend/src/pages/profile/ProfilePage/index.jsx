@@ -39,7 +39,7 @@ export default function ProfilePage() {
         <div className="min-h-screen bg-[#f8fafc] flex flex-col justify-between">
             <AppHeader />
 
-            <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8 flex flex-col lg:flex-row gap-6 items-stretch">
+            <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 py-6 sm:py-8 flex flex-col lg:flex-row gap-6 items-stretch">
                 <ProfileSidebar user={displayUser} />
 
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 w-full items-start">
@@ -51,7 +51,7 @@ export default function ProfilePage() {
                     <div className="lg:col-span-7 flex flex-col gap-6">
                         <div>
                             <h2 className="font-display text-lg font-bold text-slate-900 mb-3">My Activity</h2>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <ActivityCard icon={CalendarIcon} title="My Bookings" description="View upcoming and past events." tone="primary" />
                                 <ActivityCard icon={TicketIcon} title="My Tickets" description="Access your event passes." tone="soft" />
                                 <ActivityCard icon={RefreshIcon} title="Refunds & Transactions" description="Track refund status and billing history." tone="soft" wide />

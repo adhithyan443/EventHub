@@ -18,9 +18,6 @@ export default function BecomeOrganizerPage() {
   const setCurrentStep = useOrganizerStore((state) => state.setCurrentStep);
   const saveDraft = useOrganizerStore((state) => state.saveDraft);
 
-  const applicationSubmitted = useOrganizerStore(
-    (state) => state.applicationSubmitted
-  );
   const applicationStatus = useOrganizerStore(
     (state) => state.applicationStatus
   );

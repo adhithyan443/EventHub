@@ -123,7 +123,7 @@ export default function Step3BankDetails({ onNext, onBack, onSaveLater }) {
       </div>
 
       {/* Form card */}
-      <form onSubmit={handleSubmit} noValidate className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-6 sm:p-8">
+      <form onSubmit={handleSubmit} noValidate className="bg-white rounded-2xl border border-slate-200/80 shadow-sm p-4 sm:p-8">
         <h2 className="font-display text-lg font-bold text-slate-900 pb-4 mb-5 border-b border-slate-100">
           3. Bank Account Details
         </h2>

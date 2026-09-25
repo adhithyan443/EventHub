@@ -16,14 +16,14 @@ export default function OrganizerDetailDrawer({
       {/* Slide Drawer */}
       <div className="relative w-full max-w-[480px] bg-white shadow-2xl flex flex-col h-full overflow-hidden z-10 animate-in slide-in-from-right duration-200">
         {/* Header */}
-        <div className="px-6 py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
+        <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0]">
+            <div className="w-12 h-12 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0">
               {organizer.name[0]}
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-[#141b2b] text-lg font-bold">
+                <h2 className="text-[#141b2b] text-base sm:text-lg font-bold">
                   {organizer.name}
                 </h2>
                 <span
@@ -58,7 +58,7 @@ export default function OrganizerDetailDrawer({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-[#fafbff]">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 bg-[#fafbff]">
           {/* Quick Metrics */}
           <div className="grid grid-cols-2 gap-3">
             <div className="bg-white border border-[#dce2f7] rounded-xl p-4 shadow-sm">

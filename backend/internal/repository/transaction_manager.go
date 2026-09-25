@@ -12,6 +12,34 @@ type TransactionManager struct {
 	logger *slog.Logger
 }
 
+type transactionRepositories struct {
+	userRepo                 *UserRepository
+	pendingRegistrationRepo  *PendingRegistrationRepository
+	passwordResetTokenRepo   domain.PasswordResetTokenRepository
+	organizerApplicationRepo domain.OrganizerApplicationRepository
+
+	organizerRepo            domain.OrganizerRepository
+	organizerProfileRepo     domain.OrganizerProfileRepository
+	organizerAddressRepo     domain.OrganizerAddressRepository
+	organizerBankAccountRepo domain.OrganizerBankAccountRepository
+
+	categoryRepo domain.CategoryRepository
+	venueRepo    domain.VenueRepository
+
+	eventRepo             domain.EventRepository
+	eventScheduleRepo     domain.EventScheduleRepository
+	eventSettingRepo      domain.EventSettingRepository
+	eventCancellationRepo domain.EventCancellationRepository
+	eventContactRepo      domain.EventContactRepository
+
+	seatLayoutRepository  domain.SeatLayoutRepository
+	seatSectionRepository domain.SeatSectionRepository
+	seatRowRepository     domain.SeatRowRepository
+	seatRepository        domain.SeatRepository
+
+	ticketTypeRepo domain.TicketTypeRepository
+}
+
 func NewTransactionManager(
 	db *gorm.DB,
 	logger *slog.Logger,
@@ -84,30 +112,21 @@ func (m *TransactionManager) WithinTransaction(
 				txDB,
 				m.logger,
 			),
+
+			eventContactRepo: NewEventContactRepository(
+				txDB,
+				m.logger,
+			),
+
+			seatLayoutRepository:  NewSeatLayoutRepository(txDB, m.logger),
+			seatSectionRepository: NewSeatSectionRepository(txDB, m.logger),
+			seatRowRepository:     NewSeatRowRepository(txDB, m.logger),
+			seatRepository:        NewSeatRepository(txDB, m.logger),
+			ticketTypeRepo:        NewTicketTypeRepository(txDB, m.logger),
 		}
 
 		return fn(txRepos)
 	})
-}
-
-type transactionRepositories struct {
-	userRepo                 *UserRepository
-	pendingRegistrationRepo  *PendingRegistrationRepository
-	passwordResetTokenRepo   domain.PasswordResetTokenRepository
-	organizerApplicationRepo domain.OrganizerApplicationRepository
-
-	organizerRepo            domain.OrganizerRepository
-	organizerProfileRepo     domain.OrganizerProfileRepository
-	organizerAddressRepo     domain.OrganizerAddressRepository
-	organizerBankAccountRepo domain.OrganizerBankAccountRepository
-
-	categoryRepo domain.CategoryRepository
-	venueRepo    domain.VenueRepository
-
-	eventRepo             domain.EventRepository
-	eventScheduleRepo     domain.EventScheduleRepository
-	eventSettingRepo      domain.EventSettingRepository
-	eventCancellationRepo domain.EventCancellationRepository
 }
 
 func (r *transactionRepositories) UserRepository() domain.UserRepository {
@@ -164,4 +183,28 @@ func (r *transactionRepositories) EventSettingRepository() domain.EventSettingRe
 
 func (r *transactionRepositories) EventCancellationRepository() domain.EventCancellationRepository {
 	return r.eventCancellationRepo
+}
+
+func (r *transactionRepositories) SeatLayoutRepository() domain.SeatLayoutRepository {
+	return r.seatLayoutRepository
+}
+
+func (r *transactionRepositories) SeatSectionRepository() domain.SeatSectionRepository {
+	return r.seatSectionRepository
+}
+
+func (r *transactionRepositories) SeatRowRepository() domain.SeatRowRepository {
+	return r.seatRowRepository
+}
+
+func (r *transactionRepositories) SeatRepository() domain.SeatRepository {
+	return r.seatRepository
+}
+
+func (r *transactionRepositories) EventContactRepository() domain.EventContactRepository {
+	return r.eventContactRepo
+}
+
+func (r *transactionRepositories) TicketTypeRepository() domain.TicketTypeRepository {
+	return r.ticketTypeRepo
 }

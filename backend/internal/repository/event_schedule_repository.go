@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -76,15 +77,77 @@ func (r *EventScheduleRepository) FindByEventID(
 	return toEventScheduleDomain(&scheduleModel), nil
 }
 
+func (r *EventScheduleRepository) Update(
+	schedule *domain.EventSchedule,
+) error {
+	if schedule == nil {
+		return errors.New("event schedule cannot be nil")
+	}
+
+	scheduleModel := toEventScheduleModel(schedule)
+
+	result := r.db.
+		Model(&models.EventScheduleModel{}).
+		Where("event_id = ?", schedule.EventID).
+		Updates(map[string]interface{}{
+			"event_date": scheduleModel.EventDate,
+			"start_time": scheduleModel.StartTime,
+			"end_time":   scheduleModel.EndTime,
+			"is_all_day": scheduleModel.IsAllDay,
+			"updated_at": time.Now(),
+		})
+
+	if result.Error != nil {
+		r.logger.Error(
+			"event_schedule_update_failed",
+			"event_id", schedule.EventID,
+			"error", result.Error,
+		)
+
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_schedule_update_not_found",
+			"event_id", schedule.EventID,
+		)
+
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info(
+		"event_schedule_updated",
+		"event_id", schedule.EventID,
+		"schedule_id", schedule.ID,
+	)
+
+	return nil
+}
+
 func toEventScheduleModel(
 	schedule *domain.EventSchedule,
 ) *models.EventScheduleModel {
+	var startTime *time.Time
+	var endTime *time.Time
+
+	if !schedule.StartTime.IsZero() {
+		start := schedule.StartTime
+		startTime = &start
+	}
+
+	if !schedule.EndTime.IsZero() {
+		end := schedule.EndTime
+		endTime = &end
+	}
+
 	return &models.EventScheduleModel{
 		ID:        schedule.ID,
 		EventID:   schedule.EventID,
 		EventDate: schedule.EventDate,
-		StartTime: schedule.StartTime,
-		EndTime:   schedule.EndTime,
+		StartTime: startTime,
+		EndTime:   endTime,
+		IsAllDay:  schedule.IsAllDay,
 		CreatedAt: schedule.CreatedAt,
 		UpdatedAt: schedule.UpdatedAt,
 	}
@@ -93,12 +156,24 @@ func toEventScheduleModel(
 func toEventScheduleDomain(
 	scheduleModel *models.EventScheduleModel,
 ) *domain.EventSchedule {
+	var startTime time.Time
+	var endTime time.Time
+
+	if scheduleModel.StartTime != nil {
+		startTime = *scheduleModel.StartTime
+	}
+
+	if scheduleModel.EndTime != nil {
+		endTime = *scheduleModel.EndTime
+	}
+
 	return &domain.EventSchedule{
 		ID:        scheduleModel.ID,
 		EventID:   scheduleModel.EventID,
 		EventDate: scheduleModel.EventDate,
-		StartTime: scheduleModel.StartTime,
-		EndTime:   scheduleModel.EndTime,
+		StartTime: startTime,
+		EndTime:   endTime,
+		IsAllDay:  scheduleModel.IsAllDay,
 		CreatedAt: scheduleModel.CreatedAt,
 		UpdatedAt: scheduleModel.UpdatedAt,
 	}

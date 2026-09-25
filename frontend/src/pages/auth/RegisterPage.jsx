@@ -140,7 +140,7 @@ export default function RegisterPage() {
             }
             description="Create your account and start discovering amazing events."
         >
-            <div className="bg-white rounded-lg shadow p-8 w-full max-w-md flex flex-col gap-6">
+            <div className="bg-white rounded-lg shadow p-5 sm:p-8 w-full max-w-md flex flex-col gap-6">
                 <div>
                     <h2 className="font-display text-2xl font-semibold text-ink">
                         Create your account

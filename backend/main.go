@@ -11,18 +11,19 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/adhithyan443/EventHub/backend/internal/service/google"
+	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
+	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/joho/godotenv"
 )
 
 func main() {
-
 	logger, closeLog, err := appLogger.New("app.log")
 	if err != nil {
-		slog.Error("Failed to initialize logger", "error", err)
+		slog.Error("failed to initialize logger", "error", err)
 		return
 	}
 	defer closeLog()
@@ -30,7 +31,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	if err := godotenv.Load("../.env"); err != nil {
-		logger.Warn(" .env file not found, using environment variables")
+		logger.Warn(".env file not found, using environment variables")
 	}
 
 	cfg, err := config.Load()
@@ -51,6 +52,7 @@ func main() {
 		logger.Error("database migration failed", "error", err)
 		return
 	}
+
 	logger.Info("database migration completed")
 
 	if err := database.SeedCategories(db, logger); err != nil {
@@ -60,20 +62,61 @@ func main() {
 
 	logger.Info("category seeding completed")
 
+	s3Service, err := storage.NewS3Service(
+		cfg,
+		logger,
+	)
+	if err != nil {
+		logger.Error(
+			"s3_service_initialization_failed",
+			"error", err,
+		)
+		return
+	}
+
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
 	userRepo := repository.NewUserRepository(db, logger)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
-	txManager := repository.NewTransactionManager(db, logger)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
+	txManager := repository.NewTransactionManager(db, logger)
+
+	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
-	// _ = repository.NewVenueRepository(db, logger)
 
-	categoryUsecase := category.NewCategoryUsecase(categoryRepository, logger)
+	categoryUsecase := category.NewCategoryUsecase(
+		categoryRepository,
+		logger,
+	)
 
-	categoryHandler := handler.NewCategoryHandler(categoryUsecase)
+	categoryHandler := handler.NewCategoryHandler(
+		categoryUsecase,
+	)
+
+	// Event dependencies.
+	eventUsecase := eventUC.NewEventUsecase(
+		txManager,
+		s3Service,
+		logger,
+	)
+
+	eventHandler := handler.NewEventHandler(
+		eventUsecase,
+		logger,
+	)
+
+	// Seat layout dependencies.
+	seatLayoutUsecase := eventUC.NewSeatLayoutUsecase(
+		txManager,
+		logger,
+	)
+
+	seatLayoutHandler := handler.NewSeatLayoutHandler(
+		seatLayoutUsecase,
+		logger,
+	)
 
 	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
 	if err != nil {
@@ -98,6 +141,7 @@ func main() {
 		cfg.SMTPFrom,
 		cfg.FrontendURL,
 	)
+
 	authUsecase := auth.NewAuthUsecase(
 		userRepo,
 		pendingRegistrationRepo,
@@ -110,11 +154,46 @@ func main() {
 		logger,
 	)
 
-	authHandler := handler.NewAuthHandler(authUsecase, cfg.FrontendURL)
+	authHandler := handler.NewAuthHandler(
+		authUsecase,
+		cfg.FrontendURL,
+	)
 
-	// organizerApplicationRepo
 	organizerApplicationRepo := repository.NewOrganizerApplicationRepository(
 		db,
+		logger,
+	)
+
+	organizerRepo := repository.NewOrganizerRepository(
+		db,
+		logger,
+	)
+
+	organizerProfileRepo := repository.NewOrganizerProfileRepository(
+		db,
+		logger,
+	)
+
+	organizerAddressRepo := repository.NewOrganizerAddressRepository(
+		db,
+		logger,
+	)
+
+	organizerBankAccountRepo := repository.NewOrganizerBankAccountRepository(
+		db,
+		logger,
+	)
+
+	organizerProfileUsecase := organizer.NewProfileUsecase(
+		organizerRepo,
+		organizerProfileRepo,
+		organizerAddressRepo,
+		organizerBankAccountRepo,
+		logger,
+	)
+
+	organizerProfileHandler := handler.NewOrganizerProfileHandler(
+		organizerProfileUsecase,
 		logger,
 	)
 
@@ -136,7 +215,16 @@ func main() {
 		logger,
 	)
 
-	router := setupRouter(logger, authHandler, organizerApplicationHandler, categoryHandler, jwtService)
+	router := setupRouter(
+		logger,
+		authHandler,
+		organizerApplicationHandler,
+		organizerProfileHandler,
+		categoryHandler,
+		eventHandler,
+		seatLayoutHandler,
+		jwtService,
+	)
 
 	logger.Info(
 		"EventHub backend started",
@@ -145,8 +233,9 @@ func main() {
 	)
 
 	if err := router.Run(":" + cfg.ServerPort); err != nil {
-		logger.Error("server failed to start", "error", err)
+		logger.Error(
+			"server failed to start",
+			"error", err,
+		)
 	}
-
-	_ = slog.Default()
 }

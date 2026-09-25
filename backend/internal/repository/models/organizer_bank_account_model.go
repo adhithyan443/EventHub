@@ -13,6 +13,7 @@ type OrganizerBankAccountModel struct {
 	BankName               string `gorm:"type:varchar(255);not null"`
 	AccountHolderName      string `gorm:"type:varchar(255);not null"`
 	AccountNumberEncrypted string `gorm:"type:text;not null"`
+	AccountNumberLast4     string `gorm:"type:varchar(4);not null"`
 	IFSCCode               string `gorm:"type:varchar(20);not null"`
 
 	CreatedAt time.Time `gorm:"not null;autoCreateTime"`

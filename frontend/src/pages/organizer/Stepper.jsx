@@ -61,7 +61,7 @@ export default function Stepper({ currentStep }) {
             )}
 
             <span
-              className={`text-[11px] sm:text-xs font-medium tracking-wide text-center whitespace-nowrap transition-colors ${
+              className={`text-[10px] sm:text-xs font-medium tracking-tight sm:tracking-wide text-center whitespace-nowrap transition-colors ${
                 active
                   ? "font-bold text-primary"
                   : completed

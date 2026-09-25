@@ -16,7 +16,6 @@ export default function OrganizerStatusPage() {
   const rejectionReason = useOrganizerStore((state) => state.rejectionReason);
   const rawSubmissionDate = useOrganizerStore((state) => state.submissionDate);
 
-  const isCheckingApplication = useOrganizerStore((state) => state.isCheckingApplication);
   const fetchApplication = useOrganizerStore((state) => state.fetchApplication);
 
   // Fetch current application from backend on mount

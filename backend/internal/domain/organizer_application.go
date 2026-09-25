@@ -34,6 +34,7 @@ type OrganizerApplication struct {
 	BankName               string
 	AccountHolderName      string
 	AccountNumberEncrypted string
+	AccountNumberLast4     string
 	IFSCCode               string
 
 	AddressLine string

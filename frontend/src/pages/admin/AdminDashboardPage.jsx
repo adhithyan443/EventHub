@@ -174,17 +174,17 @@ export default function AdminDashboardPage() {
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-white w-full">
       {/* Page Header */}
-      <div className="px-6 py-5 border-b border-[#dce2f7] shrink-0">
-        <h1 className="text-[#141b2b] text-2xl font-bold leading-8 tracking-tight">
+      <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#dce2f7] shrink-0">
+        <h1 className="text-[#141b2b] text-xl sm:text-2xl font-bold leading-8 tracking-tight">
           Admin Dashboard
         </h1>
-        <p className="text-[#3d4947] text-sm mt-0.5">
+        <p className="text-[#3d4947] text-xs sm:text-sm mt-0.5">
           Monitor and manage the EventHub platform.
         </p>
       </div>
 
       {/* Main Scrollable View */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6 space-y-6">
         {/* Metric Cards: 4 x 2 Grid */}
         <section>
           <h2 className="text-[#3d4947] text-xs font-semibold uppercase tracking-wider mb-3">

@@ -15,19 +15,31 @@ const (
 	EventStatusCancelled = "CANCELLED"
 )
 
+const (
+	EventTypePhysical = "PHYSICAL"
+	EventTypeOnline   = "ONLINE"
+	EventTypeHybrid   = "HYBRID"
+)
+
 type Event struct {
-	ID             uuid.UUID
-	OrganizerID    uuid.UUID
-	CategoryID     uuid.UUID
-	VenueID        uuid.UUID
-	Title          string
-	Description    string
-	BannerURL      string
-	Language       string
-	AgeRestriction int
-	Status         string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                  uuid.UUID
+	OrganizerID         uuid.UUID
+	CategoryID          uuid.UUID
+	VenueID             *uuid.UUID
+	EventType           string
+	OnlineURL           string
+	Title               string
+	Description         string
+	BannerURL           string
+	Language            string
+	AgeRestriction      int
+	Visibility          string
+	Highlights          string
+	Rules               string
+	AttendeeInformation string
+	Status              string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 type EventSchedule struct {
@@ -35,6 +47,7 @@ type EventSchedule struct {
 	EventID   uuid.UUID
 	EventDate time.Time
 	StartTime time.Time
+	IsAllDay  bool
 	EndTime   time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -45,6 +58,8 @@ type EventSetting struct {
 	EventID             uuid.UUID
 	SeatLayoutType      string
 	BookingLimitPerUser int
+	SalesStartDate      *time.Time
+	SalesEndDate        *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -54,6 +69,8 @@ type EventCancellation struct {
 	EventID                   uuid.UUID
 	CancellationAllowed       bool
 	CancellationDeadlineHours int
+	RefundPolicy              string
+	RefundPercentage          int
 	CancelledAt               *time.Time
 	CancellationReason        *string
 	CreatedAt                 time.Time
@@ -63,19 +80,23 @@ type EventCancellation struct {
 type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)
+	Update(event *Event) error
 }
 
 type EventScheduleRepository interface {
 	Create(schedule *EventSchedule) error
 	FindByEventID(eventID uuid.UUID) (*EventSchedule, error)
+	Update(schedule *EventSchedule) error
 }
 
 type EventSettingRepository interface {
 	Create(setting *EventSetting) error
 	FindByEventID(eventID uuid.UUID) (*EventSetting, error)
+	Update(setting *EventSetting) error
 }
 
 type EventCancellationRepository interface {
 	Create(cancellation *EventCancellation) error
 	FindByEventID(eventID uuid.UUID) (*EventCancellation, error)
+	Update(cancellation *EventCancellation) error
 }

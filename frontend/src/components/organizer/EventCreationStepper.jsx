@@ -12,8 +12,8 @@ export default function EventCreationStepper({ currentStep = 1 }) {
   const steps = getEventCreationSteps(locationType, ticketMode);
 
   return (
-    <div className="bg-white rounded-xl border border-[#bcc9c6]/50 shadow-sm p-3 w-full mb-6">
-      <ol className="flex items-center justify-between w-full relative">
+    <div className="bg-white rounded-xl border border-[#bcc9c6]/50 shadow-sm p-2 sm:p-3 w-full mb-6 overflow-x-auto scrollbar-none">
+      <ol className="flex items-center justify-between min-w-max md:min-w-0 w-full relative">
         {steps.map((item, index) => {
           const isCompleted = item.step < currentStep;
           const isActive = item.step === currentStep;

@@ -1,14 +1,10 @@
-import useEventCreationStore from "../../store/eventCreationStore";
 
-/**
- * Reusable Payout Bank Account Card.
- * Renders the event-level linked business bank account configuration
- * for both General Admission and Reserved Seating ticketing flows.
- */
+import useOrganizerStore from "../../store/organizerStore";
+
 export default function PayoutBankAccountCard({ className = "" }) {
-  const payoutAccount = useEventCreationStore((state) => state.payoutAccount);
 
-  if (!payoutAccount) return null;
+
+  const bankAccount = useOrganizerStore((state) => state.profile?.bank_account);
 
   return (
     <div
@@ -28,10 +24,10 @@ export default function PayoutBankAccountCard({ className = "" }) {
           </div>
           <div className="flex flex-col">
             <span className="font-bold text-sm text-[#141b2b]">
-              {payoutAccount.bankName}
+              {bankAccount.bank_name}
             </span>
             <span className="text-xs text-[#565e74]">
-              {payoutAccount.accountHolder} &bull; {payoutAccount.accountNumberMasked}
+              {bankAccount.account_holder_name || "-"} &bull; {bankAccount.account_number_masked || "-"}
             </span>
           </div>
         </div>

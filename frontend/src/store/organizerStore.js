@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   applyAsOrganizer,
   getOrganizerApplication,
+  getOrganizerProfile,
   resubmitOrganizerApplication,
 } from "../api/organizerApi";
 
@@ -56,6 +57,11 @@ const initialData = {
   // Submission state
   isSubmitting: false,
   submitError: null,
+
+  //profile
+  profile: null,
+  isProfileLoading: false,
+  profileError: null,
 };
 
 function getSavedDraft() {
@@ -367,6 +373,57 @@ const useOrganizerStore = create((set, get) => ({
 
     set({ ...initialData });
   },
+
+  setProfile: (profile) => {
+    set({
+      profile,
+      profileError: null,
+    });
+  },
+
+  clearProfile: () => {
+    set({
+      profile: null,
+      profileError: null,
+    });
+  },
+
+  fetchProfile: async () => {
+    set({
+      isProfileLoading: true,
+      profileError: null,
+    });
+
+    try {
+      const response = await getOrganizerProfile();
+      const profile = response?.data || response;
+
+      if (!profile) {
+        throw new Error("Organizer profile not found");
+      }
+
+      set({
+        profile,
+        isProfileLoading: false,
+        profileError: null,
+      });
+
+      return profile;
+    } catch (error) {
+      const message =
+        error?.response?.data?.message ||
+        error?.message ||
+        "Failed to retrieve organizer profile";
+
+      set({
+        isProfileLoading: false,
+        profileError: message,
+      });
+
+      return null;
+    }
+  },
+
 }));
 
 export default useOrganizerStore;

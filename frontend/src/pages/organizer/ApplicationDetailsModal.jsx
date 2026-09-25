@@ -92,7 +92,7 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 shrink-0 bg-slate-50/50">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-slate-100 shrink-0 bg-slate-50/50">
           <div>
             <h2 id="modal-title" className="font-display text-lg sm:text-xl font-bold text-slate-900">
               Application Details
@@ -113,7 +113,7 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
         </div>
 
         {/* Modal Body */}
-        <div className="p-6 overflow-y-auto space-y-6">
+        <div className="p-4 sm:p-6 overflow-y-auto space-y-6">
           {/* Section 1: Application Information */}
           <div>
             <h3 className="text-xs font-bold uppercase tracking-wider text-primary mb-3">

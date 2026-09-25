@@ -10,12 +10,14 @@ function configureGoogleMaps(apiKey) {
       key: apiKey,
       v: "weekly",
     });
+
     isGoogleConfigured = true;
   }
 }
 
 /**
- * Extracts address components from Google Place object according to Google Places standard.
+ * Extract city, state, country and postal code
+ * from Google Places address components.
  */
 function extractAddressComponents(place) {
   let city = "";
@@ -23,30 +25,54 @@ function extractAddressComponents(place) {
   let country = "";
   let postal_code = "";
 
-  if (Array.isArray(place.addressComponents)) {
-    for (const component of place.addressComponents) {
-      const types = component.types || [];
-      if (types.includes("locality")) {
-        city = component.longText || component.name || "";
-      } else if (!city && (types.includes("sublocality") || types.includes("postal_town"))) {
-        city = component.longText || component.name || "";
-      }
+  if (!Array.isArray(place.addressComponents)) {
+    return {
+      city,
+      state,
+      country,
+      postal_code,
+    };
+  }
 
-      if (types.includes("administrative_area_level_1")) {
-        state = component.longText || component.name || "";
-      }
+  for (const component of place.addressComponents) {
+    const types = component.types || [];
 
-      if (types.includes("country")) {
-        country = component.longText || component.name || "";
-      }
+    const value =
+      component.longText ||
+      component.shortText ||
+      component.name ||
+      "";
 
-      if (types.includes("postal_code")) {
-        postal_code = component.longText || component.name || "";
-      }
+    if (types.includes("locality")) {
+      city = value;
+    } else if (
+      !city &&
+      (types.includes("sublocality") ||
+        types.includes("sublocality_level_1") ||
+        types.includes("postal_town"))
+    ) {
+      city = value;
+    }
+
+    if (types.includes("administrative_area_level_1")) {
+      state = value;
+    }
+
+    if (types.includes("country")) {
+      country = value;
+    }
+
+    if (types.includes("postal_code")) {
+      postal_code = value;
     }
   }
 
-  return { city, state, country, postal_code };
+  return {
+    city,
+    state,
+    country,
+    postal_code,
+  };
 }
 
 export default function GooglePlacesVenueSelector() {
@@ -55,26 +81,56 @@ export default function GooglePlacesVenueSelector() {
 
   const autocompleteRef = useRef(null);
   const mapRef = useRef(null);
+
   const mapInstanceRef = useRef(null);
   const markerRef = useRef(null);
-
-  const [isLoadingGoogle, setIsLoadingGoogle] = useState(true);
-  const [error, setError] = useState("");
 
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   const isApiKeyMissing = !apiKey;
 
-  // Initialize or center Google Map
+  /*
+   * Initialize the state based on configuration.
+   *
+   * This avoids calling setState synchronously
+   * inside useEffect when the API key is missing.
+   */
+  const [isLoadingGoogle, setIsLoadingGoogle] = useState(
+    !isApiKeyMissing
+  );
+
+  const [error, setError] = useState(
+    isApiKeyMissing
+      ? "Google Maps service is not configured. Please check the environment configuration."
+      : ""
+  );
+
+  /**
+   * Create the map once and update its position
+   * when a different venue is selected.
+   */
   const renderMap = useCallback(
-    async (MapsLibrary, MarkerLibrary, lat, lng, title) => {
-      if (!mapRef.current) return;
+    (MapsLibrary, MarkerLibrary, latitude, longitude, title) => {
+      if (!mapRef.current) {
+        return;
+      }
 
       const { Map } = MapsLibrary;
       const { AdvancedMarkerElement } = MarkerLibrary;
 
+      const position = {
+        lat: latitude,
+        lng: longitude,
+      };
+
+      /*
+       * Google Maps owns everything inside mapRef.
+       *
+       * React must not render conditional children
+       * inside this element.
+       */
       if (!mapInstanceRef.current) {
         mapInstanceRef.current = new Map(mapRef.current, {
-          center: { lat, lng },
+          center: position,
           zoom: 15,
           mapId: "DEMO_MAP_ID",
           mapTypeControl: false,
@@ -82,18 +138,24 @@ export default function GooglePlacesVenueSelector() {
           fullscreenControl: true,
         });
       } else {
-        mapInstanceRef.current.setCenter({ lat, lng });
+        mapInstanceRef.current.setCenter(position);
         mapInstanceRef.current.setZoom(15);
       }
 
-      // Update or create marker
+      /*
+       * Remove previous marker.
+       */
       if (markerRef.current) {
         markerRef.current.map = null;
+        markerRef.current = null;
       }
 
+      /*
+       * Create new marker.
+       */
       markerRef.current = new AdvancedMarkerElement({
         map: mapInstanceRef.current,
-        position: { lat, lng },
+        position,
         title: title || "Selected Venue",
       });
     },
@@ -102,39 +164,68 @@ export default function GooglePlacesVenueSelector() {
 
   useEffect(() => {
     let isMounted = true;
+
+    if (isApiKeyMissing) {
+      return undefined;
+    }
+
     const autocompleteContainer = autocompleteRef.current;
+
     let autocompleteElement = null;
     let selectListener = null;
 
-    if (isApiKeyMissing) {
-      setIsLoadingGoogle(false);
-      setError("Google Maps service is not configured. Please check environment configuration.");
-      return;
-    }
-
-    const loadLibraries = async () => {
+    const initializeGoogleMaps = async () => {
       try {
         setIsLoadingGoogle(true);
+        setError("");
+
         configureGoogleMaps(apiKey);
 
+        /*
+         * Load Google Maps libraries.
+         */
         const PlacesLibrary = await importLibrary("places");
         const MapsLibrary = await importLibrary("maps");
         const MarkerLibrary = await importLibrary("marker");
 
-        if (!isMounted) return;
+        if (!isMounted) {
+          return;
+        }
 
-        // Initialize Places Autocomplete Web Component
-        autocompleteElement = new PlacesLibrary.PlaceAutocompleteElement();
+        /*
+         * Create Google Places Autocomplete Web Component.
+         */
+        autocompleteElement =
+          new PlacesLibrary.PlaceAutocompleteElement();
 
-        selectListener = async (event) => {
-          const prediction = event.placePrediction;
-          if (!prediction) {
-            console.warn("GooglePlacesVenueSelector: Selection occurred without placePrediction.");
+        autocompleteElement.placeholder = "Search for a venue...";
+        autocompleteElement.style.width = "100%";
+
+        /*
+         * Handle Google Place selection.
+         */
+        selectListener = async ({ placePrediction }) => {
+          console.log("GOOGLE PLACE SELECTED");
+
+          if (!placePrediction) {
+            console.warn(
+              "GooglePlacesVenueSelector: No placePrediction received."
+            );
+
             return;
           }
 
           try {
-            const place = prediction.toPlace();
+            console.log("FETCHING PLACE DETAILS");
+
+            /*
+             * Convert prediction into a Place object.
+             */
+            const place = placePrediction.toPlace();
+
+            /*
+             * Fetch only the fields required by EventHub.
+             */
             await place.fetchFields({
               fields: [
                 "id",
@@ -145,8 +236,15 @@ export default function GooglePlacesVenueSelector() {
               ],
             });
 
-            if (!isMounted) return;
+            console.log("PLACE DETAILS RECEIVED", place);
 
+            if (!isMounted) {
+              return;
+            }
+
+            /*
+             * Extract coordinates.
+             */
             const latitude =
               typeof place.location?.lat === "function"
                 ? place.location.lat()
@@ -157,12 +255,31 @@ export default function GooglePlacesVenueSelector() {
                 ? place.location.lng()
                 : place.location?.lng;
 
-            if (typeof latitude !== "number" || typeof longitude !== "number") {
-              throw new Error("Selected place does not contain valid latitude and longitude coordinates.");
+            if (
+              typeof latitude !== "number" ||
+              typeof longitude !== "number" ||
+              !Number.isFinite(latitude) ||
+              !Number.isFinite(longitude)
+            ) {
+              throw new Error(
+                "Selected place does not contain valid coordinates."
+              );
             }
 
-            const { city, state, country, postal_code } = extractAddressComponents(place);
+            /*
+             * Extract address information.
+             */
+            const {
+              city,
+              state,
+              country,
+              postal_code,
+            } = extractAddressComponents(place);
 
+            /*
+             * Keep the venue object aligned
+             * with the backend VenueRequest structure.
+             */
             const selectedVenue = {
               google_place_id: place.id || "",
               name: place.displayName || "",
@@ -175,74 +292,192 @@ export default function GooglePlacesVenueSelector() {
               longitude,
             };
 
+            console.log(
+              "SELECTED VENUE:",
+              selectedVenue
+            );
+
+            /*
+             * Save selected venue to Zustand.
+             */
             setVenue(selectedVenue);
+
             setError("");
 
-            // Move map to the newly selected venue
-            await renderMap(MapsLibrary, MarkerLibrary, latitude, longitude, selectedVenue.name);
+            /*
+             * Update Google Map.
+             */
+            renderMap(
+              MapsLibrary,
+              MarkerLibrary,
+              latitude,
+              longitude,
+              selectedVenue.name
+            );
           } catch (err) {
-            if (!isMounted) return;
-            console.error("Failed to load details for selected place:", err);
-            setError("Failed to retrieve details for the selected place. Please try again.");
+            if (!isMounted) {
+              return;
+            }
+
+            console.error(
+              "Failed to retrieve Google Place details:",
+              err
+            );
+
+            setError(
+              "Failed to retrieve details for the selected place. Please try again."
+            );
           }
         };
 
-        autocompleteElement.addEventListener("gmp-select", selectListener);
+        /*
+         * Listen for Google Place selection.
+         */
+        autocompleteElement.addEventListener(
+          "gmp-select",
+          selectListener
+        );
 
+        /*
+         * Mount the Google autocomplete element.
+         *
+         * This container is intentionally empty from React's
+         * point of view. Google owns the inserted element.
+         */
         if (autocompleteContainer) {
-          autocompleteContainer.replaceChildren(autocompleteElement);
+          autocompleteContainer.appendChild(
+            autocompleteElement
+          );
         }
 
-        // If venue already selected, initialize map with existing location
-        if (venue.latitude && venue.longitude) {
-          await renderMap(MapsLibrary, MarkerLibrary, venue.latitude, venue.longitude, venue.name);
+        /*
+         * Restore previously selected venue when the user
+         * navigates back to Step 1.
+         */
+        if (
+          typeof venue.latitude === "number" &&
+          typeof venue.longitude === "number" &&
+          Number.isFinite(venue.latitude) &&
+          Number.isFinite(venue.longitude)
+        ) {
+          renderMap(
+            MapsLibrary,
+            MarkerLibrary,
+            venue.latitude,
+            venue.longitude,
+            venue.name
+          );
         }
 
-        setIsLoadingGoogle(false);
+        if (isMounted) {
+          setIsLoadingGoogle(false);
+        }
       } catch (err) {
-        if (!isMounted) return;
-        console.error("Google Maps failed to load:", err);
-        setError("Unable to load Google Places. Please verify network connectivity and configuration.");
+        if (!isMounted) {
+          return;
+        }
+
+        console.error(
+          "Google Maps initialization failed:",
+          err
+        );
+
+        setError(
+          "Unable to load Google Places. Please verify your Google Maps configuration."
+        );
+
         setIsLoadingGoogle(false);
       }
     };
 
-    loadLibraries();
+    initializeGoogleMaps();
 
     return () => {
       isMounted = false;
-      if (autocompleteElement && selectListener) {
-        autocompleteElement.removeEventListener("gmp-select", selectListener);
-      }
-      if (autocompleteContainer) {
-        autocompleteContainer.replaceChildren();
-      }
-    };
-  }, [apiKey, isApiKeyMissing, renderMap, setVenue]); // Dependencies only for mount & API configuration
 
-  const hasVenue = Boolean(venue.google_place_id || venue.name);
+      /*
+       * Remove Google Places event listener.
+       */
+      if (autocompleteElement && selectListener) {
+        autocompleteElement.removeEventListener(
+          "gmp-select",
+          selectListener
+        );
+      }
+
+      /*
+       * Remove the Google autocomplete element.
+       *
+       * Do not use replaceChildren() here because React and
+       * Google can both be involved in DOM mutations.
+       */
+      if (autocompleteElement) {
+        autocompleteElement.remove();
+      }
+
+      /*
+       * Remove marker.
+       */
+      if (markerRef.current) {
+        markerRef.current.map = null;
+        markerRef.current = null;
+      }
+
+      /*
+       * Release map reference.
+       *
+       * We intentionally don't manually remove Google's
+       * internal map DOM children.
+       */
+      mapInstanceRef.current = null;
+    };
+  }, [
+    apiKey,
+    isApiKeyMissing,
+    renderMap,
+    setVenue,
+  ]);
+
+  const hasVenue = Boolean(
+    venue.google_place_id || venue.name
+  );
+
+  const hasCoordinates =
+    typeof venue.latitude === "number" &&
+    typeof venue.longitude === "number" &&
+    Number.isFinite(venue.latitude) &&
+    Number.isFinite(venue.longitude);
 
   return (
-    <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-6 flex flex-col gap-6" data-name="GooglePlacesVenueSelector">
-      {/* Header Info */}
+    <div
+      className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-6 flex flex-col gap-6 overflow-visible"
+      data-name="GooglePlacesVenueSelector"
+    >
+      {/* Header */}
       <div className="flex flex-col gap-1">
         <h4 className="text-[14px] font-bold text-[#141b2b] uppercase tracking-wider">
           Search Venue with Google Places
         </h4>
+
         <p className="text-[13px] text-[#565e74]">
-          Search for an established venue or location. The selected Google Place will be used as the authoritative event venue.
+          Search for an established venue or location. The
+          selected Google Place will be used as the
+          authoritative event venue.
         </p>
       </div>
 
-      {/* Google Places Autocomplete Container */}
-      <div className="flex flex-col gap-2">
+      {/* Google Places Search */}
+      <div className="flex flex-col gap-2 relative z-50">
         <label className="text-[13px] font-semibold text-[#141b2b]">
-          Venue Search <span className="text-[#ba1a1a]">*</span>
+          Venue Search{" "}
+          <span className="text-[#ba1a1a]">*</span>
         </label>
+
         <div
           ref={autocompleteRef}
-          className="min-h-[44px] w-full rounded-lg overflow-hidden bg-white border border-[#bcc9c6] shadow-xs"
+          className="min-h-[44px] w-full rounded-lg bg-white border border-[#bcc9c6] shadow-xs"
         />
+
         {isLoadingGoogle && (
           <span className="text-xs text-[#00685f] flex items-center gap-1.5 mt-1">
             <span className="size-2 rounded-full bg-[#00685f] animate-pulse" />
@@ -251,85 +486,159 @@ export default function GooglePlacesVenueSelector() {
         )}
       </div>
 
-      {/* Error Banner */}
+      {/* Error */}
       {error && (
         <div className="rounded-lg bg-red-50 border border-red-200 p-3.5 text-sm text-red-700 flex items-start gap-2.5">
-          <svg className="size-5 shrink-0 text-red-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          <svg
+            className="size-5 shrink-0 text-red-500 mt-0.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
           </svg>
+
           <div className="flex flex-col">
-            <span className="font-semibold text-xs text-red-800">Location Notice</span>
-            <span className="text-xs">{error}</span>
+            <span className="font-semibold text-xs text-red-800">
+              Location Notice
+            </span>
+
+            <span className="text-xs">
+              {error}
+            </span>
           </div>
         </div>
       )}
 
-      {/* Selected Venue Summary Card */}
+      {/* Selected Venue */}
       {hasVenue ? (
         <div className="bg-white border border-[#bcc9c6]/80 rounded-xl p-5 shadow-sm flex flex-col gap-4">
           <div className="flex items-center justify-between border-b border-gray-100 pb-3">
             <div className="flex items-center gap-2">
               <span className="size-2 rounded-full bg-[#00685f]" />
+
               <h5 className="font-bold text-[14px] text-[#141b2b]">
                 Selected Venue Details
               </h5>
             </div>
+
             <span className="text-[11px] font-mono bg-gray-100 text-gray-600 px-2 py-0.5 rounded">
-              Place ID: {venue.google_place_id || "Selected"}
+              Place ID:{" "}
+              {venue.google_place_id || "Selected"}
             </span>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            {/* Venue Name */}
             <div>
-              <span className="text-[#565e74] font-medium block">Venue Name:</span>
-              <span className="text-[#141b2b] font-semibold text-[13px]">{venue.name || "—"}</span>
-            </div>
+              <span className="text-[#565e74] font-medium block">
+                Venue Name:
+              </span>
 
-            <div>
-              <span className="text-[#565e74] font-medium block">Address:</span>
-              <span className="text-[#141b2b]">{venue.address || "—"}</span>
-            </div>
-
-            <div>
-              <span className="text-[#565e74] font-medium block">City / State:</span>
-              <span className="text-[#141b2b]">
-                {venue.city ? `${venue.city}, ` : ""}{venue.state || "—"}
+              <span className="text-[#141b2b] font-semibold text-[13px]">
+                {venue.name || "—"}
               </span>
             </div>
 
+            {/* Address */}
             <div>
-              <span className="text-[#565e74] font-medium block">Country / Postal Code:</span>
+              <span className="text-[#565e74] font-medium block">
+                Address:
+              </span>
+
               <span className="text-[#141b2b]">
-                {venue.country || "—"} {venue.postal_code ? `(${venue.postal_code})` : ""}
+                {venue.address || "—"}
               </span>
             </div>
 
-            {venue.latitude && venue.longitude && (
+            {/* City / State */}
+            <div>
+              <span className="text-[#565e74] font-medium block">
+                City / State:
+              </span>
+
+              <span className="text-[#141b2b]">
+                {venue.city
+                  ? `${venue.city}, `
+                  : ""}
+                {venue.state || "—"}
+              </span>
+            </div>
+
+            {/* Country / Postal */}
+            <div>
+              <span className="text-[#565e74] font-medium block">
+                Country / Postal Code:
+              </span>
+
+              <span className="text-[#141b2b]">
+                {venue.country || "—"}{" "}
+                {venue.postal_code
+                  ? `(${venue.postal_code})`
+                  : ""}
+              </span>
+            </div>
+
+            {/* Coordinates */}
+            {hasCoordinates && (
               <div className="col-span-full flex items-center gap-4 text-[11px] text-[#565e74] pt-1 border-t border-gray-50">
-                <span>Latitude: <strong className="text-gray-700">{venue.latitude}</strong></span>
-                <span>Longitude: <strong className="text-gray-700">{venue.longitude}</strong></span>
+                <span>
+                  Latitude:{" "}
+                  <strong className="text-gray-700">
+                    {venue.latitude}
+                  </strong>
+                </span>
+
+                <span>
+                  Longitude:{" "}
+                  <strong className="text-gray-700">
+                    {venue.longitude}
+                  </strong>
+                </span>
               </div>
             )}
           </div>
         </div>
       ) : (
         <div className="border border-dashed border-[#bcc9c6] rounded-xl p-4 text-center text-xs text-[#565e74] bg-white/50">
-          Search and select a venue in the input above to view verified location details and preview the map.
+          Search and select a venue in the input above to view
+          verified location details and preview the map.
         </div>
       )}
 
-      {/* Google Map Visual Confirmation Container */}
+      {/* Map */}
       <div className="flex flex-col gap-2">
         <span className="text-[12px] font-semibold text-[#565e74] uppercase tracking-wider">
           Map Confirmation
         </span>
-        <div
-          ref={mapRef}
-          className="h-[300px] w-full rounded-xl overflow-hidden border border-[#bcc9c6] bg-gray-100 shadow-inner relative"
-        >
+
+        {/*
+         * IMPORTANT:
+         *
+         * Google Maps gets its own completely isolated
+         * container. React must NOT render children inside
+         * this div.
+         */}
+        <div className="relative h-[300px] w-full rounded-xl overflow-hidden border border-[#bcc9c6] bg-gray-100 shadow-inner">
+          <div
+            ref={mapRef}
+            className="absolute inset-0"
+          />
+
+          {/*
+           * React owns this overlay, not the Google Maps
+           * container. This prevents React's removeChild
+           * error when Google modifies the map DOM.
+           */}
           {!hasVenue && !isLoadingGoogle && (
             <div className="absolute inset-0 flex items-center justify-center bg-gray-50/80 text-xs text-gray-500 pointer-events-none">
-              Map preview will appear once a venue is selected.
+              Map preview will appear once a venue is
+              selected.
             </div>
           )}
         </div>
