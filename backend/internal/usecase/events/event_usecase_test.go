@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -1607,5 +1608,290 @@ func TestUpdateEvent_TicketSync_Success_CreatesUpdatesDeletes(t *testing.T) {
 	// Verify Ticket C was created
 	if len(ticketRepo.created) != 1 || ticketRepo.created[0].Name != "Ticket C New" {
 		t.Errorf("expected Ticket C to be created, got %v", ticketRepo.created)
+	}
+}
+
+// --- CreateEvent Test Helpers & Tests ---
+
+func validCreateInput(userID, categoryID uuid.UUID) usecase.CreateEventInput {
+	startTime, _ := time.Parse("15:04", "10:00")
+	endTime, _ := time.Parse("15:04", "18:00")
+	eventDate := time.Now().Add(48 * time.Hour).Truncate(24 * time.Hour)
+
+	return usecase.CreateEventInput{
+		UserID:         userID,
+		CategoryID:     categoryID,
+		EventType:      domain.EventTypePhysical,
+		Title:          "Grand Tech Summit",
+		Description:    "A comprehensive developer conference",
+		Language:       "English",
+		AgeRestriction: 18,
+		EventDate:      eventDate,
+		StartTime:      startTime,
+		EndTime:        endTime,
+		SeatLayoutType: usecase.SeatLayoutTypeGeneral,
+		BookingLimitPerUser: 5,
+		CancellationAllowed: false,
+		Venue: usecase.VenueInput{
+			GooglePlaceID: "ChIJ_TEST_VENUE_001",
+			Name:          "Tech Arena",
+			Address:       "123 Innovation Way",
+			City:          "San Francisco",
+			State:         "CA",
+			Country:       "USA",
+			PostalCode:    "94105",
+			Latitude:      37.7749,
+			Longitude:     -122.4194,
+		},
+		TicketTypes: []usecase.TicketTypeInput{
+			{
+				Name:        "General Admission",
+				Price:       25.0,
+				Capacity:    100,
+				Description: "Standard entry",
+			},
+		},
+		BannerReader:      strings.NewReader("fake-banner-data"),
+		BannerContentType: "image/png",
+		BannerSize:        1024,
+	}
+}
+
+func validSeatLayoutInput() usecase.CreateSeatLayoutInput {
+	return usecase.CreateSeatLayoutInput{
+		LayoutName: "Main Auditorium",
+		Sections: []usecase.SeatSectionInput{
+			{
+				Name:  "Balcony",
+				Price: 50.0,
+				Rows: []usecase.SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   10,
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestCreateEvent_SeatedWithTicketTypes_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	input := validCreateInput(userID, categoryID)
+	input.SeatLayoutType = usecase.SeatLayoutTypeSeated
+	input.SeatLayout = validSeatLayoutInput()
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			Name:     "VIP",
+			Price:    100.0,
+			Capacity: 50,
+		},
+	}
+
+	_, err := uc.CreateEvent(context.Background(), input)
+	if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+		t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+	}
+}
+
+func TestCreateEvent_GeneralWithClientTicketID_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	ticketID := uuid.New()
+	input := validCreateInput(userID, categoryID)
+	input.SeatLayoutType = usecase.SeatLayoutTypeGeneral
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{
+			ID:       &ticketID,
+			Name:     "General Admission",
+			Price:    25.0,
+			Capacity: 100,
+		},
+	}
+
+	_, err := uc.CreateEvent(context.Background(), input)
+	if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+		t.Fatalf("expected ErrInvalidEventSettings, got %v", err)
+	}
+}
+
+func TestCreateEvent_OnlineWithSeatedLayout_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	input := validCreateInput(userID, categoryID)
+	input.EventType = domain.EventTypeOnline
+	input.OnlineURL = "https://example.com/event"
+	input.Venue = usecase.VenueInput{}
+	input.SeatLayoutType = usecase.SeatLayoutTypeSeated
+	input.SeatLayout = validSeatLayoutInput()
+	input.TicketTypes = nil
+
+	_, err := uc.CreateEvent(context.Background(), input)
+	if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+		t.Fatalf("expected ErrInvalidEventSettings for online seated event, got %v", err)
+	}
+}
+
+func TestCreateEvent_GeneralWithSeatLayout_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	input := validCreateInput(userID, categoryID)
+	input.SeatLayoutType = usecase.SeatLayoutTypeGeneral
+	input.SeatLayout = validSeatLayoutInput()
+
+	_, err := uc.CreateEvent(context.Background(), input)
+	if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+		t.Fatalf("expected ErrInvalidEventSettings for general event with seat layout, got %v", err)
+	}
+}
+
+func TestCreateEvent_GeneralWithoutTicketTypes_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	input := validCreateInput(userID, categoryID)
+	input.SeatLayoutType = usecase.SeatLayoutTypeGeneral
+	input.TicketTypes = nil
+
+	_, err := uc.CreateEvent(context.Background(), input)
+	if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+		t.Fatalf("expected ErrInvalidEventSettings for general event without ticket types, got %v", err)
+	}
+}
+
+func TestCreateEvent_GeneralWithDuplicateTicketNames_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	input := validCreateInput(userID, categoryID)
+	input.SeatLayoutType = usecase.SeatLayoutTypeGeneral
+	input.TicketTypes = []usecase.TicketTypeInput{
+		{Name: "Early Bird", Price: 15, Capacity: 50},
+		{Name: "early bird", Price: 20, Capacity: 50},
+	}
+
+	_, err := uc.CreateEvent(context.Background(), input)
+	if !errors.Is(err, usecase.ErrInvalidEventSettings) {
+		t.Fatalf("expected ErrInvalidEventSettings for duplicate ticket names, got %v", err)
+	}
+}
+
+func TestCreateEvent_SeatedWithInvalidSeatLayout_FailsValidationBeforeS3(t *testing.T) {
+	userID := uuid.New()
+	categoryID := uuid.New()
+
+	repos := &mockTxRepos{}
+	uc := setupTestUsecase(repos, nil)
+
+	tests := []struct {
+		name        string
+		seatLayout  usecase.CreateSeatLayoutInput
+		expectedErr error
+	}{
+		{
+			name: "empty layout name",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "",
+				Sections: []usecase.SeatSectionInput{
+					{Name: "VIP", Price: 100, Rows: []usecase.SeatRowInput{{RowName: "A", Seats: 5}}},
+				},
+			},
+			expectedErr: usecase.ErrInvalidSeatLayout,
+		},
+		{
+			name: "zero sections",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "Main",
+				Sections:   nil,
+			},
+			expectedErr: usecase.ErrInvalidSeatLayout,
+		},
+		{
+			name: "section with empty name",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "Main",
+				Sections: []usecase.SeatSectionInput{
+					{Name: "", Price: 100, Rows: []usecase.SeatRowInput{{RowName: "A", Seats: 5}}},
+				},
+			},
+			expectedErr: usecase.ErrInvalidSeatSection,
+		},
+		{
+			name: "section with negative price",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "Main",
+				Sections: []usecase.SeatSectionInput{
+					{Name: "VIP", Price: -10, Rows: []usecase.SeatRowInput{{RowName: "A", Seats: 5}}},
+				},
+			},
+			expectedErr: usecase.ErrInvalidSeatSection,
+		},
+		{
+			name: "section with zero rows",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "Main",
+				Sections: []usecase.SeatSectionInput{
+					{Name: "VIP", Price: 100, Rows: nil},
+				},
+			},
+			expectedErr: usecase.ErrInvalidSeatSection,
+		},
+		{
+			name: "row with empty row name",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "Main",
+				Sections: []usecase.SeatSectionInput{
+					{Name: "VIP", Price: 100, Rows: []usecase.SeatRowInput{{RowName: "", Seats: 5}}},
+				},
+			},
+			expectedErr: usecase.ErrInvalidSeatRow,
+		},
+		{
+			name: "row with zero seats",
+			seatLayout: usecase.CreateSeatLayoutInput{
+				LayoutName: "Main",
+				Sections: []usecase.SeatSectionInput{
+					{Name: "VIP", Price: 100, Rows: []usecase.SeatRowInput{{RowName: "A", Seats: 0}}},
+				},
+			},
+			expectedErr: usecase.ErrInvalidSeatRow,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := validCreateInput(userID, categoryID)
+			input.SeatLayoutType = usecase.SeatLayoutTypeSeated
+			input.SeatLayout = tt.seatLayout
+			input.TicketTypes = nil
+
+			_, err := uc.CreateEvent(context.Background(), input)
+			if !errors.Is(err, tt.expectedErr) {
+				t.Fatalf("expected error %v, got %v", tt.expectedErr, err)
+			}
+		})
 	}
 }

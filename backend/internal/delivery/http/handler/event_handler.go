@@ -52,6 +52,7 @@ type CreateEventRequest struct {
 	SeatLayoutType      string              `json:"seat_layout_type"`
 	BookingLimitPerUser int                 `json:"booking_limit_per_user"`
 	TicketTypes         []TicketTypeRequest `json:"ticket_types"`
+	SeatLayout          SeatLayoutRequest   `json:"seat_layout"`
 
 	CancellationAllowed       bool `json:"cancellation_allowed"`
 	CancellationDeadlineHours int  `json:"cancellation_deadline_hours"`
@@ -132,6 +133,22 @@ type TicketTypeRequest struct {
 	Price       float64    `json:"price"`
 	Capacity    int        `json:"capacity"`
 	Description string     `json:"description"`
+}
+
+type SeatLayoutRequest struct {
+	LayoutName string               `json:"layout_name"`
+	Sections   []SeatSectionRequest `json:"sections"`
+}
+
+type SeatSectionRequest struct {
+	Name  string           `json:"name"`
+	Price float64          `json:"price"`
+	Rows  []SeatRowRequest `json:"rows"`
+}
+
+type SeatRowRequest struct {
+	RowName string `json:"row_name"`
+	Seats   int    `json:"seats"`
 }
 
 func (h *EventHandler) CreateEvent(ctx *gin.Context) {
@@ -263,10 +280,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 		return
 	}
 
-	eventDate, err := time.Parse(
-		"2006-01-02",
-		req.EventDate,
-	)
+	eventDate, err := parseDate(req.EventDate)
 	if err != nil {
 		h.logger.Warn(
 			"event_create_invalid_event_date",
@@ -321,7 +335,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 	var endTime time.Time
 
 	if !req.IsAllDay {
-		startTime, err = time.Parse("15:04", req.StartTime)
+		startTime, err = parseTime(req.StartTime)
 		if err != nil {
 			h.logger.Warn(
 				"event_create_invalid_start_time",
@@ -338,7 +352,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			return
 		}
 
-		endTime, err = time.Parse("15:04", req.EndTime)
+		endTime, err = parseTime(req.EndTime)
 		if err != nil {
 			h.logger.Warn(
 				"event_create_invalid_end_time",
@@ -368,10 +382,34 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 		})
 	}
 
+	seatSections := make([]eventUsecase.SeatSectionInput, 0, len(req.SeatLayout.Sections))
+
+	for _, section := range req.SeatLayout.Sections {
+		rows := make([]eventUsecase.SeatRowInput, 0, len(section.Rows))
+
+		for _, row := range section.Rows {
+			rows = append(rows, eventUsecase.SeatRowInput{
+				RowName: row.RowName,
+				Seats:   row.Seats,
+			})
+		}
+
+		seatSections = append(seatSections, eventUsecase.SeatSectionInput{
+			Name:  section.Name,
+			Price: section.Price,
+			Rows:  rows,
+		})
+	}
+
 	input := eventUsecase.CreateEventInput{
 		UserID:      userID,
 		CategoryID:  req.CategoryID,
 		TicketTypes: ticketTypes,
+
+		SeatLayout: eventUsecase.CreateSeatLayoutInput{
+			LayoutName: req.SeatLayout.LayoutName,
+			Sections:   seatSections,
+		},
 
 		EventType: req.EventType,
 		OnlineURL: req.OnlineURL,
@@ -479,6 +517,22 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 
 		case errors.Is(
 			err,
+			eventUsecase.ErrInvalidSeatLayout,
+		), errors.Is(
+			err,
+			eventUsecase.ErrInvalidSeatSection,
+		), errors.Is(
+			err,
+			eventUsecase.ErrInvalidSeatRow,
+		):
+			ctx.Error(
+				appErrors.NewValidationError(
+					err.Error(),
+				),
+			)
+
+		case errors.Is(
+			err,
 			eventUsecase.ErrInvalidCancellation,
 		):
 			ctx.Error(
@@ -507,16 +561,6 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 				),
 			)
 
-		case errors.Is(
-			err,
-			domain.ErrTicketTypeNotFound,
-		):
-			ctx.Error(
-				appErrors.NewNotFoundError(
-					"ticket type not found",
-				),
-			)
-
 		default:
 			ctx.Error(err)
 		}
@@ -540,6 +584,8 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 			"setting":      output.Setting,
 			"cancellation": output.Cancellation,
 			"contact":      output.Contact,
+			"ticket_types": output.TicketTypes,
+			"seat_layout":  output.SeatLayout,
 		},
 	})
 }

@@ -268,6 +268,81 @@ func (u *SeatLayoutUsecase) CreateSeatLayout(
 	return &output, nil
 }
 
+func createSeatLayout(
+	repos domain.TransactionRepositories,
+	eventID uuid.UUID,
+	input CreateSeatLayoutInput,
+) (*CreateSeatLayoutOutput, error) {
+	output := &CreateSeatLayoutOutput{}
+
+	layout := &domain.SeatLayout{
+		ID:         uuid.New(),
+		EventID:    eventID,
+		LayoutName: strings.TrimSpace(input.LayoutName),
+	}
+
+	if err := repos.SeatLayoutRepository().Create(layout); err != nil {
+		return nil, err
+	}
+
+	output.Layout = layout
+
+	for _, sectionInput := range input.Sections {
+		section := &domain.SeatSection{
+			ID:           uuid.New(),
+			SeatLayoutID: layout.ID,
+			Name:         strings.TrimSpace(sectionInput.Name),
+			Price:        sectionInput.Price,
+		}
+
+		if err := repos.SeatSectionRepository().Create(section); err != nil {
+			return nil, err
+		}
+
+		output.Sections = append(
+			output.Sections,
+			*section,
+		)
+
+		for _, rowInput := range sectionInput.Rows {
+			row := &domain.SeatRow{
+				ID:        uuid.New(),
+				SectionID: section.ID,
+				RowName:   strings.TrimSpace(rowInput.RowName),
+			}
+
+			if err := repos.SeatRowRepository().Create(row); err != nil {
+				return nil, err
+			}
+
+			output.Rows = append(
+				output.Rows,
+				*row,
+			)
+
+			for seatNumber := 1; seatNumber <= rowInput.Seats; seatNumber++ {
+				seat := &domain.Seat{
+					ID:         uuid.New(),
+					RowID:      row.ID,
+					SeatNumber: seatNumber,
+					Status:     domain.SeatStatusAvailable,
+				}
+
+				if err := repos.SeatRepository().Create(seat); err != nil {
+					return nil, err
+				}
+
+				output.Seats = append(
+					output.Seats,
+					*seat,
+				)
+			}
+		}
+	}
+
+	return output, nil
+}
+
 func validateCreateSeatLayoutInput(
 	input CreateSeatLayoutInput,
 ) error {
@@ -279,15 +354,22 @@ func validateCreateSeatLayoutInput(
 		return ErrInvalidSeatLayout
 	}
 
-	if strings.TrimSpace(input.LayoutName) == "" {
+	return validateSeatLayoutStructure(input.LayoutName, input.Sections)
+}
+
+func validateSeatLayoutStructure(
+	layoutName string,
+	sections []SeatSectionInput,
+) error {
+	if strings.TrimSpace(layoutName) == "" {
 		return ErrInvalidSeatLayout
 	}
 
-	if len(input.Sections) == 0 {
+	if len(sections) == 0 {
 		return ErrInvalidSeatLayout
 	}
 
-	for _, section := range input.Sections {
+	for _, section := range sections {
 		if strings.TrimSpace(section.Name) == "" {
 			return ErrInvalidSeatSection
 		}
