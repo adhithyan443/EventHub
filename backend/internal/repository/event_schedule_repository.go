@@ -128,16 +128,16 @@ func (r *EventScheduleRepository) Update(
 func toEventScheduleModel(
 	schedule *domain.EventSchedule,
 ) *models.EventScheduleModel {
-	var startTime *time.Time
-	var endTime *time.Time
+	var startTime *string
+	var endTime *string
 
 	if !schedule.StartTime.IsZero() {
-		start := schedule.StartTime
+		start := schedule.StartTime.Format("15:04:05")
 		startTime = &start
 	}
 
 	if !schedule.EndTime.IsZero() {
-		end := schedule.EndTime
+		end := schedule.EndTime.Format("15:04:05")
 		endTime = &end
 	}
 
@@ -159,12 +159,20 @@ func toEventScheduleDomain(
 	var startTime time.Time
 	var endTime time.Time
 
-	if scheduleModel.StartTime != nil {
-		startTime = *scheduleModel.StartTime
+	if scheduleModel.StartTime != nil && *scheduleModel.StartTime != "" {
+		if t, err := time.Parse("15:04:05", *scheduleModel.StartTime); err == nil {
+			startTime = t
+		} else if t, err := time.Parse("15:04", *scheduleModel.StartTime); err == nil {
+			startTime = t
+		}
 	}
 
-	if scheduleModel.EndTime != nil {
-		endTime = *scheduleModel.EndTime
+	if scheduleModel.EndTime != nil && *scheduleModel.EndTime != "" {
+		if t, err := time.Parse("15:04:05", *scheduleModel.EndTime); err == nil {
+			endTime = t
+		} else if t, err := time.Parse("15:04", *scheduleModel.EndTime); err == nil {
+			endTime = t
+		}
 	}
 
 	return &domain.EventSchedule{

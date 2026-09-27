@@ -752,30 +752,85 @@ export default function CreateEventReviewPublishPage() {
         age_restriction:
           ageRestriction,
 
+        visibility:
+          eventDetails.visibility || "PUBLIC",
+
+        highlights:
+          eventDetails.highlights?.trim() || "",
+
+        rules:
+          eventDetails.rules?.trim() || "",
+
+        attendee_information:
+          eventDetails.attendeeInformation?.trim() || "",
+
+        contact: {
+          name: eventDetails.contactInformation?.name?.trim() || "",
+          phone: eventDetails.contactInformation?.phone?.trim() || "",
+          email: eventDetails.contactInformation?.email?.trim() || "",
+        },
+
         event_date:
           dateTime.eventDate,
 
         start_time:
-          dateTime.startTime,
+          dateTime.isAllDay ? "" : dateTime.startTime,
 
         end_time:
-          dateTime.endTime,
+          dateTime.isAllDay ? "" : dateTime.endTime,
+
+        is_all_day:
+          Boolean(dateTime.isAllDay),
+
+        sales_start_date:
+          ticketSalesSettings.salesStartDate || "",
+
+        sales_end_date:
+          ticketSalesSettings.salesEndDate || "",
 
         seat_layout_type:
           showSeatedLayout
             ? "SEATED"
             : "GENERAL",
 
+        ticket_types: showSeatedLayout
+          ? []
+          : ticketTypes.map((ticket) => ({
+            name: ticket.name.trim(),
+            price: Number(ticket.price),
+            capacity: Number(ticket.capacity),
+            description: ticket.description?.trim() || "",
+          })),
+
+        ...(showSeatedLayout && {
+          seat_layout: {
+            layout_name: "Main Seating Layout",
+            sections: seatingCategories.map((category) => ({
+              name: category.name.trim(),
+              price: Number(
+                String(category.price ?? "").replace(/[₹,\s]/g, "")
+              ),
+              rows: category.rows.map((row) => ({
+                row_name: row.rowLetter?.trim() || row.name?.trim(),
+                seats: row.seats.length,
+              })),
+            })),
+          },
+        }),
+
         booking_limit_per_user:
           Number(
             ticketSalesSettings.maxTicketsPerBooking
           ),
 
-        cancellation_allowed:
-          cancellationAllowed,
-
-        cancellation_deadline_hours:
-          cancellationDeadlineHours,
+        cancellation_allowed: cancellationAllowed,
+        cancellation_deadline_hours: cancellationDeadlineHours,
+        refund_policy: cancellationAllowed
+          ? eventDetails.cancellationPolicy.refundPolicy
+          : "",
+        refund_percentage: cancellationAllowed
+          ? Number(eventDetails.cancellationPolicy.refundPercentage || 0)
+          : 0,
 
         venue: isOnline
           ? {

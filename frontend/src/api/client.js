@@ -18,6 +18,16 @@ apiClient.interceptors.request.use(
     if (accessToken) {
       config.headers.Authorization = `Bearer ${accessToken}`;
     }
+
+    // Allow the browser to set Content-Type with multipart boundary for FormData payloads
+    if (config.data instanceof FormData) {
+      if (typeof config.headers?.setContentType === "function") {
+        config.headers.setContentType(null);
+      } else if (config.headers) {
+        config.headers["Content-Type"] = null;
+      }
+    }
+
     return config;
   },
   (error) => Promise.reject(error)

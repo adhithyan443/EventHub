@@ -15,9 +15,8 @@ export default function Stepper({ currentStep }) {
       <div
         className="absolute top-4 left-6 h-0.5 bg-primary transition-all duration-300 -z-0"
         style={{
-          width: `calc(${((currentStep - 1) / (steps.length - 1)) * 100}% - ${
-            ((currentStep - 1) / (steps.length - 1)) * 48
-          }px)`,
+          width: `calc(${((currentStep - 1) / (steps.length - 1)) * 100}% - ${((currentStep - 1) / (steps.length - 1)) * 48
+            }px)`,
         }}
       />
 
@@ -61,13 +60,12 @@ export default function Stepper({ currentStep }) {
             )}
 
             <span
-              className={`text-[10px] sm:text-xs font-medium tracking-tight sm:tracking-wide text-center whitespace-nowrap transition-colors ${
-                active
+              className={`text-[10px] sm:text-xs font-medium tracking-tight sm:tracking-wide text-center whitespace-nowrap transition-colors ${active
                   ? "font-bold text-primary"
                   : completed
-                  ? "font-semibold text-ink"
-                  : "text-slate-400"
-              }`}
+                    ? "font-semibold text-ink"
+                    : "text-slate-400"
+                }`}
             >
               {step.label}
             </span>
@@ -77,3 +75,6 @@ export default function Stepper({ currentStep }) {
     </div>
   );
 }
+
+
+
