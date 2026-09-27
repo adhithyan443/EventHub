@@ -31,6 +31,8 @@ import CreateEventSeatConfigurationPage from "../pages/organizer/create-event/Cr
 import CreateEventReviewPublishPage from "../pages/organizer/create-event/CreateEventReviewPublishPage";
 import OrganizerPlaceholderPage from "../pages/organizer/OrganizerPlaceholderPage";
 import OrganizerProfilePage from "../pages/organizer/OrganizerProfilePage";
+import MyEventsPage from "../pages/organizer/MyEventsPage";
+import EventDetailsPage from "../pages/organizer/EventDetailsPage";
 
 export default function AppRoutes() {
     return (
@@ -93,8 +95,9 @@ export default function AppRoutes() {
                     <Route path="events/create/seat-configuration" element={<CreateEventSeatConfigurationPage />} />
                     <Route path="events/create/review" element={<CreateEventReviewPublishPage />} />
 
-                    {/* Organizer Placeholders */}
-                    <Route path="events" element={<OrganizerPlaceholderPage title="My Events" />} />
+                    {/* Organizer Events Management */}
+                    <Route path="events" element={<MyEventsPage />} />
+                    <Route path="events/:eventId" element={<EventDetailsPage />} />
                     <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
                     <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
                     <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />
