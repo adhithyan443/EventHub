@@ -81,6 +81,14 @@ type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)
 	Update(event *Event) error
+
+	FindByOrganizerID(
+		organizerID uuid.UUID,
+		page int,
+		limit int,
+		status string,
+		search string,
+	) ([]*Event, int64, error)
 }
 
 type EventScheduleRepository interface {

@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -125,6 +126,82 @@ func (r *EventRepository) FindByID(id uuid.UUID) (*domain.Event, error) {
 	}
 
 	return toEventDomain(&eventModel), nil
+}
+
+func (r *EventRepository) FindByOrganizerID(
+	organizerID uuid.UUID,
+	page int,
+	limit int,
+	status string,
+	search string,
+) ([]*domain.Event, int64, error) {
+
+	var events []models.EventModel
+	var total int64
+
+	offset := (page - 1) * limit
+
+	query := r.db.
+		Model(&models.EventModel{}).
+		Where("organizer_id = ?", organizerID)
+
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+
+	if search != "" {
+		query = query.Where(
+			"LOWER(title) LIKE ?",
+			"%"+strings.ToLower(search)+"%",
+		)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		r.logger.Error(
+			"event_list_count_failed",
+			"organizer_id", organizerID,
+			"error", err,
+		)
+
+		return nil, 0, err
+	}
+
+	if err := query.
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&events).Error; err != nil {
+
+		r.logger.Error(
+			"event_list_fetch_failed",
+			"organizer_id", organizerID,
+			"page", page,
+			"limit", limit,
+			"status", status,
+			"search", search,
+			"error", err,
+		)
+
+		return nil, 0, err
+	}
+
+	result := make([]*domain.Event, 0, len(events))
+
+	for _, model := range events {
+		event := toEventDomain(&model)
+		result = append(result, event)
+	}
+
+	r.logger.Info(
+		"organizer_events_fetched",
+		"organizer_id", organizerID,
+		"count", len(result),
+		"total", total,
+		"page", page,
+		"limit", limit,
+	)
+
+	return result, total, nil
 }
 
 func toEventModel(event *domain.Event) *models.EventModel {

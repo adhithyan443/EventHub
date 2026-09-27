@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -921,6 +922,101 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 			"cancellation": output.Cancellation,
 			"contact":      output.Contact,
 			"ticket_types": output.TicketTypes,
+		},
+	})
+}
+
+func (h *EventHandler) GetMyEvents(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "unauthorized",
+		})
+		return
+	}
+
+	parsedUserID, ok := userID.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "unauthorized",
+		})
+		return
+	}
+
+	page := 1
+	limit := 10
+
+	if value := c.Query("page"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid page",
+			})
+			return
+		}
+
+		page = parsed
+	}
+
+	if value := c.Query("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid limit",
+			})
+			return
+		}
+
+		limit = parsed
+	}
+
+	status := strings.TrimSpace(c.Query("status"))
+	search := strings.TrimSpace(c.Query("search"))
+
+	output, err := h.eventUsecase.GetMyEvents(
+		c.Request.Context(),
+		parsedUserID,
+		page,
+		limit,
+		status,
+		search,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "organizer access required",
+			})
+
+		default:
+			h.logger.Error(
+				"event_list_handler_failed",
+				"user_id", parsedUserID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to fetch events",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"events": output.Events,
+			"page":   output.Page,
+			"limit":  output.Limit,
+			"total":  output.Total,
 		},
 	})
 }

@@ -171,7 +171,10 @@ func registerOrganizerRoutes(
 	api := router.Group("/api/v1")
 
 	organizer := api.Group("/organizers")
-	organizer.Use(middleware.Auth(jwtService))
+	organizer.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireRole("ORGANIZER"),
+	)
 
 	// Customer organizer-application endpoints.
 	organizer.POST(
@@ -203,6 +206,11 @@ func registerOrganizerRoutes(
 	organizer.PUT(
 		"/events/:id",
 		eventHandler.UpdateEvent,
+	)
+
+	organizer.GET(
+		"/events",
+		eventHandler.GetMyEvents,
 	)
 }
 

@@ -1209,6 +1209,118 @@ func (u *EventUsecase) UpdateEvent(
 
 	return &output, nil
 }
+
+type GetMyEventsOutput struct {
+	Events []*domain.Event
+	Page   int
+	Limit  int
+	Total  int64
+}
+
+func (u *EventUsecase) GetMyEvents(
+	ctx context.Context,
+	userID uuid.UUID,
+	page int,
+	limit int,
+	status string,
+	search string,
+) (*GetMyEventsOutput, error) {
+
+	if page < 1 {
+		page = 1
+	}
+
+	if limit < 1 {
+		limit = 10
+	}
+
+	if limit > 100 {
+		limit = 100
+	}
+
+	var organizer *domain.Organizer
+	var events []*domain.Event
+	var total int64
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			var err error
+
+			organizer, err = tx.OrganizerRepository().FindByUserID(userID)
+			if err != nil {
+				if errors.Is(err, domain.ErrOrganizerNotFound) {
+					u.logger.Warn(
+						"event_list_organizer_not_found",
+						"user_id", userID,
+					)
+
+					return ErrUnauthorizedOrganizer
+				}
+
+				u.logger.Error(
+					"event_list_organizer_lookup_failed",
+					"user_id", userID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			if organizer.Status != "ACTIVE" {
+				u.logger.Warn(
+					"event_list_organizer_inactive",
+					"user_id", userID,
+					"organizer_id", organizer.ID,
+					"status", organizer.Status,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			events, total, err = tx.EventRepository().FindByOrganizerID(
+				organizer.ID,
+				page,
+				limit,
+				status,
+				search,
+			)
+			if err != nil {
+				u.logger.Error(
+					"event_list_failed",
+					"user_id", userID,
+					"organizer_id", organizer.ID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	u.logger.Info(
+		"organizer_events_fetched",
+		"user_id", userID,
+		"organizer_id", organizer.ID,
+		"count", len(events),
+		"total", total,
+		"page", page,
+		"limit", limit,
+	)
+
+	return &GetMyEventsOutput{
+		Events: events,
+		Page:   page,
+		Limit:  limit,
+		Total:  total,
+	}, nil
+}
+
 func isSupportedBannerContentType(contentType string) bool {
 	switch strings.ToLower(strings.TrimSpace(contentType)) {
 	case "image/jpeg", "image/png", "image/webp":
