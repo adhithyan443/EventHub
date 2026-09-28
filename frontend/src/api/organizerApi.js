@@ -75,3 +75,10 @@ export const getOrganizerEvents = async ({
 
     return response.data;
 };
+
+
+export const getOrganizerEventById = async (eventId) => {
+    const response = await apiClient.get(`/organizers/events/${eventId}`);
+
+    return response.data;
+};

@@ -1,8 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
 import { useParams, useNavigate, Link } from "react-router-dom";
+
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
+
 import StatusBadge from "../../components/organizer/events/StatusBadge";
+
 import ProgressBar from "../../components/organizer/events/ProgressBar";
+
 import {
   ArrowLeftIcon,
   CalendarDetailIcon,
@@ -15,22 +20,357 @@ import {
   ExternalLinkIcon,
   CheckCircleIcon,
 } from "../../components/organizer/events/OrganizerEventsIcons";
-import { getOrganizerEventById } from "./mockOrganizerEvents";
+
+import { getOrganizerEventById } from "../../api/organizerApi";
 
 export default function EventDetailsPage() {
   const { eventId } = useParams();
+
   const navigate = useNavigate();
 
-  const event = getOrganizerEventById(eventId);
+  const [event, setEvent] = useState(null);
+
+  const [loading, setLoading] = useState(Boolean(eventId));
+  const [error, setError] = useState(
+    eventId ? "" : "Event ID is missing."
+  );
+
   const [copySuccess, setCopySuccess] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchEventDetails = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await getOrganizerEventById(eventId);
+
+        if (!isMounted) {
+          return;
+        }
+
+        if (!response?.success || !response?.data) {
+          throw new Error("Unable to load event details.");
+        }
+
+        setEvent(response.data);
+      } catch (err) {
+        if (!isMounted) {
+          return;
+        }
+
+        console.error("Failed to fetch organizer event details:", err);
+
+        setError(
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Unable to load event details."
+        );
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    if (eventId) {
+      fetchEventDetails();
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [eventId]);
 
   const handleShare = () => {
     if (navigator.clipboard) {
       navigator.clipboard.writeText(window.location.href);
+
       setCopySuccess(true);
+
       setTimeout(() => setCopySuccess(false), 2000);
     }
   };
+
+  /*
+   * API response:
+   *
+   * data.Event
+   * data.Schedule
+   * data.Venue
+   * data.Setting
+   * data.Cancellation
+   * data.Contact
+   * data.TicketTypes
+   * data.SeatLayout
+   * data.Statistics
+   */
+
+  const eventData = event?.Event;
+
+  const schedule = event?.Schedule;
+
+  const venue = event?.Venue;
+
+  // const setting = event?.Setting;
+
+  const cancellation = event?.Cancellation;
+
+  const contact = event?.Contact;
+
+  const ticketTypes = event?.TicketTypes || [];
+
+  const statistics = event?.Statistics;
+
+  // const seatLayout = event?.SeatLayout;
+
+  const formatDate = (dateValue) => {
+    if (!dateValue) {
+      return "N/A";
+    }
+
+    const date = new Date(dateValue);
+
+    if (Number.isNaN(date.getTime())) {
+      return dateValue;
+    }
+
+    return date.toLocaleDateString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const formatTime = (timeValue) => {
+    if (!timeValue) {
+      return "N/A";
+    }
+
+    const [hours, minutes] = timeValue.split(":");
+
+    if (hours === undefined || minutes === undefined) {
+      return timeValue;
+    }
+
+    const date = new Date();
+
+    date.setHours(Number(hours), Number(minutes), 0, 0);
+
+    return date.toLocaleTimeString("en-IN", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  };
+
+  const formatTimeRange = () => {
+    if (schedule?.IsAllDay) {
+      return "All Day";
+    }
+
+    if (!schedule?.StartTime && !schedule?.EndTime) {
+      return "N/A";
+    }
+
+    return `${formatTime(schedule?.StartTime)} - ${formatTime(
+      schedule?.EndTime
+    )}`;
+  };
+
+  const calculateDuration = () => {
+    if (!schedule?.StartTime || !schedule?.EndTime) {
+      return "";
+    }
+
+    const [startHours, startMinutes] = schedule.StartTime.split(":").map(Number);
+
+    const [endHours, endMinutes] = schedule.EndTime.split(":").map(Number);
+
+    if (
+      Number.isNaN(startHours) ||
+      Number.isNaN(startMinutes) ||
+      Number.isNaN(endHours) ||
+      Number.isNaN(endMinutes)
+    ) {
+      return "";
+    }
+
+    let startTotalMinutes = startHours * 60 + startMinutes;
+
+    let endTotalMinutes = endHours * 60 + endMinutes;
+
+    if (endTotalMinutes < startTotalMinutes) {
+      endTotalMinutes += 24 * 60;
+    }
+
+    const durationMinutes = endTotalMinutes - startTotalMinutes;
+
+    const hours = Math.floor(durationMinutes / 60);
+
+    const minutes = durationMinutes % 60;
+
+    if (hours === 0) {
+      return `${minutes} min`;
+    }
+
+    if (minutes === 0) {
+      return `${hours} hr`;
+    }
+
+    return `${hours} hr ${minutes} min`;
+  };
+
+  const parseHighlights = (value) => {
+    if (!value) {
+      return [];
+    }
+
+    return value
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  };
+
+  const getTicketStatus = (ticket) => {
+    if (ticket.Status === "SOLD_OUT") {
+      return "Sold Out";
+    }
+
+    if (ticket.AvailableQuantity <= 0) {
+      return "Sold Out";
+    }
+
+    const soldPercentage =
+      ticket.TotalQuantity > 0
+        ? (ticket.SoldQuantity / ticket.TotalQuantity) * 100
+        : 0;
+
+    if (soldPercentage >= 80) {
+      return "Selling Fast";
+    }
+
+    return "Available";
+  };
+
+  const getCancellationDeadline = () => {
+    if (!cancellation) {
+      return "N/A";
+    }
+
+    if (!cancellation.CancellationAllowed) {
+      return "Not Allowed";
+    }
+
+    if (!cancellation.CancellationDeadlineHours) {
+      return "N/A";
+    }
+
+    return `${cancellation.CancellationDeadlineHours} hours before event`;
+  };
+
+  const getRefundPolicyLabel = () => {
+    if (!cancellation) {
+      return "Non-refundable";
+    }
+
+    if (!cancellation.CancellationAllowed) {
+      return "Non-refundable";
+    }
+
+    if (cancellation.RefundPolicy === "FULL") {
+      return "Full Refund";
+    }
+
+    if (cancellation.RefundPolicy === "PARTIAL") {
+      return `Partial Refund${cancellation.RefundPercentage !== undefined
+        ? ` (${cancellation.RefundPercentage}%)`
+        : ""
+        }`;
+    }
+
+    return "Non-refundable";
+  };
+
+  const ticketCapacity =
+    statistics?.TicketCapacity ??
+    ticketTypes.reduce(
+      (total, ticket) => total + Number(ticket.TotalQuantity || 0),
+      0
+    );
+
+  const ticketsSold =
+    statistics?.TicketsSold ??
+    ticketTypes.reduce(
+      (total, ticket) => total + Number(ticket.SoldQuantity || 0),
+      0
+    );
+
+  const percentageSold =
+    statistics?.PercentageSold ??
+    (ticketCapacity > 0 ? Math.round((ticketsSold / ticketCapacity) * 100) : 0);
+
+  const revenue = statistics?.Revenue ?? 0;
+
+  const highlights = parseHighlights(eventData?.Highlights);
+
+  if (loading) {
+    return (
+      <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6 w-full animate-fade-in">
+        <div className="bg-white border border-[#bcc9c6] rounded-xl p-6 shadow-2xs">
+          <div className="flex items-center justify-center min-h-48">
+            <div className="flex flex-col items-center gap-3">
+              <div className="size-8 border-2 border-[#00685f] border-t-transparent rounded-full animate-spin" />
+
+              <span className="text-sm text-[#565e74]">
+                Loading event details...
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !eventData) {
+    return (
+      <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6 w-full animate-fade-in">
+        <div className="flex items-center">
+          <Link
+            to={ORGANIZER_ROUTES.MY_EVENTS}
+            className="flex items-center gap-1.5 text-[#00685f] hover:underline font-medium text-xs sm:text-sm"
+          >
+            <ArrowLeftIcon className="size-4" />
+
+            <span>Back to My Events</span>
+          </Link>
+        </div>
+
+        <div className="bg-white border border-[#bcc9c6] rounded-xl p-6 shadow-2xs">
+          <div className="flex flex-col items-center justify-center min-h-48 gap-3 text-center">
+            <span className="text-sm font-semibold text-[#141b2b]">
+              Unable to load event
+            </span>
+
+            <span className="text-xs text-[#565e74]">
+              {error || "Event details could not be found."}
+            </span>
+
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-lg transition-colors cursor-pointer"
+            >
+              Try Again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto flex flex-col gap-6 w-full animate-fade-in">
@@ -42,11 +382,14 @@ export default function EventDetailsPage() {
             className="flex items-center gap-1.5 text-[#00685f] hover:underline font-medium"
           >
             <ArrowLeftIcon className="size-4" />
+
             <span>Back to My Events</span>
           </Link>
+
           <span>/</span>
+
           <span className="text-[#141b2b] font-medium truncate max-w-[200px] sm:max-w-xs">
-            {event.name}
+            {eventData.Title}
           </span>
         </div>
 
@@ -58,6 +401,7 @@ export default function EventDetailsPage() {
             className="border border-[#bcc9c6] bg-white hover:bg-[#f1f3ff] text-[#141b2b] text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <ShareIcon className="size-3.5 text-[#565e74]" />
+
             <span>{copySuccess ? "Link Copied!" : "Share"}</span>
           </button>
 
@@ -67,6 +411,7 @@ export default function EventDetailsPage() {
             className="border border-[#bcc9c6] bg-white hover:bg-[#f1f3ff] text-[#141b2b] text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <EditIcon className="size-3.5 text-[#565e74]" />
+
             <span>Edit Event</span>
           </button>
 
@@ -76,6 +421,7 @@ export default function EventDetailsPage() {
             className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
           >
             <ExternalLinkIcon className="size-3.5 text-white" />
+
             <span>View Public Page</span>
           </button>
         </div>
@@ -86,21 +432,28 @@ export default function EventDetailsPage() {
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-xl sm:text-2xl lg:text-3xl font-bold text-[#141b2b]">
-              {event.name}
+              {eventData.Title}
             </h1>
-            <StatusBadge status={event.status} />
+
+            <StatusBadge status={eventData.Status} />
           </div>
+
           <p className="text-xs sm:text-sm text-[#565e74]">
-            Event ID: <span className="font-mono text-[#141b2b]">EV-{event.id.toString().padStart(5, "0")}</span> • Created by Organizer Arjun Kumar
+            Event ID:{" "}
+            <span className="font-mono text-[#141b2b]">
+              {eventData.ID}
+            </span>{" "}
+            • Created on {formatDate(eventData.CreatedAt)}
           </p>
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto">
           <span className="bg-[#f1f3ff] text-[#565e74] text-xs font-semibold px-3 py-1.5 rounded-md uppercase tracking-wider">
-            {event.visibility || "PUBLIC"}
+            {eventData.Visibility || "PUBLIC"}
           </span>
+
           <span className="bg-[#00685f]/10 text-[#00685f] text-xs font-semibold px-3 py-1.5 rounded-md uppercase tracking-wider">
-            {event.category}
+            {eventData.CategoryName || "Uncategorized"}
           </span>
         </div>
       </div>
@@ -113,16 +466,21 @@ export default function EventDetailsPage() {
             <span className="text-xs font-semibold text-[#565e74] uppercase tracking-wider">
               Total Revenue
             </span>
+
             <div className="size-8 rounded-lg bg-[#00685f]/10 flex items-center justify-center text-[#00685f]">
               <RupeeIcon className="size-4" />
             </div>
           </div>
+
           <div className="flex flex-col">
             <span className="text-2xl sm:text-3xl font-bold text-[#141b2b]">
-              {event.revenue}
+              ₹{Number(revenue).toLocaleString("en-IN")}
             </span>
+
             <span className="text-xs text-[#565e74] mt-0.5">
-              Gross sales to date
+              {statistics?.IsMock
+                ? "Mock value — payments not implemented"
+                : "Gross sales to date"}
             </span>
           </div>
         </div>
@@ -133,23 +491,29 @@ export default function EventDetailsPage() {
             <span className="text-xs font-semibold text-[#565e74] uppercase tracking-wider">
               Tickets Sold
             </span>
+
             <div className="size-8 rounded-lg bg-[#dce2f7] flex items-center justify-center text-[#00685f]">
               <TicketDetailIcon className="size-4 text-[#00685f]" />
             </div>
           </div>
+
           <div className="flex flex-col gap-1.5">
             <div className="flex items-baseline justify-between">
               <span className="text-2xl sm:text-3xl font-bold text-[#141b2b]">
-                {event.sold}
+                {ticketsSold}
+
                 <span className="text-sm font-normal text-[#565e74]">
-                  {" "}/ {event.total.toLocaleString()}
+                  {" "}
+                  / {ticketCapacity.toLocaleString()}
                 </span>
               </span>
+
               <span className="text-xs font-bold text-[#00685f]">
-                {event.pct}%
+                {percentageSold}%
               </span>
             </div>
-            <ProgressBar pct={event.pct} />
+
+            <ProgressBar pct={percentageSold} />
           </div>
         </div>
 
@@ -159,16 +523,19 @@ export default function EventDetailsPage() {
             <span className="text-xs font-semibold text-[#565e74] uppercase tracking-wider">
               Event Date
             </span>
+
             <div className="size-8 rounded-lg bg-[#f1f3ff] flex items-center justify-center text-[#141b2b]">
               <CalendarDetailIcon className="size-4 text-[#141b2b]" />
             </div>
           </div>
+
           <div className="flex flex-col">
             <span className="text-xl sm:text-2xl font-bold text-[#141b2b]">
-              {event.date}
+              {formatDate(schedule?.EventDate)}
             </span>
+
             <span className="text-xs text-[#565e74] mt-0.5">
-              {event.timeRange}
+              {formatTimeRange()}
             </span>
           </div>
         </div>
@@ -179,16 +546,22 @@ export default function EventDetailsPage() {
             <span className="text-xs font-semibold text-[#565e74] uppercase tracking-wider">
               Location / City
             </span>
+
             <div className="size-8 rounded-lg bg-[#f1f3ff] flex items-center justify-center text-[#141b2b]">
               <MapPinDetailIcon className="size-4 text-[#141b2b]" />
             </div>
           </div>
+
           <div className="flex flex-col">
             <span className="text-xl sm:text-2xl font-bold text-[#141b2b] truncate">
-              {event.venue}
+              {venue?.Name || "Online Event"}
             </span>
+
             <span className="text-xs text-[#565e74] mt-0.5 truncate">
-              {event.venueDetails?.name || event.venue}
+              {venue?.City ||
+                (eventData.EventType === "ONLINE"
+                  ? "Online"
+                  : "Location unavailable")}
             </span>
           </div>
         </div>
@@ -201,17 +574,27 @@ export default function EventDetailsPage() {
           {/* Banner & Description Card */}
           <div className="bg-white border border-[#bcc9c6] rounded-xl overflow-hidden shadow-2xs">
             <div className="h-56 sm:h-72 w-full bg-gray-100 relative">
-              <img
-                src={event.image}
-                alt={event.name}
-                className="size-full object-cover"
-              />
+              {eventData.BannerImageURL ? (
+                <img
+                  src={eventData.BannerImageURL}
+                  alt={eventData.Title}
+                  className="size-full object-cover"
+                />
+              ) : (
+                <div className="size-full flex items-center justify-center text-sm text-[#565e74]">
+                  No event banner
+                </div>
+              )}
+
               <div className="absolute top-4 left-4 flex gap-2">
                 <span className="bg-[#00685f] text-white text-[11px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">
-                  {event.category}
+                  {eventData.CategoryName || "Uncategorized"}
                 </span>
+
                 <span className="bg-white/90 backdrop-blur-xs text-[#141b2b] text-[11px] font-bold px-3 py-1 rounded-full shadow-sm">
-                  {event.ageRestriction}
+                  {eventData.AgeRestriction
+                    ? `${eventData.AgeRestriction}+`
+                    : "All Ages"}
                 </span>
               </div>
             </div>
@@ -220,21 +603,27 @@ export default function EventDetailsPage() {
               <h2 className="text-xl font-bold text-[#141b2b]">
                 About This Event
               </h2>
+
               <p className="text-sm text-[#565e74] leading-relaxed whitespace-pre-line">
-                {event.description}
+                {eventData.Description || "No description available."}
               </p>
 
               {/* Highlights */}
-              {event.highlights && event.highlights.length > 0 && (
+              {highlights.length > 0 && (
                 <div className="mt-2 pt-4 border-t border-[#bcc9c6]/40 flex flex-col gap-2.5">
                   <h3 className="text-xs font-bold text-[#141b2b] uppercase tracking-wider">
                     Key Highlights
                   </h3>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {event.highlights.map((h, i) => (
-                      <div key={i} className="flex items-start gap-2 text-xs sm:text-sm text-[#565e74]">
+                    {highlights.map((highlight, index) => (
+                      <div
+                        key={index}
+                        className="flex items-start gap-2 text-xs sm:text-sm text-[#565e74]"
+                      >
                         <CheckCircleIcon className="size-4 text-[#00685f] shrink-0 mt-0.5" />
-                        <span>{h}</span>
+
+                        <span>{highlight}</span>
                       </div>
                     ))}
                   </div>
@@ -250,12 +639,14 @@ export default function EventDetailsPage() {
                 <h2 className="text-lg font-bold text-[#141b2b]">
                   Ticket Tiers & Inventory
                 </h2>
+
                 <p className="text-xs text-[#565e74]">
-                  {event.ticketTypes?.length || 0} active ticket tier configurations
+                  {ticketTypes.length} active ticket tier configurations
                 </p>
               </div>
+
               <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-[#00685f]/10 text-[#00685f]">
-                {event.total.toLocaleString()} Total Capacity
+                {ticketCapacity.toLocaleString()} Total Capacity
               </span>
             </div>
 
@@ -264,48 +655,76 @@ export default function EventDetailsPage() {
                 <thead>
                   <tr className="bg-[#f1f3ff] text-[11px] font-bold uppercase tracking-wider text-[#565e74]">
                     <th className="py-2.5 px-3 rounded-l-lg">Tier Name</th>
+
                     <th className="py-2.5 px-3">Price</th>
+
                     <th className="py-2.5 px-3">Sold / Cap</th>
-                    <th className="py-2.5 px-3 min-w-[120px]">Progress</th>
-                    <th className="py-2.5 px-3 rounded-r-lg text-right">Status</th>
+
+                    <th className="py-2.5 px-3 min-w-[120px]">
+                      Progress
+                    </th>
+
+                    <th className="py-2.5 px-3 rounded-r-lg text-right">
+                      Status
+                    </th>
                   </tr>
                 </thead>
+
                 <tbody className="divide-y divide-[#bcc9c6]/30 text-xs sm:text-sm">
-                  {(event.ticketTypes || []).map((t) => {
-                    const tierPct = t.capacity > 0 ? Math.round((t.sold / t.capacity) * 100) : 0;
+                  {ticketTypes.map((ticket) => {
+                    const capacity = Number(ticket.TotalQuantity || 0);
+
+                    const sold = Number(ticket.SoldQuantity || 0);
+
+                    const tierPct =
+                      capacity > 0
+                        ? Math.round((sold / capacity) * 100)
+                        : 0;
+
+                    const status = getTicketStatus(ticket);
+
                     return (
-                      <tr key={t.id} className="hover:bg-[#f9f9ff]">
+                      <tr key={ticket.ID} className="hover:bg-[#f9f9ff]">
                         <td className="py-3 px-3">
                           <div className="flex flex-col">
-                            <span className="font-semibold text-[#141b2b]">{t.name}</span>
-                            <span className="text-[11px] text-[#565e74] line-clamp-1">{t.description}</span>
+                            <span className="font-semibold text-[#141b2b]">
+                              {ticket.Name}
+                            </span>
+
+                            <span className="text-[11px] text-[#565e74] line-clamp-1">
+                              {ticket.Description}
+                            </span>
                           </div>
                         </td>
+
                         <td className="py-3 px-3 font-semibold text-[#141b2b] whitespace-nowrap">
-                          {t.price}
+                          ₹{Number(ticket.Price || 0).toLocaleString("en-IN")}
                         </td>
+
                         <td className="py-3 px-3 text-[#565e74] whitespace-nowrap">
-                          {t.sold} / {t.capacity}
+                          {sold} / {capacity}
                         </td>
+
                         <td className="py-3 px-3 min-w-[120px]">
                           <div className="flex flex-col gap-1">
                             <div className="flex justify-between text-[11px] font-medium">
                               <span>{tierPct}%</span>
                             </div>
+
                             <ProgressBar pct={tierPct} />
                           </div>
                         </td>
+
                         <td className="py-3 px-3 text-right">
                           <span
-                            className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium ${
-                              t.status === "Sold Out"
-                                ? "bg-red-50 text-red-600 border border-red-200"
-                                : t.status === "Selling Fast"
-                                  ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                  : "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                            }`}
+                            className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium ${status === "Sold Out"
+                              ? "bg-red-50 text-red-600 border border-red-200"
+                              : status === "Selling Fast"
+                                ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                              }`}
                           >
-                            {t.status}
+                            {status}
                           </span>
                         </td>
                       </tr>
@@ -321,13 +740,15 @@ export default function EventDetailsPage() {
             <h2 className="text-lg font-bold text-[#141b2b] pb-2 border-b border-[#bcc9c6]/40">
               Attendee Guidelines & Instructions
             </h2>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs sm:text-sm">
               <div className="flex flex-col gap-1.5">
                 <span className="font-semibold text-[#141b2b] uppercase tracking-wider text-[11px] text-[#565e74]">
                   Event Rules & Regulations
                 </span>
+
                 <p className="text-[#565e74] whitespace-pre-line leading-relaxed">
-                  {event.rules || "Standard venue rules apply."}
+                  {eventData.Rules || "Standard venue rules apply."}
                 </p>
               </div>
 
@@ -335,8 +756,10 @@ export default function EventDetailsPage() {
                 <span className="font-semibold text-[#141b2b] uppercase tracking-wider text-[11px] text-[#565e74]">
                   Arrival & Check-in Notes
                 </span>
+
                 <p className="text-[#565e74] whitespace-pre-line leading-relaxed">
-                  {event.attendeeInformation || "Check-in instructions will be delivered with ticket confirmation."}
+                  {eventData.AttendeeInformation ||
+                    "Check-in instructions will be delivered with ticket confirmation."}
                 </p>
               </div>
             </div>
@@ -357,16 +780,25 @@ export default function EventDetailsPage() {
                 <div className="size-8 rounded-lg bg-[#f1f3ff] flex items-center justify-center text-[#141b2b] shrink-0 mt-0.5">
                   <CalendarDetailIcon className="size-4" />
                 </div>
+
                 <div className="flex flex-col">
                   <span className="text-xs font-semibold text-[#565e74] uppercase tracking-wider">
                     Date & Timing
                   </span>
+
                   <span className="text-sm font-bold text-[#141b2b] mt-0.5">
-                    {event.date}
+                    {formatDate(schedule?.EventDate)}
                   </span>
+
                   <span className="text-xs text-[#565e74] flex items-center gap-1 mt-0.5">
                     <ClockIcon className="size-3 text-[#565e74]" />
-                    <span>{event.timeRange} ({event.duration})</span>
+
+                    <span>
+                      {formatTimeRange()}
+                      {calculateDuration()
+                        ? ` (${calculateDuration()})`
+                        : ""}
+                    </span>
                   </span>
                 </div>
               </div>
@@ -378,23 +810,45 @@ export default function EventDetailsPage() {
                 <div className="size-8 rounded-lg bg-[#f1f3ff] flex items-center justify-center text-[#141b2b] shrink-0 mt-0.5">
                   <MapPinDetailIcon className="size-4" />
                 </div>
+
                 <div className="flex flex-col">
                   <span className="text-xs font-semibold text-[#565e74] uppercase tracking-wider">
-                    Venue ({event.locationType || "PHYSICAL"})
+                    Venue ({eventData.EventType || "PHYSICAL"})
                   </span>
+
                   <span className="text-sm font-bold text-[#141b2b] mt-0.5">
-                    {event.venueDetails?.name || event.venue}
+                    {venue?.Name ||
+                      (eventData.EventType === "ONLINE"
+                        ? "Online Event"
+                        : "Venue unavailable")}
                   </span>
-                  {event.venueDetails?.address && (
+
+                  {venue?.Address && (
                     <span className="text-xs text-[#565e74] mt-0.5">
-                      {event.venueDetails.address}
+                      {venue.Address}
                     </span>
                   )}
-                  {event.venueDetails?.city && (
+
+                  {venue?.City && (
                     <span className="text-xs text-[#565e74]">
-                      {event.venueDetails.city}, {event.venueDetails.state} {event.venueDetails.postalCode}
+                      {venue.City}
+                      {venue.State ? `, ${venue.State}` : ""}
+                      {venue.PostalCode ? ` ${venue.PostalCode}` : ""}
                     </span>
                   )}
+
+                  {venue?.Country && (
+                    <span className="text-xs text-[#565e74]">
+                      {venue.Country}
+                    </span>
+                  )}
+
+                  {eventData.EventType === "ONLINE" &&
+                    eventData.OnlineURL && (
+                      <span className="text-xs text-[#00685f] mt-1 truncate">
+                        Online event link configured
+                      </span>
+                    )}
                 </div>
               </div>
             </div>
@@ -405,18 +859,30 @@ export default function EventDetailsPage() {
             <h3 className="text-base font-bold text-[#141b2b] pb-2 border-b border-[#bcc9c6]/40">
               Organizer Contact
             </h3>
+
             <div className="flex flex-col gap-2 text-xs sm:text-sm">
               <div className="flex justify-between py-1 border-b border-[#bcc9c6]/20">
                 <span className="text-[#565e74]">Lead Organizer:</span>
-                <span className="font-semibold text-[#141b2b]">{event.contactInformation?.name || "Arjun Kumar"}</span>
+
+                <span className="font-semibold text-[#141b2b]">
+                  {contact?.Name || "N/A"}
+                </span>
               </div>
+
               <div className="flex justify-between py-1 border-b border-[#bcc9c6]/20">
                 <span className="text-[#565e74]">Phone:</span>
-                <span className="font-semibold text-[#141b2b]">{event.contactInformation?.phone || "+91 98765 43210"}</span>
+
+                <span className="font-semibold text-[#141b2b]">
+                  {contact?.Phone || "N/A"}
+                </span>
               </div>
+
               <div className="flex justify-between py-1">
                 <span className="text-[#565e74]">Email:</span>
-                <span className="font-semibold text-[#00685f] truncate max-w-[170px]">{event.contactInformation?.email || "organizer@eventhub.com"}</span>
+
+                <span className="font-semibold text-[#00685f] truncate max-w-[170px]">
+                  {contact?.Email || "N/A"}
+                </span>
               </div>
             </div>
           </div>
@@ -426,27 +892,34 @@ export default function EventDetailsPage() {
             <h3 className="text-base font-bold text-[#141b2b] pb-2 border-b border-[#bcc9c6]/40">
               Cancellation & Refund
             </h3>
+
             <div className="flex flex-col gap-2 text-xs sm:text-sm">
               <div className="flex justify-between py-1 border-b border-[#bcc9c6]/20">
                 <span className="text-[#565e74]">Refund Policy:</span>
+
                 <span className="font-semibold text-[#141b2b]">
-                  {event.cancellationPolicy?.refundPolicy === "FULL"
-                    ? "Full Refund"
-                    : event.cancellationPolicy?.refundPolicy === "PARTIAL"
-                      ? "Partial Refund"
-                      : "Non-refundable"}
+                  {getRefundPolicyLabel()}
                 </span>
               </div>
+
               <div className="flex justify-between py-1 border-b border-[#bcc9c6]/20">
                 <span className="text-[#565e74]">Deadline:</span>
-                <span className="font-semibold text-[#141b2b]">{event.cancellationPolicy?.deadline || "N/A"}</span>
+
+                <span className="font-semibold text-[#141b2b]">
+                  {getCancellationDeadline()}
+                </span>
               </div>
-              {event.cancellationPolicy?.lastCancellationDate && (
-                <div className="flex justify-between py-1">
-                  <span className="text-[#565e74]">Last Date:</span>
-                  <span className="font-semibold text-[#141b2b]">{event.cancellationPolicy.lastCancellationDate}</span>
-                </div>
-              )}
+
+              {cancellation?.RefundPercentage !== undefined &&
+                cancellation?.RefundPolicy === "PARTIAL" && (
+                  <div className="flex justify-between py-1">
+                    <span className="text-[#565e74]">Refund Percentage:</span>
+
+                    <span className="font-semibold text-[#141b2b]">
+                      {cancellation.RefundPercentage}%
+                    </span>
+                  </div>
+                )}
             </div>
           </div>
 
@@ -455,14 +928,20 @@ export default function EventDetailsPage() {
             <h3 className="text-base font-bold text-[#141b2b] pb-2 border-b border-[#bcc9c6]/40">
               Event Management
             </h3>
+
             <div className="flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => alert("Downloading attendee report for " + event.name)}
+                onClick={() =>
+                  alert(
+                    `Downloading attendee report for ${eventData.Title}`
+                  )
+                }
                 className="w-full border border-[#bcc9c6] hover:bg-[#f1f3ff] text-[#141b2b] text-xs sm:text-sm font-semibold py-2.5 px-3 rounded-lg text-center transition-colors cursor-pointer"
               >
                 📥 Download Guestlist (CSV)
               </button>
+
               <button
                 type="button"
                 onClick={() => navigate(ORGANIZER_ROUTES.ATTENDEES)}
@@ -477,4 +956,3 @@ export default function EventDetailsPage() {
     </div>
   );
 }
-
