@@ -1215,6 +1215,7 @@ type GetMyEventsOutput struct {
 	Page   int
 	Limit  int
 	Total  int64
+	// BannerImageURL string
 }
 
 func (u *EventUsecase) GetMyEvents(
@@ -1301,6 +1302,31 @@ func (u *EventUsecase) GetMyEvents(
 
 	if err != nil {
 		return nil, err
+	}
+
+	for _, event := range events {
+		if strings.TrimSpace(event.BannerURL) == "" {
+			continue
+		}
+
+		bannerImageURL, err := u.storageService.GetPresignedURL(
+			ctx,
+			event.BannerURL,
+		)
+		if err != nil {
+			u.logger.Error(
+				"event_banner_presign_failed",
+				"user_id", userID,
+				"organizer_id", organizer.ID,
+				"event_id", event.ID,
+				"banner_key", event.BannerURL,
+				"error", err,
+			)
+
+			return nil, err
+		}
+
+		event.BannerImageURL = bannerImageURL
 	}
 
 	u.logger.Info(

@@ -347,7 +347,7 @@ export default function MyEventsPage() {
           </div>
         </div>
 
-{/* 
+        {/* 
         <div className="flex gap-2 flex-wrap items-center">
           
           <div className="relative">
@@ -737,10 +737,12 @@ export default function MyEventsPage() {
                       <td className="px-4 py-3.5">
                         <div className="flex gap-3 items-center">
                           <div className="size-11 sm:size-12 rounded-lg bg-[#dce2f7] overflow-hidden shrink-0 border border-[#bcc9c6]/40 flex items-center justify-center">
-                            {event?.BannerURL ? (
-                              <div className="size-full bg-[#dce2f7] flex items-center justify-center text-[#565e74] text-xs">
-                                IMG
-                              </div>
+                            {event?.BannerImageURL ? (
+                              <img
+                                src={event.BannerImageURL}
+                                alt={event?.Title || "Event banner"}
+                                className="size-full object-cover"
+                              />
                             ) : (
                               <span className="text-[#565e74] text-xs">
                                 —

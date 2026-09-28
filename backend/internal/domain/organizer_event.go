@@ -23,6 +23,7 @@ type OrganizerEvent struct {
 	Title          string
 	Description    string
 	BannerURL      string
+	BannerImageURL string
 	Language       string
 	AgeRestriction int
 
