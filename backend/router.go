@@ -212,6 +212,11 @@ func registerOrganizerRoutes(
 		"/events",
 		eventHandler.GetMyEvents,
 	)
+
+	organizer.GET(
+		"/events/:id",
+		eventHandler.GetEventDetails,
+	)
 }
 
 func registerAdminRoutes(

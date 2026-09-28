@@ -1021,6 +1021,79 @@ func (h *EventHandler) GetMyEvents(c *gin.Context) {
 	})
 }
 
+func (h *EventHandler) GetEventDetails(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_details_invalid_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	output, err := h.eventUsecase.GetEventDetails(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to access this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, domain.ErrCategoryNotFound),
+			errors.Is(err, domain.ErrVenueNotFound),
+			errors.Is(err, domain.ErrSeatLayoutNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event related data not found",
+			})
+
+		default:
+			h.logger.Error(
+				"event_details_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to fetch event details",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    output,
+	})
+}
+
 func detectBannerContentType(file io.ReadSeeker) (string, error) {
 	buffer := make([]byte, 512)
 

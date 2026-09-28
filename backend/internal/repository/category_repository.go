@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -44,6 +46,29 @@ func (r *CategoryRepository) FindActive() ([]*domain.Category, error) {
 	}
 
 	return categories, nil
+}
+
+func (r *CategoryRepository) FindByID(id uuid.UUID) (*domain.Category, error) {
+	var categoryModel models.CategoryModel
+
+	if err := r.db.
+		Where("id = ?", id).
+		First(&categoryModel).Error; err != nil {
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrCategoryNotFound
+		}
+
+		r.logger.Error(
+			"category_find_by_id_failed",
+			"category_id", id,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	return toCategoryDomain(&categoryModel), nil
 }
 
 func toCategoryDomain(model *models.CategoryModel) *domain.Category {

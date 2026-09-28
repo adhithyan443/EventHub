@@ -1218,6 +1218,115 @@ type GetMyEventsOutput struct {
 	// BannerImageURL string
 }
 
+type EventDetailsOutput struct {
+	Event        *EventDetailsEvent
+	Schedule     *EventDetailsSchedule
+	Venue        *EventDetailsVenue
+	Setting      *EventDetailsSetting
+	Cancellation *EventDetailsCancellation
+	Contact      *EventDetailsContact
+	TicketTypes  []EventDetailsTicketType
+	SeatLayout   *EventDetailsSeatLayout
+	Statistics   EventDetailsStatistics
+}
+
+type EventDetailsEvent struct {
+	ID                  uuid.UUID
+	OrganizerID         uuid.UUID
+	CategoryID          uuid.UUID
+	CategoryName        string
+	VenueID             *uuid.UUID
+	EventType           string
+	OnlineURL           string
+	Title               string
+	Description         string
+	BannerURL           string
+	BannerImageURL      string
+	Language            string
+	AgeRestriction      int
+	Visibility          string
+	Highlights          string
+	Rules               string
+	AttendeeInformation string
+	Status              string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type EventDetailsSchedule struct {
+	ID        uuid.UUID
+	EventID   uuid.UUID
+	EventDate time.Time
+	StartTime *string
+	EndTime   *string
+	IsAllDay  bool
+}
+
+type EventDetailsVenue struct {
+	ID            uuid.UUID
+	GooglePlaceID string
+	Name          string
+	Address       string
+	City          string
+	State         string
+	Country       string
+	PostalCode    string
+	Latitude      float64
+	Longitude     float64
+}
+
+type EventDetailsSetting struct {
+	ID                  uuid.UUID
+	EventID             uuid.UUID
+	SeatLayoutType      string
+	BookingLimitPerUser int
+	SalesStartDate      *time.Time
+	SalesEndDate        *time.Time
+}
+
+type EventDetailsCancellation struct {
+	ID                        uuid.UUID
+	EventID                   uuid.UUID
+	CancellationAllowed       bool
+	CancellationDeadlineHours int
+	RefundPolicy              string
+	RefundPercentage          int
+}
+
+type EventDetailsContact struct {
+	ID      uuid.UUID
+	EventID uuid.UUID
+	Name    string
+	Phone   string
+	Email   string
+}
+
+type EventDetailsTicketType struct {
+	ID                uuid.UUID
+	EventID           uuid.UUID
+	Name              string
+	Price             float64
+	TotalQuantity     int
+	AvailableQuantity int
+	SoldQuantity      int
+	Description       string
+	Status            string
+}
+
+type EventDetailsSeatLayout struct {
+	ID         uuid.UUID
+	EventID    uuid.UUID
+	LayoutName string
+}
+
+type EventDetailsStatistics struct {
+	TicketsSold    int
+	TicketCapacity int
+	PercentageSold int
+	Revenue        float64
+	IsMock         bool
+}
+
 func (u *EventUsecase) GetMyEvents(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -1354,6 +1463,327 @@ func isSupportedBannerContentType(contentType string) bool {
 	default:
 		return false
 	}
+}
+
+func (u *EventUsecase) GetEventDetails(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) (*EventDetailsOutput, error) {
+	var output EventDetailsOutput
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			organizer, err := tx.OrganizerRepository().FindByUserID(userID)
+			if err != nil {
+				if errors.Is(err, domain.ErrOrganizerNotFound) {
+					u.logger.Warn(
+						"event_details_organizer_not_found",
+						"user_id", userID,
+					)
+
+					return ErrUnauthorizedOrganizer
+				}
+
+				u.logger.Error(
+					"event_details_organizer_lookup_failed",
+					"user_id", userID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			if organizer.Status != "ACTIVE" {
+				u.logger.Warn(
+					"event_details_organizer_inactive",
+					"user_id", userID,
+					"organizer_id", organizer.ID,
+					"status", organizer.Status,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			event, err := tx.EventRepository().FindByID(eventID)
+			if err != nil {
+				if errors.Is(err, domain.ErrEventNotFound) {
+					return domain.ErrEventNotFound
+				}
+
+				u.logger.Error(
+					"event_details_lookup_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			if event.OrganizerID != organizer.ID {
+				u.logger.Warn(
+					"event_details_ownership_denied",
+					"user_id", userID,
+					"organizer_id", organizer.ID,
+					"event_id", eventID,
+					"event_organizer_id", event.OrganizerID,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			category, err := tx.CategoryRepository().FindByID(event.CategoryID)
+			if err != nil {
+				return err
+			}
+
+			schedule, err := tx.EventScheduleRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			setting, err := tx.EventSettingRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			cancellation, err := tx.EventCancellationRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			contact, err := tx.EventContactRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			ticketTypes, err := tx.TicketTypeRepository().FindByEventID(
+				ctx,
+				eventID,
+			)
+			if err != nil {
+				return err
+			}
+
+			var venue *domain.Venue
+
+			if event.VenueID != nil {
+				venue, err = tx.VenueRepository().FindByID(*event.VenueID)
+				if err != nil {
+					return err
+				}
+			}
+
+			var seatLayout *domain.SeatLayout
+
+			if layout, layoutErr := tx.SeatLayoutRepository().FindByEventID(eventID); layoutErr == nil {
+				seatLayout = layout
+			} else if !errors.Is(layoutErr, domain.ErrSeatLayoutNotFound) {
+				return layoutErr
+			}
+
+			bannerImageURL := ""
+
+			if strings.TrimSpace(event.BannerURL) != "" {
+				bannerImageURL, err = u.storageService.GetPresignedURL(
+					ctx,
+					event.BannerURL,
+				)
+				if err != nil {
+					u.logger.Error(
+						"event_details_banner_presign_failed",
+						"user_id", userID,
+						"event_id", eventID,
+						"banner_key", event.BannerURL,
+						"error", err,
+					)
+
+					return err
+				}
+			}
+
+			output.Event = &EventDetailsEvent{
+				ID:                  event.ID,
+				OrganizerID:         event.OrganizerID,
+				CategoryID:          event.CategoryID,
+				CategoryName:        category.Name,
+				VenueID:             event.VenueID,
+				EventType:           event.EventType,
+				OnlineURL:           event.OnlineURL,
+				Title:               event.Title,
+				Description:         event.Description,
+				BannerURL:           event.BannerURL,
+				BannerImageURL:      bannerImageURL,
+				Language:            event.Language,
+				AgeRestriction:      event.AgeRestriction,
+				Visibility:          event.Visibility,
+				Highlights:          event.Highlights,
+				Rules:               event.Rules,
+				AttendeeInformation: event.AttendeeInformation,
+				Status:              event.Status,
+				CreatedAt:           event.CreatedAt,
+				UpdatedAt:           event.UpdatedAt,
+			}
+
+			output.Schedule = &EventDetailsSchedule{
+				ID:        schedule.ID,
+				EventID:   schedule.EventID,
+				EventDate: schedule.EventDate,
+				StartTime: formatEventTime(schedule.StartTime),
+				EndTime:   formatEventTime(schedule.EndTime),
+				IsAllDay:  schedule.IsAllDay,
+			}
+
+			if venue != nil {
+				output.Venue = &EventDetailsVenue{
+					ID:            venue.ID,
+					GooglePlaceID: venue.GooglePlaceID,
+					Name:          venue.Name,
+					Address:       venue.Address,
+					City:          venue.City,
+					State:         venue.State,
+					Country:       venue.Country,
+					PostalCode:    venue.PostalCode,
+					Latitude:      venue.Latitude,
+					Longitude:     venue.Longitude,
+				}
+			}
+
+			output.Setting = &EventDetailsSetting{
+				ID:                  setting.ID,
+				EventID:             setting.EventID,
+				SeatLayoutType:      setting.SeatLayoutType,
+				BookingLimitPerUser: setting.BookingLimitPerUser,
+				SalesStartDate:      setting.SalesStartDate,
+				SalesEndDate:        setting.SalesEndDate,
+			}
+
+			output.Cancellation = &EventDetailsCancellation{
+				ID:                        cancellation.ID,
+				EventID:                   cancellation.EventID,
+				CancellationAllowed:       cancellation.CancellationAllowed,
+				CancellationDeadlineHours: cancellation.CancellationDeadlineHours,
+				RefundPolicy:              cancellation.RefundPolicy,
+				RefundPercentage:          cancellation.RefundPercentage,
+			}
+
+			output.Contact = &EventDetailsContact{
+				ID:      contact.ID,
+				EventID: contact.EventID,
+				Name:    contact.Name,
+				Phone:   contact.Phone,
+				Email:   contact.Email,
+			}
+
+			output.TicketTypes = make(
+				[]EventDetailsTicketType,
+				0,
+				len(ticketTypes),
+			)
+
+			var totalCapacity int
+			var totalSold int
+
+			for _, ticketType := range ticketTypes {
+				sold := ticketType.TotalQuantity - ticketType.AvailableQuantity
+
+				if sold < 0 {
+					sold = 0
+				}
+
+				status := "AVAILABLE"
+
+				if ticketType.AvailableQuantity == 0 {
+					status = "SOLD_OUT"
+				} else if ticketType.AvailableQuantity <= ticketType.TotalQuantity/5 {
+					status = "SELLING_FAST"
+				}
+
+				output.TicketTypes = append(
+					output.TicketTypes,
+					EventDetailsTicketType{
+						ID:                ticketType.ID,
+						EventID:           ticketType.EventID,
+						Name:              ticketType.Name,
+						Price:             ticketType.Price,
+						TotalQuantity:     ticketType.TotalQuantity,
+						AvailableQuantity: ticketType.AvailableQuantity,
+						SoldQuantity:      sold,
+						Description:       ticketType.Description,
+						Status:            status,
+					},
+				)
+
+				totalCapacity += ticketType.TotalQuantity
+				totalSold += sold
+			}
+
+			percentageSold := 0
+
+			if totalCapacity > 0 {
+				percentageSold = int(
+					math.Round(
+						float64(totalSold) /
+							float64(totalCapacity) *
+							100,
+					),
+				)
+			}
+
+			// Booking/payment functionality is not implemented yet.
+			// Revenue is intentionally mocked until the payment module exists.
+			const mockRevenue = 15000.00
+
+			output.Statistics = EventDetailsStatistics{
+				TicketsSold:    totalSold,
+				TicketCapacity: totalCapacity,
+				PercentageSold: percentageSold,
+				Revenue:        mockRevenue,
+				IsMock:         true,
+			}
+
+			if seatLayout != nil {
+				output.SeatLayout = &EventDetailsSeatLayout{
+					ID:         seatLayout.ID,
+					EventID:    seatLayout.EventID,
+					LayoutName: seatLayout.LayoutName,
+				}
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		u.logger.Error(
+			"event_details_fetch_failed",
+			"user_id", userID,
+			"event_id", eventID,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	u.logger.Info(
+		"event_details_fetched",
+		"user_id", userID,
+		"event_id", eventID,
+		"ticket_type_count", len(output.TicketTypes),
+		"tickets_sold", output.Statistics.TicketsSold,
+	)
+
+	return &output, nil
+}
+
+func formatEventTime(value time.Time) *string {
+	if value.IsZero() {
+		return nil
+	}
+
+	formatted := value.Format("15:04:05")
+	return &formatted
 }
 
 func bannerExtension(contentType string) string {
