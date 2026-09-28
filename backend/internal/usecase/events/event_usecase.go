@@ -1211,7 +1211,7 @@ func (u *EventUsecase) UpdateEvent(
 }
 
 type GetMyEventsOutput struct {
-	Events []*domain.Event
+	Events []*domain.OrganizerEvent
 	Page   int
 	Limit  int
 	Total  int64
@@ -1239,7 +1239,7 @@ func (u *EventUsecase) GetMyEvents(
 	}
 
 	var organizer *domain.Organizer
-	var events []*domain.Event
+	var events []*domain.OrganizerEvent
 	var total int64
 
 	err := u.transactionManager.WithinTransaction(

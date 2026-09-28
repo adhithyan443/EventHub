@@ -134,43 +134,157 @@ func (r *EventRepository) FindByOrganizerID(
 	limit int,
 	status string,
 	search string,
-) ([]*domain.Event, int64, error) {
+) ([]*domain.OrganizerEvent, int64, error) {
 
-	var events []models.EventModel
+	var events []*domain.OrganizerEvent
 	var total int64
 
 	offset := (page - 1) * limit
 
-	query := r.db.
-		Model(&models.EventModel{}).
-		Where("organizer_id = ?", organizerID)
+	countQuery := r.db.
+		Table("events AS e").
+		Where("e.organizer_id = ?::uuid", organizerID)
 
 	if status != "" {
-		query = query.Where("status = ?", status)
+		countQuery = countQuery.Where("e.status = ?", status)
 	}
-
 	if search != "" {
-		query = query.Where(
-			"LOWER(title) LIKE ?",
+		countQuery = countQuery.Where(
+			"LOWER(e.title) LIKE ?",
 			"%"+strings.ToLower(search)+"%",
 		)
 	}
 
-	if err := query.Count(&total).Error; err != nil {
+	if err := countQuery.Count(&total).Error; err != nil {
 		r.logger.Error(
 			"event_list_count_failed",
 			"organizer_id", organizerID,
 			"error", err,
 		)
-
 		return nil, 0, err
 	}
 
-	if err := query.
-		Order("created_at DESC").
+	listQuery := r.db.
+		Table("events AS e").
+		Select(`
+			e.id,
+			e.organizer_id,
+			e.category_id,
+			c.name AS category_name,
+
+			e.venue_id,
+			COALESCE(v.name, '') AS venue_name,
+			COALESCE(v.city, '') AS venue_city,
+
+			e.event_type,
+			e.online_url,
+
+			e.title,
+			e.description,
+			e.banner_url,
+			e.language,
+			e.age_restriction,
+
+			e.visibility,
+			e.status,
+
+			COALESCE(eset.seat_layout_type, '') AS seat_layout_type,
+
+			es.event_date,
+			es.start_time,
+			es.end_time,
+			es.is_all_day,
+
+			CASE
+				WHEN eset.seat_layout_type = 'SEATED' THEN COALESCE((
+					SELECT COUNT(*)
+					FROM seats s
+					INNER JOIN seat_rows sr ON sr.id = s.row_id
+					INNER JOIN seat_sections ss ON ss.id = sr.section_id
+					INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+					WHERE sl.event_id = e.id AND s.status != 'DISABLED'
+				), 0)
+				ELSE COALESCE((
+					SELECT SUM(tt.total_quantity)
+					FROM ticket_types tt
+					WHERE tt.event_id = e.id
+				), 0)
+			END AS ticket_capacity,
+
+			CASE
+				WHEN eset.seat_layout_type = 'SEATED' THEN COALESCE((
+					SELECT COUNT(*)
+					FROM seats s
+					INNER JOIN seat_rows sr ON sr.id = s.row_id
+					INNER JOIN seat_sections ss ON ss.id = sr.section_id
+					INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+					WHERE sl.event_id = e.id AND s.status = 'AVAILABLE'
+				), 0)
+				ELSE COALESCE((
+					SELECT SUM(tt.available_quantity)
+					FROM ticket_types tt
+					WHERE tt.event_id = e.id
+				), 0)
+			END AS tickets_available,
+
+			CASE
+				WHEN eset.seat_layout_type = 'SEATED' THEN
+					COALESCE((
+						SELECT COUNT(*)
+						FROM seats s
+						INNER JOIN seat_rows sr ON sr.id = s.row_id
+						INNER JOIN seat_sections ss ON ss.id = sr.section_id
+						INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+						WHERE sl.event_id = e.id AND s.status != 'DISABLED'
+					), 0)
+					-
+					COALESCE((
+						SELECT COUNT(*)
+						FROM seats s
+						INNER JOIN seat_rows sr ON sr.id = s.row_id
+						INNER JOIN seat_sections ss ON ss.id = sr.section_id
+						INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+						WHERE sl.event_id = e.id AND s.status = 'AVAILABLE'
+					), 0)
+				ELSE
+					COALESCE((
+						SELECT SUM(tt.total_quantity)
+						FROM ticket_types tt
+						WHERE tt.event_id = e.id
+					), 0)
+					-
+					COALESCE((
+						SELECT SUM(tt.available_quantity)
+						FROM ticket_types tt
+						WHERE tt.event_id = e.id
+					), 0)
+			END AS tickets_sold,
+
+			e.created_at,
+			e.updated_at
+		`).
+		Joins("INNER JOIN categories AS c ON c.id = e.category_id").
+		Joins("LEFT JOIN venues AS v ON v.id = e.venue_id::uuid").
+		// Joins("LEFT JOIN venues AS v ON v.id = e.venue_id").
+		Joins("LEFT JOIN event_schedules AS es ON es.event_id = e.id").
+		Joins("LEFT JOIN event_settings AS eset ON eset.event_id = e.id").
+		Where("e.organizer_id = ?::uuid", organizerID)
+
+	if status != "" {
+		listQuery = listQuery.Where("e.status = ?", status)
+	}
+	if search != "" {
+		listQuery = listQuery.Where(
+			"LOWER(e.title) LIKE ?",
+			"%"+strings.ToLower(search)+"%",
+		)
+	}
+
+	if err := listQuery.
+		Order("e.created_at DESC").
 		Offset(offset).
 		Limit(limit).
-		Find(&events).Error; err != nil {
+		Scan(&events).Error; err != nil {
 
 		r.logger.Error(
 			"event_list_fetch_failed",
@@ -181,27 +295,19 @@ func (r *EventRepository) FindByOrganizerID(
 			"search", search,
 			"error", err,
 		)
-
 		return nil, 0, err
-	}
-
-	result := make([]*domain.Event, 0, len(events))
-
-	for _, model := range events {
-		event := toEventDomain(&model)
-		result = append(result, event)
 	}
 
 	r.logger.Info(
 		"organizer_events_fetched",
 		"organizer_id", organizerID,
-		"count", len(result),
+		"count", len(events),
 		"total", total,
 		"page", page,
 		"limit", limit,
 	)
 
-	return result, total, nil
+	return events, total, nil
 }
 
 func toEventModel(event *domain.Event) *models.EventModel {

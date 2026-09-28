@@ -57,4 +57,21 @@ export const getOrganizerProfile = async () => {
     return response.data;
 };
 
+// Get events created by the authenticated organizer.
+export const getOrganizerEvents = async ({
+    page = 1,
+    limit = 10,
+    status = "",
+    search = "",
+} = {}) => {
+    const response = await apiClient.get("/organizers/events", {
+        params: {
+            page,
+            limit,
+            ...(status ? { status } : {}),
+            ...(search.trim() ? { search: search.trim() } : {}),
+        },
+    });
 
+    return response.data;
+};

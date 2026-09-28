@@ -88,7 +88,7 @@ type EventRepository interface {
 		limit int,
 		status string,
 		search string,
-	) ([]*Event, int64, error)
+	) ([]*OrganizerEvent, int64, error)
 }
 
 type EventScheduleRepository interface {
