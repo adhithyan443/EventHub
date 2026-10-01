@@ -22,6 +22,28 @@ const COLOR_PALETTE = [
   { label: "Rose", value: "#e11d48" },
 ];
 
+const MAX_TICKETS_PER_ORDER = 20;
+
+const getTodayDateString = () => {
+  const today = new Date();
+
+  return [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
+  ].join("-");
+};
+
+const isValidDateString = (value) => {
+  if (!value) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+
+  return !Number.isNaN(date.getTime());
+};
+
 export default function CreateEventSeatConfigurationPage() {
   const navigate = useNavigate();
 
@@ -78,6 +100,16 @@ export default function CreateEventSeatConfigurationPage() {
     (state) => state.removeRowFromCategory
   );
 
+  const ticketSalesSettings = useEventCreationStore(
+    (state) => state.ticketSalesSettings
+  );
+
+  const updateTicketSalesSettings = useEventCreationStore(
+    (state) => state.updateTicketSalesSettings
+  );
+
+  const dateTime = useEventCreationStore((state) => state.dateTime);
+
   // Local state for Layout Settings inputs & Canvas zoom
   const [seatsPerRowInput, setSeatsPerRowInput] = useState(
     seatingConfig.seatsPerRow || 8
@@ -127,8 +159,119 @@ export default function CreateEventSeatConfigurationPage() {
     0
   );
 
+  const todayDate = getTodayDateString();
+
   const handleBack = () => {
     navigate(ORGANIZER_ROUTES.CREATE_STEP_3);
+  };
+
+  const handleSalesSettingChange = (field, value) => {
+    updateTicketSalesSettings({
+      [field]: value,
+    });
+  };
+
+  /*
+   * Validate ticket sales settings for reserved seating.
+   */
+  const validateTicketSalesSettings = () => {
+    const salesStartDate = ticketSalesSettings?.salesStartDate || "";
+    const salesEndDate = ticketSalesSettings?.salesEndDate || "";
+
+    const maxTicketsPerBooking =
+      ticketSalesSettings?.maxTicketsPerBooking ?? "";
+
+    const eventDate = dateTime?.eventDate || "";
+
+    /*
+     * Event date
+     */
+    if (!eventDate) {
+      return "Event date is missing. Please go back to Step 2 and select an event date.";
+    }
+
+    if (!isValidDateString(eventDate)) {
+      return "The event date is invalid. Please go back to Step 2 and select a valid event date.";
+    }
+
+    /*
+     * Sales start date
+     */
+    if (!salesStartDate) {
+      return "Sales start date is required.";
+    }
+
+    if (!isValidDateString(salesStartDate)) {
+      return "Sales start date must be a valid date.";
+    }
+
+    /*
+     * Sales end date
+     */
+    if (!salesEndDate) {
+      return "Sales end date is required.";
+    }
+
+    if (!isValidDateString(salesEndDate)) {
+      return "Sales end date must be a valid date.";
+    }
+
+    /*
+     * Sales date order
+     */
+    if (salesStartDate > salesEndDate) {
+      return "Sales start date cannot be after the sales end date.";
+    }
+
+    /*
+     * Sales cannot continue after the event.
+     */
+    if (salesEndDate > eventDate) {
+      return "Sales end date cannot be after the event date.";
+    }
+
+    if (salesStartDate > eventDate) {
+      return "Sales start date cannot be after the event date.";
+    }
+
+    /*
+     * Sales cannot start in the past.
+     */
+    const today = getTodayDateString();
+
+    if (salesStartDate < today) {
+      return "Sales start date cannot be in the past.";
+    }
+
+    /*
+     * Maximum tickets per order
+     */
+    if (
+      maxTicketsPerBooking === "" ||
+      maxTicketsPerBooking === null ||
+      maxTicketsPerBooking === undefined
+    ) {
+      return "Maximum tickets per order is required.";
+    }
+
+    const maxTickets = Number(maxTicketsPerBooking);
+
+    if (!Number.isInteger(maxTickets) || maxTickets <= 0) {
+      return "Maximum tickets per order must be a positive whole number.";
+    }
+
+    if (maxTickets > MAX_TICKETS_PER_ORDER) {
+      return `Maximum tickets per order cannot exceed ${MAX_TICKETS_PER_ORDER}.`;
+    }
+
+    /*
+     * Maximum tickets per order cannot exceed the total layout capacity.
+     */
+    if (maxTickets > totalSeats) {
+      return "Maximum tickets per order cannot exceed the total available seating capacity.";
+    }
+
+    return null;
   };
 
   const handleContinue = () => {
@@ -234,6 +377,13 @@ export default function CreateEventSeatConfigurationPage() {
       setValidationError(
         "Generate at least one seat before continuing."
       );
+      return;
+    }
+
+    const ticketSalesSettingsError = validateTicketSalesSettings();
+
+    if (ticketSalesSettingsError) {
+      setValidationError(ticketSalesSettingsError);
       return;
     }
 
@@ -1184,6 +1334,92 @@ export default function CreateEventSeatConfigurationPage() {
                   Add Category
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Card 2: Ticketing Sales Settings */}
+        <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
+          <div className="p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff]">
+            <h2 className="text-base font-bold text-[#141b2b]">
+              Ticketing Settings
+            </h2>
+
+            <p className="text-xs text-[#565e74] mt-1">
+              Sales windows, maximum tickets allowed per customer, and
+              purchase rules.
+            </p>
+          </div>
+
+          <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* Sales Start Date */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-semibold text-[#141b2b]">
+                Sales Start Date{" "}
+                <span className="text-[#ba1a1a]">*</span>
+              </label>
+
+              <input
+                type="date"
+                required
+                min={todayDate}
+                max={dateTime?.eventDate || undefined}
+                value={ticketSalesSettings.salesStartDate}
+                onChange={(e) =>
+                  handleSalesSettingChange(
+                    "salesStartDate",
+                    e.target.value
+                  )
+                }
+                className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg px-4 py-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+              />
+            </div>
+
+            {/* Sales End Date */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-semibold text-[#141b2b]">
+                Sales End Date{" "}
+                <span className="text-[#ba1a1a]">*</span>
+              </label>
+
+              <input
+                type="date"
+                required
+                min={ticketSalesSettings.salesStartDate || todayDate}
+                max={dateTime?.eventDate || undefined}
+                value={ticketSalesSettings.salesEndDate}
+                onChange={(e) =>
+                  handleSalesSettingChange(
+                    "salesEndDate",
+                    e.target.value
+                  )
+                }
+                className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg px-4 py-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+              />
+            </div>
+
+            {/* Maximum Tickets */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-semibold text-[#141b2b]">
+                Max Tickets Per Order{" "}
+                <span className="text-[#ba1a1a]">*</span>
+              </label>
+
+              <input
+                type="number"
+                required
+                min={1}
+                max={MAX_TICKETS_PER_ORDER}
+                step={1}
+                value={ticketSalesSettings.maxTicketsPerBooking}
+                onChange={(e) =>
+                  handleSalesSettingChange(
+                    "maxTicketsPerBooking",
+                    e.target.value
+                  )
+                }
+                className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg px-4 py-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+              />
             </div>
           </div>
         </div>
