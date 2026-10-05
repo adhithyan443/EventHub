@@ -82,3 +82,13 @@ export const getOrganizerEventById = async (eventId) => {
 
     return response.data;
 };
+
+// Update an existing draft event for the authenticated organizer.
+export const updateOrganizerEvent = async (eventId, eventData) => {
+    const response = await apiClient.put(
+        `/organizers/events/${eventId}`,
+        eventData
+    );
+
+    return response.data;
+};

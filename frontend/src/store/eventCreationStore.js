@@ -79,6 +79,15 @@ const initialSeatingConfig = {
   totalCapacity: 0,
 };
 
+const mapHoursToCancellationDeadline = (hours) => {
+  if (hours === 24) return "24 hours before event";
+  if (hours === 48) return "48 hours before event";
+  if (hours === 168) return "7 days before event";
+  if (hours === 336) return "14 days before event";
+  if (hours > 0) return `${hours} hours before event`;
+  return "48 hours before event";
+};
+
 const pruneSelectedSeatIds = (
   oldCategories,
   newCategories,
@@ -165,6 +174,10 @@ const rebuildLayout = (categories, seatsPerRow = 8) => {
 };
 
 const useEventCreationStore = create((set, get) => ({
+  // Edit Mode
+  isEditMode: false,
+  editingEventId: null,
+
   // Location & Event Type
   locationType: LOCATION_TYPES.PHYSICAL,
   eventType: LOCATION_TYPES.PHYSICAL,
@@ -888,6 +901,163 @@ const useEventCreationStore = create((set, get) => ({
   //   })),
 
 
+  hydrateForEdit: (data) => {
+    if (!data) return;
+
+    const event = data.Event || {};
+    const schedule = data.Schedule || {};
+    const venue = data.Venue || {};
+    const setting = data.Setting || {};
+    const cancellation = data.Cancellation || {};
+    const contact = data.Contact || {};
+    const ticketTypes = data.TicketTypes || [];
+    const seatLayout = data.SeatLayout || null;
+
+    const isOnline = event.EventType === LOCATION_TYPES.ONLINE;
+    const ticketMode =
+      setting.SeatLayoutType || (isOnline ? TICKET_MODES.GENERAL : TICKET_MODES.GENERAL);
+
+    // Format dates to YYYY-MM-DD
+    const formatDate = (val) => (val ? String(val).slice(0, 10) : "");
+    // Format times to HH:mm
+    const formatTime = (val) => (val ? String(val).slice(0, 5) : "");
+
+    // Hydrate seating categories if seat layout exists
+    let seatingConfig = { ...initialSeatingConfig };
+    if (
+      seatLayout &&
+      Array.isArray(seatLayout.Sections) &&
+      seatLayout.Sections.length > 0
+    ) {
+      const colors = [
+        "#00685f",
+        "#4648d4",
+        "#6d7a77",
+        "#d97706",
+        "#9333ea",
+        "#e11d48",
+      ];
+      const categories = seatLayout.Sections.map((sec, idx) => ({
+        id: sec.ID,
+        name: sec.Name || "",
+        price: sec.Price || 0,
+        color: colors[idx % colors.length],
+        rows: (sec.Rows || []).map((row) => ({
+          id: row.ID,
+          name: `Row ${row.RowName}`,
+          rowLetter: row.RowName,
+          seats: (row.Seats || []).map((seat) => ({
+            id: seat.ID,
+            number: seat.SeatNumber,
+            status: seat.Status === "DISABLED" ? "disabled" : "available",
+            categoryId: sec.ID,
+          })),
+        })),
+      }));
+
+      const allRows = categories.flatMap((cat) => cat.rows || []);
+      const totalCapacity = allRows.reduce(
+        (sum, r) => sum + (r.seats?.length || 0),
+        0
+      );
+
+      seatingConfig = {
+        layoutName: seatLayout.LayoutName || "Main Seating Layout",
+        categories,
+        sections: categories,
+        rows: allRows,
+        selectedSeatIds: [],
+        totalCapacity,
+      };
+    }
+
+    set({
+      isEditMode: true,
+      editingEventId: event.ID || null,
+
+      locationType: event.EventType || LOCATION_TYPES.PHYSICAL,
+      eventType: event.EventType || LOCATION_TYPES.PHYSICAL,
+      onlineUrl: event.OnlineURL || "",
+
+      venue: isOnline
+        ? { ...initialVenue }
+        : {
+            google_place_id: venue.GooglePlaceID || "",
+            name: venue.Name || "",
+            address: venue.Address || "",
+            city: venue.City || "",
+            state: venue.State || "",
+            country: venue.Country || "",
+            postal_code: venue.PostalCode || "",
+            latitude: venue.Latitude ?? null,
+            longitude: venue.Longitude ?? null,
+          },
+
+      basicInformation: {
+        title: event.Title || "",
+        category: event.CategoryName || "",
+        categoryId: event.CategoryID || "",
+        description: event.Description || "",
+        banner: event.BannerURL || "",
+        bannerFile: null,
+        bannerPreviewUrl: event.BannerImageURL || event.BannerURL || "",
+        language: event.Language || "",
+        ageRestriction:
+          event.AgeRestriction !== undefined && event.AgeRestriction !== null
+            ? String(event.AgeRestriction)
+            : "",
+      },
+
+      dateTime: {
+        eventDate: formatDate(schedule.EventDate),
+        startTime: formatTime(schedule.StartTime),
+        endTime: formatTime(schedule.EndTime),
+        isAllDay: Boolean(schedule.IsAllDay),
+      },
+
+      eventDetails: {
+        highlights: event.Highlights || "",
+        rules: event.Rules || "",
+        contactInformation: {
+          name: contact.Name || "",
+          phone: contact.Phone || "",
+          email: contact.Email || "",
+        },
+        cancellationPolicy: {
+          allowCancellation: Boolean(cancellation.CancellationAllowed),
+          cancellationDeadline: mapHoursToCancellationDeadline(
+            cancellation.CancellationDeadlineHours
+          ),
+          refundPolicy: cancellation.RefundPolicy || "PARTIAL",
+          refundPercentage: cancellation.RefundPercentage ?? 80,
+          organizerPolicyAccepted: true,
+        },
+        attendeeInformation: event.AttendeeInformation || "",
+        visibility: event.Visibility || "PUBLIC",
+      },
+
+      ticketMode,
+
+      ticketTypes: ticketTypes.map((ticket) => ({
+        id: ticket.ID,
+        name: ticket.Name || "",
+        price: ticket.Price || 0,
+        capacity: ticket.TotalQuantity || 0,
+        description: ticket.Description || "",
+      })),
+
+      ticketSalesSettings: {
+        salesStartDate: formatDate(setting.SalesStartDate),
+        salesEndDate: formatDate(setting.SalesEndDate),
+        maxTicketsPerBooking: setting.BookingLimitPerUser
+          ? String(setting.BookingLimitPerUser)
+          : "",
+      },
+
+      seatingConfiguration: seatingConfig,
+    });
+  },
+
   resetForm: () => {
     const currentPreview =
       get().basicInformation?.bannerPreviewUrl;
@@ -897,6 +1067,8 @@ const useEventCreationStore = create((set, get) => ({
     }
 
     set({
+      isEditMode: false,
+      editingEventId: null,
       locationType: LOCATION_TYPES.PHYSICAL,
       eventType: LOCATION_TYPES.PHYSICAL,
       onlineUrl: "",

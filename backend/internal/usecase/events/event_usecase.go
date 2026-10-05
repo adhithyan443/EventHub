@@ -760,6 +760,11 @@ func (u *EventUsecase) UpdateEvent(
 				return ErrEventNotEditable
 			}
 
+			// Extension point for Week 3: Block event editing once bookings exist.
+			// hasBookings, err := tx.BookingRepository().ExistsByEventID(foundEvent.ID)
+			// if err != nil { return err }
+			// if hasBookings { return ErrEventNotEditable }
+
 			// Verify category exists.
 			categories, err := tx.CategoryRepository().FindActive()
 			if err != nil {
