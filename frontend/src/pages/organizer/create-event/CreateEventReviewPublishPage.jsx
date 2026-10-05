@@ -91,6 +91,7 @@ const validateEventForPublish = ({
   ticketTypes,
   seatingConfig,
   ticketSalesSettings,
+  isEditMode = false,
 }) => {
   const isOnline = isOnlineEvent(locationType);
   const isPhysical = isPhysicalEvent(locationType);
@@ -116,8 +117,14 @@ const validateEventForPublish = ({
     return "Event language is required.";
   }
 
-  if (!basicInformation.bannerFile) {
-    return "Please select an event banner before publishing.";
+  const hasBanner = isEditMode
+    ? Boolean(basicInformation.bannerFile || basicInformation.banner)
+    : Boolean(basicInformation.bannerFile);
+
+  if (!hasBanner) {
+    return isEditMode
+      ? "Please select an event banner before saving changes."
+      : "Please select an event banner before publishing.";
   }
 
   // --------------------------------------------------
@@ -690,6 +697,7 @@ export default function CreateEventReviewPublishPage() {
         ticketTypes,
         seatingConfig,
         ticketSalesSettings,
+        isEditMode,
       });
 
     if (validationError) {
