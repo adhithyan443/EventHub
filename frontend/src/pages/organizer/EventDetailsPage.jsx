@@ -115,7 +115,7 @@ export default function EventDetailsPage() {
 
   const venue = event?.Venue;
 
-  // const setting = event?.Setting;
+  const setting = event?.Setting;
 
   const cancellation = event?.Cancellation;
 
@@ -125,7 +125,9 @@ export default function EventDetailsPage() {
 
   const statistics = event?.Statistics;
 
-  // const seatLayout = event?.SeatLayout;
+  const seatLayout = event?.SeatLayout;
+
+  const isSeated = String(setting?.SeatLayoutType || "").toUpperCase() === "SEATED";
 
   const formatDate = (dateValue) => {
     if (!dateValue) {
@@ -634,14 +636,29 @@ export default function EventDetailsPage() {
 
           {/* Ticket Tiers Breakdown Card */}
           <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-4">
-            <div className="flex items-center justify-between pb-3 border-b border-[#bcc9c6]/40">
-              <div className="flex flex-col">
-                <h2 className="text-lg font-bold text-[#141b2b]">
-                  Ticket Tiers & Inventory
-                </h2>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#bcc9c6]/40">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <h2 className="text-lg font-bold text-[#141b2b]">
+                    Ticket Tiers & Inventory
+                  </h2>
+
+                  <span
+                    className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                      isSeated
+                        ? "bg-purple-50 text-purple-700 border border-purple-200"
+                        : "bg-blue-50 text-blue-700 border border-blue-200"
+                    }`}
+                  >
+                    {isSeated ? "Reserved Seating" : "General Admission"}
+                  </span>
+                </div>
 
                 <p className="text-xs text-[#565e74]">
-                  {ticketTypes.length} active ticket tier configurations
+                  {ticketTypes.length}{" "}
+                  {isSeated
+                    ? `active seating ${ticketTypes.length === 1 ? "category" : "categories"}`
+                    : `active ticket tier ${ticketTypes.length === 1 ? "configuration" : "configurations"}`}
                 </p>
               </div>
 
@@ -650,11 +667,29 @@ export default function EventDetailsPage() {
               </span>
             </div>
 
+            {/* Ticket Type / Seating Mode Banner */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-lg bg-[#f1f3ff] border border-[#bcc9c6]/40 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-[#565e74] font-medium">Ticketing Type:</span>
+                <span className="font-bold text-[#141b2b]">
+                  {isSeated ? "Reserved Seating" : "General Admission"}
+                </span>
+              </div>
+
+              <span className="text-[#565e74]">
+                {isSeated
+                  ? "Attendees select designated reserved seats from the configured layout below."
+                  : "Open seating or standing admission with standard tier-based access."}
+              </span>
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-[#f1f3ff] text-[11px] font-bold uppercase tracking-wider text-[#565e74]">
-                    <th className="py-2.5 px-3 rounded-l-lg">Tier Name</th>
+                    <th className="py-2.5 px-3 rounded-l-lg">
+                      {isSeated ? "Category / Tier" : "Tier Name"}
+                    </th>
 
                     <th className="py-2.5 px-3">Price</th>
 
@@ -671,69 +706,208 @@ export default function EventDetailsPage() {
                 </thead>
 
                 <tbody className="divide-y divide-[#bcc9c6]/30 text-xs sm:text-sm">
-                  {ticketTypes.map((ticket) => {
-                    const capacity = Number(ticket.TotalQuantity || 0);
+                  {ticketTypes.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-xs text-[#565e74]">
+                        No ticket tiers configured.
+                      </td>
+                    </tr>
+                  ) : (
+                    ticketTypes.map((ticket) => {
+                      const capacity = Number(ticket.TotalQuantity || 0);
 
-                    const sold = Number(ticket.SoldQuantity || 0);
+                      const sold = Number(ticket.SoldQuantity || 0);
 
-                    const tierPct =
-                      capacity > 0
-                        ? Math.round((sold / capacity) * 100)
-                        : 0;
+                      const tierPct =
+                        capacity > 0
+                          ? Math.round((sold / capacity) * 100)
+                          : 0;
 
-                    const status = getTicketStatus(ticket);
+                      const status = getTicketStatus(ticket);
 
-                    return (
-                      <tr key={ticket.ID} className="hover:bg-[#f9f9ff]">
-                        <td className="py-3 px-3">
-                          <div className="flex flex-col">
-                            <span className="font-semibold text-[#141b2b]">
-                              {ticket.Name}
-                            </span>
+                      return (
+                        <tr key={ticket.ID} className="hover:bg-[#f9f9ff]">
+                          <td className="py-3 px-3">
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-[#141b2b]">
+                                {ticket.Name}
+                              </span>
 
-                            <span className="text-[11px] text-[#565e74] line-clamp-1">
-                              {ticket.Description}
-                            </span>
-                          </div>
-                        </td>
-
-                        <td className="py-3 px-3 font-semibold text-[#141b2b] whitespace-nowrap">
-                          ₹{Number(ticket.Price || 0).toLocaleString("en-IN")}
-                        </td>
-
-                        <td className="py-3 px-3 text-[#565e74] whitespace-nowrap">
-                          {sold} / {capacity}
-                        </td>
-
-                        <td className="py-3 px-3 min-w-[120px]">
-                          <div className="flex flex-col gap-1">
-                            <div className="flex justify-between text-[11px] font-medium">
-                              <span>{tierPct}%</span>
+                              {ticket.Description && ticket.Description !== ticket.Name && (
+                                <span className="text-[11px] text-[#565e74] line-clamp-1">
+                                  {ticket.Description}
+                                </span>
+                              )}
                             </div>
+                          </td>
 
-                            <ProgressBar pct={tierPct} />
-                          </div>
-                        </td>
+                          <td className="py-3 px-3 font-semibold text-[#141b2b] whitespace-nowrap">
+                            ₹{Number(ticket.Price || 0).toLocaleString("en-IN")}
+                          </td>
 
-                        <td className="py-3 px-3 text-right">
-                          <span
-                            className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium ${status === "Sold Out"
-                              ? "bg-red-50 text-red-600 border border-red-200"
-                              : status === "Selling Fast"
-                                ? "bg-amber-50 text-amber-700 border border-amber-200"
-                                : "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                              }`}
-                          >
-                            {status}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                          <td className="py-3 px-3 text-[#565e74] whitespace-nowrap">
+                            {sold} / {capacity}
+                          </td>
+
+                          <td className="py-3 px-3 min-w-[120px]">
+                            <div className="flex flex-col gap-1">
+                              <div className="flex justify-between text-[11px] font-medium">
+                                <span>{tierPct}%</span>
+                              </div>
+
+                              <ProgressBar pct={tierPct} />
+                            </div>
+                          </td>
+
+                          <td className="py-3 px-3 text-right">
+                            <span
+                              className={`inline-block px-2.5 py-0.5 rounded-full text-[11px] font-medium ${status === "Sold Out"
+                                ? "bg-red-50 text-red-600 border border-red-200"
+                                : status === "Selling Fast"
+                                  ? "bg-amber-50 text-amber-700 border border-amber-200"
+                                  : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                }`}
+                            >
+                              {status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
           </div>
+
+          {/* Configured Seat Layout Card (Only for SEATED events) */}
+          {isSeated && seatLayout?.Sections && seatLayout.Sections.length > 0 && (
+            <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#bcc9c6]/40">
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-lg font-bold text-[#141b2b]">
+                      Configured Seat Layout
+                    </h2>
+                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200">
+                      Reserved Seating
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#565e74]">
+                    {seatLayout.LayoutName || "Main Seating Layout"} •{" "}
+                    {seatLayout.Sections.length}{" "}
+                    {seatLayout.Sections.length === 1 ? "Section" : "Sections"}
+                  </p>
+                </div>
+
+                {/* Seat Legend */}
+                <div className="flex items-center gap-4 text-xs text-[#565e74]">
+                  <div className="flex items-center gap-1.5">
+                    <span className="size-3.5 rounded-md bg-white border border-[#00685f] inline-block shadow-2xs" />
+                    <span>Available Seat</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="size-3.5 rounded-md bg-gray-100 border border-gray-300 inline-block line-through text-[8px] flex items-center justify-center text-gray-500 font-bold" />
+                    <span>Disabled Seat</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Stage / Front Indicator */}
+              <div className="flex flex-col items-center">
+                <div className="w-full max-w-lg py-2 px-6 rounded-t-xl bg-[#f1f3ff] border border-[#bcc9c6]/50 text-center shadow-2xs">
+                  <span className="text-xs font-bold tracking-widest text-[#565e74] uppercase">
+                    STAGE / FRONT OF VENUE
+                  </span>
+                </div>
+                <div className="w-full max-w-lg h-1 bg-gradient-to-r from-transparent via-[#00685f]/40 to-transparent" />
+              </div>
+
+              {/* Sections Display */}
+              <div className="flex flex-col gap-6">
+                {seatLayout.Sections.map((section, sIdx) => {
+                  const sectionSeatCount =
+                    section.Rows?.reduce(
+                      (acc, r) => acc + (r.Seats?.length || 0),
+                      0
+                    ) || 0;
+
+                  return (
+                    <div
+                      key={section.ID || sIdx}
+                      className="bg-[#f9f9ff] border border-[#bcc9c6]/40 rounded-xl p-4 sm:p-5 flex flex-col gap-4 shadow-2xs"
+                    >
+                      {/* Section Header */}
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-[#bcc9c6]/30">
+                        <div className="flex items-center gap-2">
+                          <span className="size-3 rounded-full bg-[#00685f]" />
+                          <h3 className="font-bold text-sm sm:text-base text-[#141b2b]">
+                            {section.Name}
+                          </h3>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-xs">
+                          <span className="font-semibold text-[#00685f]">
+                            ₹{Number(section.Price || 0).toLocaleString("en-IN")} / seat
+                          </span>
+                          <span className="text-[#565e74] bg-white px-2 py-0.5 rounded border border-[#bcc9c6]/40">
+                            {sectionSeatCount} {sectionSeatCount === 1 ? "seat" : "seats"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Rows & Seats Grid */}
+                      <div className="overflow-x-auto py-2">
+                        <div className="flex flex-col gap-2.5 min-w-fit mx-auto items-center">
+                          {section.Rows?.map((row, rIdx) => (
+                            <div
+                              key={row.ID || rIdx}
+                              className="flex items-center gap-3 w-full justify-center"
+                            >
+                              {/* Left Row Label */}
+                              <span className="w-12 text-right font-bold text-xs text-[#565e74] shrink-0 select-none">
+                                Row {row.RowName}
+                              </span>
+
+                              {/* Seats in Row */}
+                              <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                                {row.Seats?.map((seat, seatIdx) => {
+                                  const isDisabled = seat.Status === "DISABLED";
+
+                                  return (
+                                    <div
+                                      key={seat.ID || seatIdx}
+                                      title={`Row ${row.RowName}, Seat ${seat.SeatNumber}${
+                                        isDisabled
+                                          ? " (Disabled)"
+                                          : ` - ₹${Number(section.Price || 0).toLocaleString("en-IN")}`
+                                      }`}
+                                      className={`size-7 sm:size-8 rounded-lg flex items-center justify-center text-[10px] sm:text-xs font-semibold select-none transition-all ${
+                                        isDisabled
+                                          ? "bg-gray-100 text-gray-400 border border-gray-300 line-through opacity-60 cursor-not-allowed"
+                                          : "bg-white text-[#141b2b] border border-[#bcc9c6] hover:border-[#00685f] hover:bg-[#00685f]/10 hover:text-[#00685f] shadow-2xs cursor-default"
+                                      }`}
+                                    >
+                                      {seat.SeatNumber}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              {/* Right Row Label */}
+                              <span className="w-12 text-left font-bold text-xs text-[#565e74] shrink-0 select-none">
+                                Row {row.RowName}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Attendee Guidelines & Rules Card */}
           <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-4">

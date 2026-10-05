@@ -55,6 +55,7 @@ func (r *SeatSectionRepository) FindBySeatLayoutID(
 
 	if err := r.db.
 		Where("seat_layout_id = ?", seatLayoutID).
+		Order("created_at ASC").
 		Find(&sectionModels).Error; err != nil {
 
 		r.logger.Error(

@@ -407,7 +407,6 @@ export default function CreateEventStep1BasicInfoPage() {
             </div>
 
             {/* Banner Upload Box */}
-            {/* Banner Upload Box */}
             <div className="flex flex-col gap-2">
               <label className="text-[13px] font-semibold text-[#141b2b]">
                 Event Banner Image

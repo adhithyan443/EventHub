@@ -1317,6 +1317,26 @@ type EventDetailsSeatLayout struct {
 	ID         uuid.UUID
 	EventID    uuid.UUID
 	LayoutName string
+	Sections   []EventDetailsSeatSection
+}
+
+type EventDetailsSeatSection struct {
+	ID    uuid.UUID
+	Name  string
+	Price float64
+	Rows  []EventDetailsSeatRow
+}
+
+type EventDetailsSeatRow struct {
+	ID      uuid.UUID
+	RowName string
+	Seats   []EventDetailsSeat
+}
+
+type EventDetailsSeat struct {
+	ID         uuid.UUID
+	SeatNumber int
+	Status     string
 }
 
 type EventDetailsStatistics struct {
@@ -1783,11 +1803,55 @@ func (u *EventUsecase) GetEventDetails(
 				IsMock:         true,
 			}
 
-			if seatLayout != nil {
+			if setting.SeatLayoutType == SeatLayoutTypeSeated && seatLayout != nil {
+				sections, err := tx.SeatSectionRepository().FindBySeatLayoutID(seatLayout.ID)
+				if err != nil {
+					return err
+				}
+
+				detailsSections := make([]EventDetailsSeatSection, 0, len(sections))
+				for _, section := range sections {
+					rows, err := tx.SeatRowRepository().FindBySectionID(section.ID)
+					if err != nil {
+						return err
+					}
+
+					detailsRows := make([]EventDetailsSeatRow, 0, len(rows))
+					for _, row := range rows {
+						seats, err := tx.SeatRepository().FindByRowID(row.ID)
+						if err != nil {
+							return err
+						}
+
+						detailsSeats := make([]EventDetailsSeat, 0, len(seats))
+						for _, seat := range seats {
+							detailsSeats = append(detailsSeats, EventDetailsSeat{
+								ID:         seat.ID,
+								SeatNumber: seat.SeatNumber,
+								Status:     seat.Status,
+							})
+						}
+
+						detailsRows = append(detailsRows, EventDetailsSeatRow{
+							ID:      row.ID,
+							RowName: row.RowName,
+							Seats:   detailsSeats,
+						})
+					}
+
+					detailsSections = append(detailsSections, EventDetailsSeatSection{
+						ID:    section.ID,
+						Name:  section.Name,
+						Price: section.Price,
+						Rows:  detailsRows,
+					})
+				}
+
 				output.SeatLayout = &EventDetailsSeatLayout{
 					ID:         seatLayout.ID,
 					EventID:    seatLayout.EventID,
 					LayoutName: seatLayout.LayoutName,
+					Sections:   detailsSections,
 				}
 			}
 

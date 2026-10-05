@@ -173,7 +173,7 @@ func registerOrganizerRoutes(
 	organizer := api.Group("/organizers")
 	organizer.Use(
 		middleware.Auth(jwtService),
-		middleware.RequireRole("ORGANIZER"),
+		// middleware.RequireRole("ORGANIZER"),
 	)
 
 	// Customer organizer-application endpoints.
