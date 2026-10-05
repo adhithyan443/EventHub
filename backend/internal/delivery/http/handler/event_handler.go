@@ -616,21 +616,129 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 	}
 
 	var req UpdateEventRequest
+	var bannerReader io.Reader
+	var bannerContentType string
+	var bannerSize int64
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn(
-			"event_update_invalid_request",
-			"event_id", eventID,
-			"user_id", userID,
-			"error", err,
-		)
+	isMultipart := strings.HasPrefix(c.ContentType(), "multipart/form-data") ||
+		strings.HasPrefix(c.Request.Header.Get("Content-Type"), "multipart/form-data")
 
-		c.Error(
-			appErrors.NewValidationError(
-				"invalid event data",
-			),
-		)
-		return
+	if isMultipart {
+		eventJSON := c.PostForm("event")
+		if eventJSON == "" {
+			h.logger.Warn(
+				"event_update_missing_event_json",
+				"event_id", eventID,
+				"user_id", userID,
+			)
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+			return
+		}
+
+		if err := json.Unmarshal([]byte(eventJSON), &req); err != nil {
+			h.logger.Warn(
+				"event_update_invalid_event_json",
+				"event_id", eventID,
+				"user_id", userID,
+				"error", err,
+			)
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+			return
+		}
+
+		bannerHeader, err := c.FormFile("banner")
+		if err == nil && bannerHeader != nil {
+			if bannerHeader.Size > maxEventBannerSize {
+				h.logger.Warn(
+					"event_banner_validation_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"file_size", bannerHeader.Size,
+					"error", "file exceeds maximum size of 5 MB",
+				)
+				c.Error(
+					appErrors.NewValidationError(
+						"banner image must not exceed 5 MB",
+					),
+				)
+				return
+			}
+
+			bannerFile, err := bannerHeader.Open()
+			if err != nil {
+				h.logger.Error(
+					"event_banner_open_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+				c.Error(err)
+				return
+			}
+			defer bannerFile.Close()
+
+			contentType, err := detectBannerContentType(bannerFile)
+			if err != nil {
+				h.logger.Warn(
+					"event_banner_validation_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+				c.Error(
+					appErrors.NewValidationError(
+						"invalid banner image",
+					),
+				)
+				return
+			}
+
+			if contentType != "image/jpeg" &&
+				contentType != "image/png" &&
+				contentType != "image/webp" {
+				h.logger.Warn(
+					"event_banner_validation_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"content_type", contentType,
+					"error", "unsupported content type",
+				)
+				c.Error(
+					appErrors.NewValidationError(
+						"only JPEG, PNG, and WebP images are allowed",
+					),
+				)
+				return
+			}
+
+			bannerReader = bannerFile
+			bannerContentType = contentType
+			bannerSize = bannerHeader.Size
+		}
+	} else {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			h.logger.Warn(
+				"event_update_invalid_request",
+				"event_id", eventID,
+				"user_id", userID,
+				"error", err,
+			)
+
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+			return
+		}
 	}
 
 	eventDate, err := parseDate(req.EventDate)
@@ -788,6 +896,10 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 
 				return ticketTypes
 			}(),
+
+			BannerReader:      bannerReader,
+			BannerContentType: bannerContentType,
+			BannerSize:        bannerSize,
 		},
 	)
 	if err != nil {

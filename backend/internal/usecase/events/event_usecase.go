@@ -656,6 +656,10 @@ type UpdateEventInput struct {
 
 	Contact     EventContactInput
 	TicketTypes []TicketTypeInput
+
+	BannerReader      io.Reader
+	BannerContentType string
+	BannerSize        int64
 }
 
 type UpdateEventOutput struct {
@@ -689,6 +693,99 @@ func (u *EventUsecase) UpdateEvent(
 	}
 
 	var output UpdateEventOutput
+	var newObjectKey string
+	var oldBannerKey string
+
+	if input.BannerReader != nil {
+		if u.storageService == nil {
+			u.logger.Error(
+				"event_banner_upload_storage_unavailable",
+				"user_id", input.UserID,
+				"event_id", input.EventID,
+			)
+			return nil, errors.New("storage service is unavailable")
+		}
+
+		extension := bannerExtension(input.BannerContentType)
+		if extension == "" {
+			u.logger.Warn(
+				"event_banner_invalid_extension",
+				"event_id", input.EventID,
+				"user_id", input.UserID,
+				"content_type", input.BannerContentType,
+			)
+			return nil, ErrInvalidBanner
+		}
+
+		var organizerID uuid.UUID
+		err := u.transactionManager.WithinTransaction(
+			func(tx domain.TransactionRepositories) error {
+				organizer, err := tx.OrganizerRepository().FindByUserID(input.UserID)
+				if err != nil {
+					if errors.Is(err, domain.ErrOrganizerNotFound) {
+						return ErrUnauthorizedOrganizer
+					}
+					return err
+				}
+				if organizer.Status != "ACTIVE" {
+					return ErrUnauthorizedOrganizer
+				}
+
+				foundEvent, err := tx.EventRepository().FindByID(input.EventID)
+				if err != nil {
+					return err
+				}
+
+				if foundEvent.OrganizerID != organizer.ID {
+					return ErrUnauthorizedOrganizer
+				}
+
+				if foundEvent.Status != domain.EventStatusDraft {
+					return ErrEventNotEditable
+				}
+
+				organizerID = organizer.ID
+				oldBannerKey = foundEvent.BannerURL
+				return nil
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		newObjectKey = fmt.Sprintf(
+			"event-banners/%s/%s-%s%s",
+			organizerID.String(),
+			input.EventID.String(),
+			uuid.New().String(),
+			extension,
+		)
+
+		u.logger.Info(
+			"event_banner_replacement_started",
+			"event_id", input.EventID,
+			"organizer_id", organizerID,
+			"new_banner_key", newObjectKey,
+			"content_type", input.BannerContentType,
+			"file_size", input.BannerSize,
+		)
+
+		if err := u.storageService.Upload(
+			ctx,
+			newObjectKey,
+			input.BannerReader,
+			input.BannerContentType,
+		); err != nil {
+			u.logger.Error(
+				"event_banner_replacement_upload_failed",
+				"event_id", input.EventID,
+				"organizer_id", organizerID,
+				"new_banner_key", newObjectKey,
+				"error", err,
+			)
+			return nil, err
+		}
+	}
 
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
@@ -886,6 +983,9 @@ func (u *EventUsecase) UpdateEvent(
 			foundEvent.Highlights = strings.TrimSpace(input.Highlights)
 			foundEvent.Rules = strings.TrimSpace(input.Rules)
 			foundEvent.AttendeeInformation = strings.TrimSpace(input.AttendeeInformation)
+			if newObjectKey != "" {
+				foundEvent.BannerURL = newObjectKey
+			}
 			foundEvent.UpdatedAt = time.Now()
 
 			if err := tx.EventRepository().Update(foundEvent); err != nil {
@@ -1202,7 +1302,47 @@ func (u *EventUsecase) UpdateEvent(
 		},
 	)
 	if err != nil {
+		if newObjectKey != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if delErr := u.storageService.Delete(cleanupCtx, newObjectKey); delErr != nil {
+				u.logger.Error(
+					"event_banner_replacement_compensation_delete_failed",
+					"event_id", input.EventID,
+					"banner_key", newObjectKey,
+					"error", delErr,
+				)
+			}
+		}
+
 		return nil, err
+	}
+
+	if newObjectKey != "" {
+		u.logger.Info(
+			"event_banner_replacement_succeeded",
+			"event_id", output.Event.ID,
+			"new_banner_key", newObjectKey,
+		)
+
+		if oldBannerKey != "" && oldBannerKey != newObjectKey {
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if delErr := u.storageService.Delete(cleanupCtx, oldBannerKey); delErr != nil {
+				u.logger.Warn(
+					"event_old_banner_delete_failed",
+					"event_id", output.Event.ID,
+					"old_banner_key", oldBannerKey,
+					"error", delErr,
+				)
+			} else {
+				u.logger.Info(
+					"event_old_banner_deleted",
+					"event_id", output.Event.ID,
+					"old_banner_key", oldBannerKey,
+				)
+			}
+		}
 	}
 
 	u.logger.Info(

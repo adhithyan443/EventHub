@@ -905,10 +905,27 @@ export default function CreateEventReviewPublishPage() {
       };
 
       if (isEditMode && editingEventId) {
-        await updateOrganizerEvent(
-          editingEventId,
-          eventPayload
-        );
+        if (basicInformation.bannerFile) {
+          const formData = new FormData();
+          formData.append(
+            "event",
+            JSON.stringify(eventPayload)
+          );
+          formData.append(
+            "banner",
+            basicInformation.bannerFile
+          );
+
+          await updateOrganizerEvent(
+            editingEventId,
+            formData
+          );
+        } else {
+          await updateOrganizerEvent(
+            editingEventId,
+            eventPayload
+          );
+        }
 
         setShowSuccessModal(true);
         return;

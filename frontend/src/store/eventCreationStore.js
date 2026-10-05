@@ -1001,6 +1001,7 @@ const useEventCreationStore = create((set, get) => ({
         banner: event.BannerURL || "",
         bannerFile: null,
         bannerPreviewUrl: event.BannerImageURL || event.BannerURL || "",
+        originalBannerPreviewUrl: event.BannerImageURL || event.BannerURL || "",
         language: event.Language || "",
         ageRestriction:
           event.AgeRestriction !== undefined && event.AgeRestriction !== null

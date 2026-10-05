@@ -141,8 +141,11 @@ export default function CreateEventStep1BasicInfoPage() {
       return;
     }
 
-    // Revoke previous preview URL if present
-    if (basicInformation.bannerPreviewUrl) {
+    // Revoke previous blob preview URL if present
+    if (
+      basicInformation.bannerPreviewUrl &&
+      basicInformation.bannerPreviewUrl.startsWith("blob:")
+    ) {
       URL.revokeObjectURL(basicInformation.bannerPreviewUrl);
     }
 
@@ -151,10 +154,30 @@ export default function CreateEventStep1BasicInfoPage() {
     updateBasicInformation({
       bannerFile: file,
       bannerPreviewUrl: previewUrl,
-      banner: file.name,
+      ...(isEditMode ? {} : { banner: file.name }),
     });
 
     event.target.value = "";
+  };
+
+  const handleRevertBanner = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (
+      basicInformation.bannerPreviewUrl &&
+      basicInformation.bannerPreviewUrl.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(basicInformation.bannerPreviewUrl);
+    }
+
+    updateBasicInformation({
+      bannerFile: null,
+      bannerPreviewUrl:
+        basicInformation.originalBannerPreviewUrl ||
+        basicInformation.banner ||
+        "",
+    });
   };
 
   const handleCategoryChange = (event) => {
@@ -413,74 +436,66 @@ export default function CreateEventStep1BasicInfoPage() {
                 Event Banner Image
               </label>
 
-              {isEditMode ? (
-                <div className="border border-[#bcc9c6]/60 bg-[#f9f9ff] rounded-xl p-4 sm:p-6 flex flex-col items-center justify-center text-center">
-                  {bannerPreview ? (
-                    <div className="w-full flex flex-col items-center">
-                      <img
-                        src={bannerPreview}
-                        alt="Event banner preview"
-                        className="w-full max-h-64 object-cover rounded-lg shadow-2xs"
-                      />
+              <label className="border-2 border-dashed border-[#bcc9c6] hover:border-[#00685f] bg-[#f9f9ff] rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-colors">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={handleBannerChange}
+                />
 
-                      <span className="text-xs text-[#565e74] mt-3 font-medium">
-                        Current event banner (banner image cannot be replaced during edit)
-                      </span>
-                    </div>
-                  ) : (
-                    <span className="text-xs text-[#565e74]">
-                      No banner image configured
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <label className="border-2 border-dashed border-[#bcc9c6] hover:border-[#00685f] bg-[#f9f9ff] rounded-xl p-8 flex flex-col items-center justify-center text-center cursor-pointer transition-colors">
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={handleBannerChange}
-                  />
+                {bannerPreview ? (
+                  <div className="w-full flex flex-col items-center">
+                    <img
+                      src={bannerPreview}
+                      alt="Event banner preview"
+                      className="w-full max-h-64 object-cover rounded-lg shadow-2xs"
+                    />
 
-                  {bannerPreview ? (
-                    <div className="w-full flex flex-col items-center">
-                      <img
-                        src={bannerPreview}
-                        alt="Event banner preview"
-                        className="w-full max-h-64 object-cover rounded-lg"
-                      />
-
-                      <span className="text-xs font-semibold text-[#00685f] mt-3">
-                        Click to change banner
-                      </span>
-                    </div>
-                  ) : (
-                    <>
-                      <svg
-                        className="size-10 text-[#565e74] mb-2"
-                        fill="none"
-                        stroke="currentColor"
-                        viewBox="0 0 24 24"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth="1.5"
-                          d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
-                        />
-                      </svg>
-
+                    <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
                       <span className="text-xs font-semibold text-[#00685f]">
-                        Click or drag image to upload banner
+                        {isEditMode && basicInformation.bannerFile
+                          ? "New banner selected (click to change)"
+                          : "Click to change banner"}
                       </span>
 
-                      <span className="text-[11px] text-[#565e74] mt-1">
-                        Recommended 16:9 ratio (JPEG, PNG, WebP, max 5MB)
-                      </span>
-                    </>
-                  )}
-                </label>
-              )}
+                      {isEditMode && basicInformation.bannerFile && (
+                        <button
+                          type="button"
+                          onClick={handleRevertBanner}
+                          className="text-xs font-semibold text-amber-700 hover:text-amber-800 underline bg-transparent cursor-pointer"
+                        >
+                          Revert to original banner
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <svg
+                      className="size-10 text-[#565e74] mb-2"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="1.5"
+                        d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
+                    </svg>
+
+                    <span className="text-xs font-semibold text-[#00685f]">
+                      Click or drag image to upload banner
+                    </span>
+
+                    <span className="text-[11px] text-[#565e74] mt-1">
+                      Recommended 16:9 ratio (JPEG, PNG, WebP, max 5MB)
+                    </span>
+                  </>
+                )}
+              </label>
 
               {bannerError && (
                 <span className="text-[11px] text-[#ba1a1a]">
