@@ -78,6 +78,63 @@ func (r *SeatSectionRepository) FindBySeatLayoutID(
 	return sections, nil
 }
 
+func (r *SeatSectionRepository) FindWithStatsBySeatLayoutID(
+	seatLayoutID uuid.UUID,
+) ([]domain.SeatSectionWithStats, error) {
+	type sectionStatRow struct {
+		ID                uuid.UUID `gorm:"column:id"`
+		SeatLayoutID      uuid.UUID `gorm:"column:seat_layout_id"`
+		Name              string    `gorm:"column:name"`
+		Price             float64   `gorm:"column:price"`
+		TotalCapacity     int       `gorm:"column:total_capacity"`
+		AvailableQuantity int       `gorm:"column:available_quantity"`
+		SoldQuantity      int       `gorm:"column:sold_quantity"`
+	}
+
+	var rows []sectionStatRow
+
+	query := `
+		SELECT 
+			ss.id,
+			ss.seat_layout_id,
+			ss.name,
+			ss.price,
+			COALESCE(COUNT(CASE WHEN s.status != 'DISABLED' THEN 1 END), 0) AS total_capacity,
+			COALESCE(COUNT(CASE WHEN s.status = 'AVAILABLE' THEN 1 END), 0) AS available_quantity,
+			COALESCE(COUNT(CASE WHEN s.status = 'BOOKED' THEN 1 END), 0) AS sold_quantity
+		FROM seat_sections ss
+		LEFT JOIN seat_rows sr ON sr.section_id = ss.id
+		LEFT JOIN seats s ON s.row_id = sr.id
+		WHERE ss.seat_layout_id = ?
+		GROUP BY ss.id, ss.seat_layout_id, ss.name, ss.price, ss.created_at
+		ORDER BY ss.created_at ASC
+	`
+
+	if err := r.db.Raw(query, seatLayoutID).Scan(&rows).Error; err != nil {
+		r.logger.Error(
+			"seat_sections_find_with_stats_failed",
+			"seat_layout_id", seatLayoutID,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	stats := make([]domain.SeatSectionWithStats, 0, len(rows))
+	for _, row := range rows {
+		stats = append(stats, domain.SeatSectionWithStats{
+			ID:                row.ID,
+			SeatLayoutID:      row.SeatLayoutID,
+			Name:              row.Name,
+			Price:             row.Price,
+			TotalCapacity:     row.TotalCapacity,
+			AvailableQuantity: row.AvailableQuantity,
+			SoldQuantity:      row.SoldQuantity,
+		})
+	}
+
+	return stats, nil
+}
+
 func toSeatSectionModel(
 	section *domain.SeatSection,
 ) *models.SeatSectionModel {

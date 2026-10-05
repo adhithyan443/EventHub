@@ -1558,14 +1558,6 @@ func (u *EventUsecase) GetEventDetails(
 				return err
 			}
 
-			ticketTypes, err := tx.TicketTypeRepository().FindByEventID(
-				ctx,
-				eventID,
-			)
-			if err != nil {
-				return err
-			}
-
 			var venue *domain.Venue
 
 			if event.VenueID != nil {
@@ -1676,47 +1668,95 @@ func (u *EventUsecase) GetEventDetails(
 				Email:   contact.Email,
 			}
 
-			output.TicketTypes = make(
-				[]EventDetailsTicketType,
-				0,
-				len(ticketTypes),
-			)
-
 			var totalCapacity int
 			var totalSold int
 
-			for _, ticketType := range ticketTypes {
-				sold := ticketType.TotalQuantity - ticketType.AvailableQuantity
+			if setting.SeatLayoutType == SeatLayoutTypeSeated {
+				if seatLayout != nil {
+					sectionStats, err := tx.SeatSectionRepository().FindWithStatsBySeatLayoutID(seatLayout.ID)
+					if err != nil {
+						return err
+					}
 
-				if sold < 0 {
-					sold = 0
+					output.TicketTypes = make([]EventDetailsTicketType, 0, len(sectionStats))
+
+					for _, stat := range sectionStats {
+						status := "AVAILABLE"
+						if stat.AvailableQuantity == 0 {
+							status = "SOLD_OUT"
+						} else if stat.TotalCapacity > 0 && stat.AvailableQuantity <= stat.TotalCapacity/5 {
+							status = "SELLING_FAST"
+						}
+
+						output.TicketTypes = append(
+							output.TicketTypes,
+							EventDetailsTicketType{
+								ID:                stat.ID,
+								EventID:           eventID,
+								Name:              stat.Name,
+								Price:             stat.Price,
+								TotalQuantity:     stat.TotalCapacity,
+								AvailableQuantity: stat.AvailableQuantity,
+								SoldQuantity:      stat.SoldQuantity,
+								Description:       stat.Name,
+								Status:            status,
+							},
+						)
+
+						totalCapacity += stat.TotalCapacity
+						totalSold += stat.SoldQuantity
+					}
+				} else {
+					output.TicketTypes = []EventDetailsTicketType{}
+				}
+			} else {
+				ticketTypes, err := tx.TicketTypeRepository().FindByEventID(
+					ctx,
+					eventID,
+				)
+				if err != nil {
+					return err
 				}
 
-				status := "AVAILABLE"
-
-				if ticketType.AvailableQuantity == 0 {
-					status = "SOLD_OUT"
-				} else if ticketType.AvailableQuantity <= ticketType.TotalQuantity/5 {
-					status = "SELLING_FAST"
-				}
-
-				output.TicketTypes = append(
-					output.TicketTypes,
-					EventDetailsTicketType{
-						ID:                ticketType.ID,
-						EventID:           ticketType.EventID,
-						Name:              ticketType.Name,
-						Price:             ticketType.Price,
-						TotalQuantity:     ticketType.TotalQuantity,
-						AvailableQuantity: ticketType.AvailableQuantity,
-						SoldQuantity:      sold,
-						Description:       ticketType.Description,
-						Status:            status,
-					},
+				output.TicketTypes = make(
+					[]EventDetailsTicketType,
+					0,
+					len(ticketTypes),
 				)
 
-				totalCapacity += ticketType.TotalQuantity
-				totalSold += sold
+				for _, ticketType := range ticketTypes {
+					sold := ticketType.TotalQuantity - ticketType.AvailableQuantity
+
+					if sold < 0 {
+						sold = 0
+					}
+
+					status := "AVAILABLE"
+
+					if ticketType.AvailableQuantity == 0 {
+						status = "SOLD_OUT"
+					} else if ticketType.AvailableQuantity <= ticketType.TotalQuantity/5 {
+						status = "SELLING_FAST"
+					}
+
+					output.TicketTypes = append(
+						output.TicketTypes,
+						EventDetailsTicketType{
+							ID:                ticketType.ID,
+							EventID:           ticketType.EventID,
+							Name:              ticketType.Name,
+							Price:             ticketType.Price,
+							TotalQuantity:     ticketType.TotalQuantity,
+							AvailableQuantity: ticketType.AvailableQuantity,
+							SoldQuantity:      sold,
+							Description:       ticketType.Description,
+							Status:            status,
+						},
+					)
+
+					totalCapacity += ticketType.TotalQuantity
+					totalSold += sold
+				}
 			}
 
 			percentageSold := 0

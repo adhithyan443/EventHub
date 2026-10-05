@@ -15,7 +15,18 @@ type SeatSection struct {
 	UpdatedAt    time.Time
 }
 
+type SeatSectionWithStats struct {
+	ID                uuid.UUID
+	SeatLayoutID      uuid.UUID
+	Name              string
+	Price             float64
+	TotalCapacity     int
+	AvailableQuantity int
+	SoldQuantity      int
+}
+
 type SeatSectionRepository interface {
 	Create(section *SeatSection) error
 	FindBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSection, error)
+	FindWithStatsBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSectionWithStats, error)
 }
