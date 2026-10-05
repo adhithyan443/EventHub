@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ORGANIZER_ROUTES,
   getEventDetailsRoute,
+  getEditEventRoute,
 } from "../../constants/eventConstants";
 
 import StatusBadge from "../../components/organizer/events/StatusBadge";
@@ -876,27 +877,46 @@ export default function MyEventsPage() {
                                 </span>
                               </button>
 
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveActionMenuId(
-                                    null
-                                  );
+                              {String(event?.Status || "").toUpperCase() === "DRAFT" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(
+                                      null
+                                    );
 
-                                  navigate(
-                                    ORGANIZER_ROUTES.CREATE_STEP_1
-                                  );
-                                }}
-                                className="w-full px-3.5 py-2 hover:bg-[#f1f3ff] text-[#141b2b] flex items-center gap-2 transition-colors cursor-pointer"
-                              >
-                                <span>
-                                  ✏️
-                                </span>
+                                    navigate(
+                                      getEditEventRoute(
+                                        eventId
+                                      )
+                                    );
+                                  }}
+                                  className="w-full px-3.5 py-2 hover:bg-[#f1f3ff] text-[#141b2b] flex items-center gap-2 transition-colors cursor-pointer"
+                                >
+                                  <span>
+                                    ✏️
+                                  </span>
 
-                                <span>
-                                  Edit Event
-                                </span>
-                              </button>
+                                  <span>
+                                    Edit Event
+                                  </span>
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  disabled
+                                  title="Only draft events can be edited."
+                                  className="w-full px-3.5 py-2 text-[#565e74]/50 flex items-center gap-2 cursor-not-allowed"
+                                >
+                                  <span className="opacity-50">
+                                    ✏️
+                                  </span>
+
+                                  <span>
+                                    Edit Event
+                                  </span>
+                                </button>
+                              )}
 
                               <button
                                 type="button"

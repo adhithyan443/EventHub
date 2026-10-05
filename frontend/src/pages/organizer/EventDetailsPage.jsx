@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useParams, useNavigate, Link } from "react-router-dom";
 
-import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
+import { ORGANIZER_ROUTES, getEditEventRoute } from "../../constants/eventConstants";
 
 import StatusBadge from "../../components/organizer/events/StatusBadge";
 
@@ -407,15 +407,28 @@ export default function EventDetailsPage() {
             <span>{copySuccess ? "Link Copied!" : "Share"}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => navigate(ORGANIZER_ROUTES.CREATE_STEP_1)}
-            className="border border-[#bcc9c6] bg-white hover:bg-[#f1f3ff] text-[#141b2b] text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <EditIcon className="size-3.5 text-[#565e74]" />
+          {String(eventData?.Status || "").toUpperCase() === "DRAFT" ? (
+            <button
+              type="button"
+              onClick={() => navigate(getEditEventRoute(eventId))}
+              className="border border-[#bcc9c6] bg-white hover:bg-[#f1f3ff] text-[#141b2b] text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <EditIcon className="size-3.5 text-[#565e74]" />
 
-            <span>Edit Event</span>
-          </button>
+              <span>Edit Event</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title="Only draft events can be edited."
+              className="border border-[#bcc9c6]/50 bg-gray-50 text-[#565e74]/50 text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 cursor-not-allowed"
+            >
+              <EditIcon className="size-3.5 text-[#565e74]/50" />
+
+              <span>Edit Event</span>
+            </button>
+          )}
 
           <button
             type="button"

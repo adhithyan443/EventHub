@@ -24,6 +24,7 @@ export const ORGANIZER_ROUTES = Object.freeze({
   CREATE_EVENT_ALIAS: "/organizer/create-event",
   MY_EVENTS: "/organizer/events",
   EVENT_DETAILS: "/organizer/events/:eventId",
+  EDIT_EVENT: "/organizer/events/:eventId/edit",
   BOOKINGS: "/organizer/bookings",
   ATTENDEES: "/organizer/attendees",
   REPORTS: "/organizer/reports",
@@ -32,6 +33,8 @@ export const ORGANIZER_ROUTES = Object.freeze({
 });
 
 export const getEventDetailsRoute = (eventId) => `/organizer/events/${eventId}`;
+export const getEditEventRoute = (eventId) => `/organizer/events/${eventId}/edit`;
+
 
 // Alias EVENT_TYPES to LOCATION_TYPES
 export const EVENT_TYPES = LOCATION_TYPES;
