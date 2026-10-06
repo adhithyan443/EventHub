@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
 import {
   ORGANIZER_ROUTES,
@@ -9,15 +9,17 @@ import {
 
 import StatusBadge from "../../components/organizer/events/StatusBadge";
 import ProgressBar from "../../components/organizer/events/ProgressBar";
+import DeleteEventConfirmationModal from "../../components/organizer/events/DeleteEventConfirmationModal";
 
 import {
   PlusIcon,
   SearchIcon,
   StatusIcon,
   MoreIcon,
+  TrashIcon,
 } from "../../components/organizer/events/OrganizerEventsIcons";
 
-import { getOrganizerEvents } from "../../api/organizerApi";
+import { getOrganizerEvents, deleteOrganizerEvent } from "../../api/organizerApi";
 
 const ITEMS_PER_PAGE = 10;
 
@@ -39,6 +41,7 @@ const STATUS_FILTERS = [
 
 export default function MyEventsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [activeTab, setActiveTab] = useState("ALL");
   const [search, setSearch] = useState("");
@@ -56,7 +59,59 @@ export default function MyEventsPage() {
   const [openDropdown, setOpenDropdown] = useState(null);
   const [activeActionMenuId, setActiveActionMenuId] = useState(null);
 
+  const [deleteModalEvent, setDeleteModalEvent] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+
   const dropdownRef = useRef(null);
+
+  useEffect(() => {
+    if (location.state?.successMessage) {
+      setToastMessage(location.state.successMessage);
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
+
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = setTimeout(() => {
+      setToastMessage("");
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [toastMessage]);
+
+  const handleDeleteConfirm = async () => {
+    const targetId = deleteModalEvent?.id || deleteModalEvent?.ID;
+    if (!targetId) return;
+
+    try {
+      setIsDeleting(true);
+      setError("");
+
+      await deleteOrganizerEvent(targetId);
+
+      setEvents((prev) =>
+        prev.filter((ev) => (ev.id || ev.ID) !== targetId)
+      );
+      setTotalEvents((prev) => Math.max(0, prev - 1));
+
+      const title =
+        deleteModalEvent?.title || deleteModalEvent?.Title || "Draft event";
+      setToastMessage(`Event "${title}" was deleted successfully.`);
+      setDeleteModalEvent(null);
+    } catch (err) {
+      console.error("Failed to delete organizer event:", err);
+      const errMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Failed to delete event. Please try again.";
+      setError(errMsg);
+      setDeleteModalEvent(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   /*
    * Close dropdowns when clicking outside.
@@ -935,6 +990,23 @@ export default function MyEventsPage() {
                                   Copy Link
                                 </span>
                               </button>
+
+                              {String(event?.Status || "").toUpperCase() === "DRAFT" && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    setDeleteModalEvent(event);
+                                  }}
+                                  className="w-full px-3.5 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2 transition-colors cursor-pointer border-t border-[#bcc9c6]/30"
+                                >
+                                  <TrashIcon className="size-3.5 text-red-600 shrink-0" />
+
+                                  <span>
+                                    Delete Event
+                                  </span>
+                                </button>
+                              )}
                             </div>
                           )}
                       </td>
@@ -1052,6 +1124,59 @@ export default function MyEventsPage() {
           </div>
         )}
       </div>
+
+      {/* Delete Event Confirmation Modal */}
+      <DeleteEventConfirmationModal
+        isOpen={Boolean(deleteModalEvent)}
+        onClose={() => {
+          if (!isDeleting) setDeleteModalEvent(null);
+        }}
+        onConfirm={handleDeleteConfirm}
+        eventTitle={deleteModalEvent?.title || deleteModalEvent?.Title}
+        loading={isDeleting}
+      />
+
+      {/* Floating Toast Notification */}
+      {toastMessage && (
+        <div className="fixed top-20 right-4 sm:right-8 z-50 max-w-md bg-slate-900 text-white px-5 py-3.5 rounded-xl shadow-xl flex items-start gap-3 border border-slate-700 animate-slide-in">
+          <div className="text-emerald-400 shrink-0 mt-0.5">
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+          </div>
+
+          <div className="flex-1 text-sm font-medium">{toastMessage}</div>
+
+          <button
+            type="button"
+            onClick={() => setToastMessage("")}
+            className="text-slate-400 hover:text-white transition-colors cursor-pointer ml-1"
+            aria-label="Close notification"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

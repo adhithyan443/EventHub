@@ -81,6 +81,7 @@ type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)
 	Update(event *Event) error
+	Delete(id uuid.UUID) error
 
 	FindByOrganizerID(
 		organizerID uuid.UUID,
@@ -95,16 +96,19 @@ type EventScheduleRepository interface {
 	Create(schedule *EventSchedule) error
 	FindByEventID(eventID uuid.UUID) (*EventSchedule, error)
 	Update(schedule *EventSchedule) error
+	DeleteByEventID(eventID uuid.UUID) error
 }
 
 type EventSettingRepository interface {
 	Create(setting *EventSetting) error
 	FindByEventID(eventID uuid.UUID) (*EventSetting, error)
 	Update(setting *EventSetting) error
+	DeleteByEventID(eventID uuid.UUID) error
 }
 
 type EventCancellationRepository interface {
 	Create(cancellation *EventCancellation) error
 	FindByEventID(eventID uuid.UUID) (*EventCancellation, error)
 	Update(cancellation *EventCancellation) error
+	DeleteByEventID(eventID uuid.UUID) error
 }

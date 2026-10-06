@@ -20,4 +20,5 @@ type SeatLayout struct {
 type SeatLayoutRepository interface {
 	Create(layout *SeatLayout) error
 	FindByEventID(eventID uuid.UUID) (*SeatLayout, error)
+	DeleteByEventID(eventID uuid.UUID) error
 }

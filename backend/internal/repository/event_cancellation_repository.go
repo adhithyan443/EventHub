@@ -125,6 +125,21 @@ func (r *EventCancellationRepository) Update(
 	return nil
 }
 
+func (r *EventCancellationRepository) DeleteByEventID(eventID uuid.UUID) error {
+	result := r.db.Where("event_id = ?", eventID).Delete(&models.EventCancellationModel{})
+	if result.Error != nil {
+		r.logger.Error(
+			"event_cancellation_delete_failed",
+			"event_id", eventID,
+			"error", result.Error,
+		)
+		return result.Error
+	}
+
+	r.logger.Info("event_cancellation_deleted", "event_id", eventID)
+	return nil
+}
+
 func toEventCancellationModel(
 	cancellation *domain.EventCancellation,
 ) *models.EventCancellationModel {

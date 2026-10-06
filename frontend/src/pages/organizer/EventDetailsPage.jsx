@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 
 import { ORGANIZER_ROUTES, getEditEventRoute } from "../../constants/eventConstants";
 
@@ -19,14 +19,23 @@ import {
   ShareIcon,
   ExternalLinkIcon,
   CheckCircleIcon,
+  TrashIcon,
+  GlobeIcon,
 } from "../../components/organizer/events/OrganizerEventsIcons";
 
-import { getOrganizerEventById } from "../../api/organizerApi";
+import {
+  getOrganizerEventById,
+  deleteOrganizerEvent,
+  publishOrganizerEvent,
+} from "../../api/organizerApi";
+import DeleteEventConfirmationModal from "../../components/organizer/events/DeleteEventConfirmationModal";
+import PublishEventConfirmationModal from "../../components/organizer/events/PublishEventConfirmationModal";
 
 export default function EventDetailsPage() {
   const { eventId } = useParams();
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [event, setEvent] = useState(null);
 
@@ -37,53 +46,157 @@ export default function EventDetailsPage() {
 
   const [copySuccess, setCopySuccess] = useState(false);
 
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+
+  const [toast, setToast] = useState(null);
+
   useEffect(() => {
-    let isMounted = true;
+    if (location.state?.successMessage) {
+      setToast({
+        type: "success",
+        message: location.state.successMessage,
+      });
+      window.history.replaceState({}, document.title);
+    }
+  }, [location.state]);
 
-    const fetchEventDetails = async () => {
-      try {
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      setToast(null);
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const handleDeleteConfirm = async () => {
+    if (!eventId) return;
+
+    try {
+      setIsDeleting(true);
+      setDeleteError("");
+
+      await deleteOrganizerEvent(eventId);
+
+      setShowDeleteModal(false);
+      navigate(ORGANIZER_ROUTES.MY_EVENTS, {
+        state: {
+          successMessage: `Event "${event?.Event?.Title || "Draft event"}" was deleted successfully.`,
+        },
+      });
+    } catch (err) {
+      console.error("Failed to delete organizer event:", err);
+      const errMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Failed to delete event. Please try again.";
+      setDeleteError(errMsg);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const fetchEventDetails = async (showPageSpinner = false) => {
+    if (!eventId) return;
+
+    try {
+      if (showPageSpinner) {
         setLoading(true);
-        setError("");
+      }
+      setError("");
 
-        const response = await getOrganizerEventById(eventId);
+      const response = await getOrganizerEventById(eventId);
 
-        if (!isMounted) {
-          return;
-        }
+      if (!response?.success || !response?.data) {
+        throw new Error("Unable to load event details.");
+      }
 
-        if (!response?.success || !response?.data) {
-          throw new Error("Unable to load event details.");
-        }
+      setEvent(response.data);
+      return response.data;
+    } catch (err) {
+      console.error("Failed to fetch organizer event details:", err);
 
-        setEvent(response.data);
-      } catch (err) {
-        if (!isMounted) {
-          return;
-        }
-
-        console.error("Failed to fetch organizer event details:", err);
-
+      if (showPageSpinner) {
         setError(
           err?.response?.data?.message ||
-          err?.response?.data?.error ||
-          err?.message ||
-          "Unable to load event details."
+            err?.response?.data?.error ||
+            err?.message ||
+            "Unable to load event details."
         );
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
       }
-    };
-
-    if (eventId) {
-      fetchEventDetails();
+      throw err;
+    } finally {
+      if (showPageSpinner) {
+        setLoading(false);
+      }
     }
+  };
 
-    return () => {
-      isMounted = false;
-    };
+  useEffect(() => {
+    if (eventId) {
+      fetchEventDetails(true);
+    }
   }, [eventId]);
+
+  const handlePublishConfirm = async () => {
+    if (!eventId || isPublishing) return;
+
+    try {
+      setIsPublishing(true);
+      setPublishError("");
+
+      const response = await publishOrganizerEvent(eventId);
+
+      // Optimistically update status to PUBLISHED immediately so the button hides
+      setEvent((prev) =>
+        prev
+          ? {
+              ...prev,
+              Event: {
+                ...prev.Event,
+                Status: "PUBLISHED",
+              },
+            }
+          : prev
+      );
+
+      setShowPublishModal(false);
+
+      // Refetch event details to synchronize backend state
+      try {
+        await fetchEventDetails(false);
+      } catch (refetchErr) {
+        console.warn("Could not refetch event details after publish:", refetchErr);
+      }
+
+      setToast({
+        type: "success",
+        message:
+          response?.message ||
+          `Event "${event?.Event?.Title || "Event"}" was published successfully!`,
+      });
+    } catch (err) {
+      console.error("Failed to publish organizer event:", err);
+      const errMsg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Failed to publish event. Please try again.";
+      setPublishError(errMsg);
+      setToast({
+        type: "error",
+        message: errMsg,
+      });
+    } finally {
+      setIsPublishing(false);
+    }
+  };
 
   const handleShare = () => {
     if (navigator.clipboard) {
@@ -427,6 +540,37 @@ export default function EventDetailsPage() {
               <EditIcon className="size-3.5 text-[#565e74]/50" />
 
               <span>Edit Event</span>
+            </button>
+          )}
+
+          {String(eventData?.Status || "").toUpperCase() === "DRAFT" && (
+            <button
+              type="button"
+              onClick={() => {
+                setDeleteError("");
+                setShowDeleteModal(true);
+              }}
+              className="border border-red-200 bg-white hover:bg-red-50 text-red-600 text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <TrashIcon className="size-3.5 text-red-600" />
+
+              <span>Delete Event</span>
+            </button>
+          )}
+
+          {String(eventData?.Status || "").toUpperCase() === "DRAFT" && (
+            <button
+              type="button"
+              onClick={() => {
+                setPublishError("");
+                setShowPublishModal(true);
+              }}
+              disabled={isPublishing}
+              className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <GlobeIcon className="size-3.5 text-white" />
+
+              <span>Make Event Public</span>
             </button>
           )}
 
@@ -1140,6 +1284,101 @@ export default function EventDetailsPage() {
           </div>
         </div>
       </div>
+
+      {/* Delete Event Confirmation Modal */}
+      <DeleteEventConfirmationModal
+        isOpen={showDeleteModal}
+        onClose={() => {
+          if (!isDeleting) {
+            setShowDeleteModal(false);
+            setDeleteError("");
+          }
+        }}
+        onConfirm={handleDeleteConfirm}
+        eventTitle={eventData?.Title}
+        loading={isDeleting}
+        error={deleteError}
+      />
+
+      {/* Publish Event Confirmation Modal */}
+      <PublishEventConfirmationModal
+        isOpen={showPublishModal}
+        onClose={() => {
+          if (!isPublishing) {
+            setShowPublishModal(false);
+            setPublishError("");
+          }
+        }}
+        onConfirm={handlePublishConfirm}
+        eventTitle={eventData?.Title}
+        loading={isPublishing}
+        error={publishError}
+      />
+
+      {/* Floating Toast Notification */}
+      {toast && (
+        <div className="fixed top-20 right-4 sm:right-8 z-50 max-w-md bg-slate-900 text-white px-5 py-3.5 rounded-xl shadow-xl flex items-start gap-3 border border-slate-700 animate-slide-in">
+          <div
+            className={`${
+              toast.type === "error" ? "text-red-400" : "text-emerald-400"
+            } shrink-0 mt-0.5`}
+          >
+            {toast.type === "error" ? (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            ) : (
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M20 6L9 17l-5-5" />
+              </svg>
+            )}
+          </div>
+
+          <div className="flex-1 text-xs sm:text-sm font-medium leading-snug">
+            {toast.message}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="text-slate-400 hover:text-white transition-colors cursor-pointer ml-1 shrink-0"
+            aria-label="Close notification"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M18 6L6 18M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }

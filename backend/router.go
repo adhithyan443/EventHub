@@ -208,6 +208,11 @@ func registerOrganizerRoutes(
 		eventHandler.UpdateEvent,
 	)
 
+	organizer.DELETE(
+		"/events/:id",
+		eventHandler.DeleteEvent,
+	)
+
 	organizer.GET(
 		"/events",
 		eventHandler.GetMyEvents,
@@ -216,6 +221,11 @@ func registerOrganizerRoutes(
 	organizer.GET(
 		"/events/:id",
 		eventHandler.GetEventDetails,
+	)
+
+	organizer.PATCH(
+		"/events/:id/publish",
+		eventHandler.PublishEvent,
 	)
 }
 

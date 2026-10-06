@@ -125,6 +125,21 @@ func (r *EventScheduleRepository) Update(
 	return nil
 }
 
+func (r *EventScheduleRepository) DeleteByEventID(eventID uuid.UUID) error {
+	result := r.db.Where("event_id = ?", eventID).Delete(&models.EventScheduleModel{})
+	if result.Error != nil {
+		r.logger.Error(
+			"event_schedule_delete_failed",
+			"event_id", eventID,
+			"error", result.Error,
+		)
+		return result.Error
+	}
+
+	r.logger.Info("event_schedule_deleted", "event_id", eventID)
+	return nil
+}
+
 func toEventScheduleModel(
 	schedule *domain.EventSchedule,
 ) *models.EventScheduleModel {

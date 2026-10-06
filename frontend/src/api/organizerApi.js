@@ -92,3 +92,22 @@ export const updateOrganizerEvent = async (eventId, eventData) => {
 
     return response.data;
 };
+
+// Delete a draft event for the authenticated organizer.
+export const deleteOrganizerEvent = async (eventId) => {
+    const response = await apiClient.delete(
+        `/organizers/events/${eventId}`
+    );
+
+    return response.data;
+};
+
+
+// Publish a draft event for the authenticated organizer.
+export const publishOrganizerEvent = async (eventId) => {
+    const response = await apiClient.patch(
+        `/organizers/events/${eventId}/publish`
+    );
+
+    return response.data;
+};

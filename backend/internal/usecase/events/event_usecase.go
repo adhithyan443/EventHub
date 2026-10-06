@@ -17,6 +17,8 @@ import (
 )
 
 var ErrEventNotEditable = errors.New("event is not editable")
+var ErrEventNotDeletable = errors.New("only draft events can be deleted")
+var ErrEventNotPublishable = errors.New("event is not ready to be published")
 
 var (
 	ErrUnauthorizedOrganizer = errors.New("user is not an active organizer")
@@ -2026,6 +2028,192 @@ func (u *EventUsecase) GetEventDetails(
 	return &output, nil
 }
 
+func (u *EventUsecase) DeleteEvent(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) error {
+	u.logger.Info(
+		"event_delete_started",
+		"event_id", eventID,
+		"user_id", userID,
+	)
+
+	var bannerKey string
+
+	txErr := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			organizer, err := tx.OrganizerRepository().FindByUserID(userID)
+			if err != nil {
+				if errors.Is(err, domain.ErrOrganizerNotFound) {
+					u.logger.Warn(
+						"event_delete_organizer_not_found",
+						"user_id", userID,
+					)
+					return ErrUnauthorizedOrganizer
+				}
+				u.logger.Error(
+					"event_delete_organizer_lookup_failed",
+					"user_id", userID,
+					"error", err,
+				)
+				return err
+			}
+
+			if organizer.Status != "ACTIVE" {
+				u.logger.Warn(
+					"event_delete_organizer_inactive",
+					"user_id", userID,
+					"organizer_id", organizer.ID,
+					"status", organizer.Status,
+				)
+				return ErrUnauthorizedOrganizer
+			}
+
+			foundEvent, err := tx.EventRepository().FindByID(eventID)
+			if err != nil {
+				if errors.Is(err, domain.ErrEventNotFound) {
+					u.logger.Warn(
+						"event_delete_not_found",
+						"event_id", eventID,
+					)
+					return domain.ErrEventNotFound
+				}
+				u.logger.Error(
+					"event_delete_find_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if foundEvent.OrganizerID != organizer.ID {
+				u.logger.Warn(
+					"event_delete_forbidden",
+					"event_id", eventID,
+					"organizer_id", organizer.ID,
+					"event_organizer_id", foundEvent.OrganizerID,
+				)
+				return ErrUnauthorizedOrganizer
+			}
+
+			if foundEvent.Status != domain.EventStatusDraft {
+				u.logger.Warn(
+					"event_delete_not_draft",
+					"event_id", eventID,
+					"status", foundEvent.Status,
+				)
+				return ErrEventNotDeletable
+			}
+
+			bannerKey = foundEvent.BannerURL
+
+			if err := tx.TicketTypeRepository().DeleteByEventID(ctx, eventID); err != nil {
+				u.logger.Error(
+					"event_delete_ticket_types_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if err := tx.SeatLayoutRepository().DeleteByEventID(eventID); err != nil {
+				u.logger.Error(
+					"event_delete_seat_layout_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if err := tx.EventScheduleRepository().DeleteByEventID(eventID); err != nil {
+				u.logger.Error(
+					"event_delete_schedule_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if err := tx.EventSettingRepository().DeleteByEventID(eventID); err != nil {
+				u.logger.Error(
+					"event_delete_setting_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if err := tx.EventCancellationRepository().DeleteByEventID(eventID); err != nil {
+				u.logger.Error(
+					"event_delete_cancellation_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if err := tx.EventContactRepository().DeleteByEventID(eventID); err != nil {
+				u.logger.Error(
+					"event_delete_contact_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			if err := tx.EventRepository().Delete(eventID); err != nil {
+				u.logger.Error(
+					"event_delete_record_failed",
+					"event_id", eventID,
+					"error", err,
+				)
+				return err
+			}
+
+			return nil
+		},
+	)
+
+	if txErr != nil {
+		u.logger.Error(
+			"event_delete_transaction_failed",
+			"event_id", eventID,
+			"user_id", userID,
+			"error", txErr,
+		)
+		return txErr
+	}
+
+	if bannerKey = strings.TrimSpace(bannerKey); bannerKey != "" && u.storageService != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+
+		if delErr := u.storageService.Delete(cleanupCtx, bannerKey); delErr != nil {
+			u.logger.Warn(
+				"event_delete_banner_cleanup_failed",
+				"event_id", eventID,
+				"banner_key", bannerKey,
+				"error", delErr,
+			)
+		} else {
+			u.logger.Info(
+				"event_delete_banner_cleanup_succeeded",
+				"event_id", eventID,
+				"banner_key", bannerKey,
+			)
+		}
+	}
+
+	u.logger.Info(
+		"event_deleted_successfully",
+		"event_id", eventID,
+		"user_id", userID,
+	)
+
+	return nil
+}
+
 func formatEventTime(value time.Time) *string {
 	if value.IsZero() {
 		return nil
@@ -2525,6 +2713,335 @@ func findTicketTypeByID(
 		if ticketType.ID == id {
 			return ticketType
 		}
+	}
+
+	return nil
+}
+
+func (u *EventUsecase) PublishEvent(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) error {
+
+	u.logger.Info(
+		"event_publish_started",
+		"user_id", userID,
+		"event_id", eventID,
+	)
+
+	err := u.transactionManager.WithinTransaction(
+
+		func(tx domain.TransactionRepositories) error {
+			
+			// 1. Verify organizer.
+			organizer, err := tx.OrganizerRepository().FindByUserID(userID)
+
+			if err != nil {
+
+				if errors.Is(err, domain.ErrOrganizerNotFound) {
+
+					u.logger.Warn(
+						"event_publish_organizer_not_found",
+						"user_id", userID,
+						"event_id", eventID,
+					)
+					return ErrUnauthorizedOrganizer
+				}
+
+				u.logger.Error(
+					"event_publish_organizer_lookup_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			if organizer.Status != "ACTIVE" {
+				u.logger.Warn(
+					"event_publish_organizer_inactive",
+					"user_id", userID,
+					"event_id", eventID,
+					"organizer_id", organizer.ID,
+					"status", organizer.Status,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			// 2. Find event.
+			event, err := tx.EventRepository().FindByID(eventID)
+			if err != nil {
+				return err
+			}
+
+			// 3. Ownership check.
+			if event.OrganizerID != organizer.ID {
+				u.logger.Warn(
+					"event_publish_ownership_denied",
+					"user_id", userID,
+					"event_id", eventID,
+					"event_organizer_id", event.OrganizerID,
+					"user_organizer_id", organizer.ID,
+				)
+
+				return ErrUnauthorizedOrganizer
+			}
+
+			// 4. Only drafts can be published.
+			if event.Status != domain.EventStatusDraft {
+				u.logger.Warn(
+					"event_publish_status_denied",
+					"user_id", userID,
+					"event_id", eventID,
+					"status", event.Status,
+				)
+
+				return ErrEventNotPublishable
+			}
+
+			// 5. Category must still be active.
+			category, err := tx.CategoryRepository().FindByID(event.CategoryID)
+			if err != nil {
+				return err
+			}
+
+			if category.Status != domain.CategoryStatusActive {
+				return ErrEventNotPublishable
+			}
+
+			// 6. Required event information.
+			if strings.TrimSpace(event.Title) == "" ||
+				strings.TrimSpace(event.Description) == "" ||
+				strings.TrimSpace(event.BannerURL) == "" {
+				return ErrEventNotPublishable
+			}
+
+			// 7. Event type validation.
+			switch event.EventType {
+			case domain.EventTypeOnline:
+				if strings.TrimSpace(event.OnlineURL) == "" {
+					return ErrEventNotPublishable
+				}
+
+				if event.VenueID != nil {
+					return ErrEventNotPublishable
+				}
+
+			case domain.EventTypePhysical:
+				if event.VenueID == nil ||
+					strings.TrimSpace(event.OnlineURL) != "" {
+					return ErrEventNotPublishable
+				}
+
+			case domain.EventTypeHybrid:
+				if event.VenueID == nil ||
+					strings.TrimSpace(event.OnlineURL) == "" {
+					return ErrEventNotPublishable
+				}
+
+			default:
+				return ErrEventNotPublishable
+			}
+
+			// 8. Schedule is mandatory.
+			schedule, err := tx.EventScheduleRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			if schedule == nil || schedule.EventDate.IsZero() {
+				return ErrEventNotPublishable
+			}
+
+			if !schedule.IsAllDay {
+				if schedule.StartTime.IsZero() ||
+					schedule.EndTime.IsZero() ||
+					!schedule.EndTime.After(schedule.StartTime) {
+					return ErrEventNotPublishable
+				}
+			}
+
+			// 9. Settings are mandatory.
+			setting, err := tx.EventSettingRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			if setting == nil ||
+				setting.BookingLimitPerUser <= 0 {
+				return ErrEventNotPublishable
+			}
+
+			if setting.SeatLayoutType != SeatLayoutTypeGeneral &&
+				setting.SeatLayoutType != SeatLayoutTypeSeated {
+				return ErrEventNotPublishable
+			}
+
+			// Online events can only use General Admission.
+			if event.EventType == domain.EventTypeOnline &&
+				setting.SeatLayoutType == SeatLayoutTypeSeated {
+				return ErrEventNotPublishable
+			}
+
+			// 10. Sales window validation.
+			if err := validateSalesDates(
+				setting.SalesStartDate,
+				setting.SalesEndDate,
+				schedule.EventDate,
+			); err != nil {
+				u.logger.Warn(
+					"event_publish_sales_window_invalid",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+
+				return ErrEventNotPublishable
+			}
+
+			// 11. Physical / hybrid events require a venue.
+			if event.EventType == domain.EventTypePhysical ||
+				event.EventType == domain.EventTypeHybrid {
+
+				if event.VenueID == nil {
+					return ErrEventNotPublishable
+				}
+
+				venue, err := tx.VenueRepository().FindByID(*event.VenueID)
+				if err != nil {
+					return err
+				}
+
+				if strings.TrimSpace(venue.GooglePlaceID) == "" ||
+					strings.TrimSpace(venue.Name) == "" ||
+					strings.TrimSpace(venue.Address) == "" ||
+					strings.TrimSpace(venue.City) == "" ||
+					strings.TrimSpace(venue.State) == "" ||
+					strings.TrimSpace(venue.Country) == "" {
+					return ErrEventNotPublishable
+				}
+			}
+
+			// 12. Cancellation settings.
+			cancellation, err :=
+				tx.EventCancellationRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			if cancellation == nil {
+				return ErrEventNotPublishable
+			}
+
+			if cancellation.CancellationAllowed {
+				if cancellation.CancellationDeadlineHours <= 0 ||
+					strings.TrimSpace(cancellation.RefundPolicy) == "" ||
+					cancellation.RefundPercentage < 0 ||
+					cancellation.RefundPercentage > 100 {
+					return ErrEventNotPublishable
+				}
+			}
+
+			// 13. Ticket / seat inventory.
+			if setting.SeatLayoutType == SeatLayoutTypeGeneral {
+				ticketTypes, err :=
+					tx.TicketTypeRepository().FindByEventID(ctx, eventID)
+				if err != nil {
+					return err
+				}
+
+				if len(ticketTypes) == 0 {
+					return ErrEventNotPublishable
+				}
+
+				for _, ticket := range ticketTypes {
+					if strings.TrimSpace(ticket.Name) == "" ||
+						ticket.Price < 0 ||
+						ticket.TotalQuantity <= 0 ||
+						ticket.AvailableQuantity < 0 ||
+						ticket.AvailableQuantity > ticket.TotalQuantity {
+						return ErrEventNotPublishable
+					}
+				}
+			}
+
+			if setting.SeatLayoutType == SeatLayoutTypeSeated {
+				layout, err :=
+					tx.SeatLayoutRepository().FindByEventID(eventID)
+
+				if err != nil {
+					if errors.Is(err, domain.ErrSeatLayoutNotFound) {
+						return ErrEventNotPublishable
+					}
+
+					return err
+				}
+
+				if layout == nil ||
+					strings.TrimSpace(layout.LayoutName) == "" {
+					return ErrEventNotPublishable
+				}
+
+				sections, err :=
+					tx.SeatSectionRepository().FindWithStatsBySeatLayoutID(layout.ID)
+				if err != nil {
+					return err
+				}
+
+				if len(sections) == 0 {
+					return ErrEventNotPublishable
+				}
+
+				for _, section := range sections {
+					if strings.TrimSpace(section.Name) == "" ||
+						section.Price < 0 ||
+						section.TotalCapacity <= 0 {
+						return ErrEventNotPublishable
+					}
+				}
+			}
+
+			// 14. Publish.
+			now := time.Now()
+
+			event.Status = domain.EventStatusPublished
+			event.UpdatedAt = now
+
+			if err := tx.EventRepository().Update(event); err != nil {
+				u.logger.Error(
+					"event_publish_update_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+
+				return err
+			}
+
+			u.logger.Info(
+				"event_published",
+				"user_id", userID,
+				"organizer_id", organizer.ID,
+				"event_id", eventID,
+				"status", domain.EventStatusPublished,
+			)
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		u.logger.Warn(
+			"event_publish_failed",
+			"user_id", userID,
+			"event_id", eventID,
+			"error", err,
+		)
+
+		return err
 	}
 
 	return nil

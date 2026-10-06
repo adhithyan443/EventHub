@@ -1206,6 +1206,77 @@ func (h *EventHandler) GetEventDetails(c *gin.Context) {
 	})
 }
 
+func (h *EventHandler) DeleteEvent(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_delete_invalid_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	err = h.eventUsecase.DeleteEvent(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to delete this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, eventUsecase.ErrEventNotDeletable):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "only draft events can be deleted",
+			})
+
+		default:
+			h.logger.Error(
+				"event_delete_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to delete event",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Event deleted successfully",
+	})
+}
+
 func detectBannerContentType(file io.ReadSeeker) (string, error) {
 	buffer := make([]byte, 512)
 
@@ -1290,4 +1361,76 @@ func parseTime(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, err
+}
+
+func (h *EventHandler) PublishEvent(c *gin.Context) {
+	
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_publish_invalid_event_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	err = h.eventUsecase.PublishEvent(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to publish this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, eventUsecase.ErrEventNotPublishable):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "event is not ready to be published",
+			})
+
+		default:
+			h.logger.Error(
+				"event_publish_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to publish event",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Event published successfully",
+	})
 }

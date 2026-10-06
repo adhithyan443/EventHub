@@ -105,6 +105,29 @@ func (r *EventRepository) Update(event *domain.Event) error {
 	return nil
 }
 
+func (r *EventRepository) Delete(id uuid.UUID) error {
+	result := r.db.Where("id = ?", id).Delete(&models.EventModel{})
+	if result.Error != nil {
+		r.logger.Error(
+			"event_delete_failed",
+			"event_id", id,
+			"error", result.Error,
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"event_delete_not_found",
+			"event_id", id,
+		)
+		return domain.ErrEventNotFound
+	}
+
+	r.logger.Info("event_deleted", "event_id", id)
+	return nil
+}
+
 func (r *EventRepository) FindByID(id uuid.UUID) (*domain.Event, error) {
 	var eventModel models.EventModel
 
