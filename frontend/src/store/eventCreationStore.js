@@ -224,8 +224,11 @@ const useEventCreationStore = create((set, get) => ({
 
       if (isSwitchingToOnline) {
         nextVenue = { ...initialVenue };
-        nextTicketMode = TICKET_MODES.GENERAL;
-        nextSeatingConfig = { ...initialSeatingConfig };
+        // In edit mode, never override hydrated ticketMode
+        if (!state.isEditMode) {
+          nextTicketMode = TICKET_MODES.GENERAL;
+          nextSeatingConfig = { ...initialSeatingConfig };
+        }
       }
 
       return {
@@ -258,6 +261,11 @@ const useEventCreationStore = create((set, get) => ({
 
   setTicketMode: (mode) =>
     set((state) => {
+      // Immutability Guard: Never mutate mode in edit mode
+      if (state.isEditMode) {
+        return {};
+      }
+
       // Online events cannot use reserved seating.
       if (
         isOnlineEvent(state.locationType || state.eventType) &&

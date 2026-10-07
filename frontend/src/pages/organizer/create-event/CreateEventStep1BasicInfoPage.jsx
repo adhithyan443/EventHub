@@ -11,6 +11,7 @@ import { getCategories } from "../../../api/organizerApi";
 import {
   LOCATION_TYPES,
   ORGANIZER_ROUTES,
+  TICKET_MODES,
   isPhysicalEvent,
   isOnlineEvent,
   isHybridEvent,
@@ -20,6 +21,8 @@ export default function CreateEventStep1BasicInfoPage() {
   const navigate = useNavigate();
 
   const isEditMode = useEventCreationStore((state) => state.isEditMode);
+  const ticketMode = useEventCreationStore((state) => state.ticketMode);
+  const isSeatedLocked = isEditMode && ticketMode === TICKET_MODES.SEATED;
   const basicInformation = useEventCreationStore(
     (state) => state.basicInformation
   );
@@ -553,13 +556,24 @@ export default function CreateEventStep1BasicInfoPage() {
                 {/* Online */}
                 <button
                   type="button"
-                  onClick={() =>
-                    setLocationType(LOCATION_TYPES.ONLINE)
+                  onClick={
+                    isSeatedLocked
+                      ? undefined
+                      : () => setLocationType(LOCATION_TYPES.ONLINE)
                   }
-                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${locationType === LOCATION_TYPES.ONLINE
-                    ? "bg-[#00685f]/15 border-2 border-[#00685f] text-[#00685f]"
-                    : "bg-white border border-[#bcc9c6] text-[#141b2b] hover:bg-gray-50"
-                    }`}
+                  disabled={isSeatedLocked}
+                  title={
+                    isSeatedLocked
+                      ? "Reserved seating events cannot be changed to online-only events."
+                      : undefined
+                  }
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold transition-all ${
+                    isSeatedLocked
+                      ? "bg-gray-100 border border-gray-200 text-[#565e74]/50 cursor-not-allowed opacity-50"
+                      : locationType === LOCATION_TYPES.ONLINE
+                        ? "bg-[#00685f]/15 border-2 border-[#00685f] text-[#00685f] cursor-pointer"
+                        : "bg-white border border-[#bcc9c6] text-[#141b2b] hover:bg-gray-50 cursor-pointer"
+                  }`}
                 >
                   <svg
                     className="size-4"
@@ -605,6 +619,12 @@ export default function CreateEventStep1BasicInfoPage() {
 
                   <span>Hybrid Event</span>
                 </button>
+
+                {isSeatedLocked && (
+                  <p className="w-full text-[11px] text-[#565e74] mt-1">
+                    ℹ️ Reserved seating events require a physical venue and cannot be changed to online-only events.
+                  </p>
+                )}
               </div>
 
               {/* Physical Event */}

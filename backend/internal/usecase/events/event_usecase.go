@@ -21,12 +21,13 @@ var ErrEventNotDeletable = errors.New("only draft events can be deleted")
 var ErrEventNotPublishable = errors.New("event is not ready to be published")
 
 var (
-	ErrUnauthorizedOrganizer = errors.New("user is not an active organizer")
-	ErrInvalidEventInput     = errors.New("invalid event input")
-	ErrInvalidEventSchedule  = errors.New("invalid event schedule")
-	ErrInvalidEventSettings  = errors.New("invalid event settings")
-	ErrInvalidCancellation   = errors.New("invalid cancellation settings")
-	ErrInvalidBanner         = errors.New("invalid event banner")
+	ErrUnauthorizedOrganizer  = errors.New("user is not an active organizer")
+	ErrInvalidEventInput      = errors.New("invalid event input")
+	ErrInvalidEventSchedule   = errors.New("invalid event schedule")
+	ErrInvalidEventSettings   = errors.New("invalid event settings")
+	ErrInvalidCancellation    = errors.New("invalid cancellation settings")
+	ErrInvalidBanner          = errors.New("invalid event banner")
+	ErrTicketingModeImmutable = errors.New("ticketing mode cannot be changed after event creation")
 )
 
 const (
@@ -677,6 +678,8 @@ func (u *EventUsecase) UpdateEvent(
 	ctx context.Context,
 	input UpdateEventInput,
 ) (*UpdateEventOutput, error) {
+	input.SeatLayoutType = strings.ToUpper(strings.TrimSpace(input.SeatLayoutType))
+
 	u.logger.Info(
 		"event_update_started",
 		"event_id", input.EventID,
@@ -857,6 +860,44 @@ func (u *EventUsecase) UpdateEvent(
 				)
 
 				return ErrEventNotEditable
+			}
+
+			// Fetch existing event settings to verify ticketing mode immutability.
+			existingSetting, err := tx.EventSettingRepository().FindByEventID(foundEvent.ID)
+			if err != nil {
+				u.logger.Error(
+					"event_update_setting_lookup_failed",
+					"event_id", foundEvent.ID,
+					"user_id", input.UserID,
+					"error", err,
+				)
+				return err
+			}
+
+			normalizedExistingMode := strings.ToUpper(strings.TrimSpace(existingSetting.SeatLayoutType))
+
+			// Safe omission rule: if omitted/empty, inherit existing mode so it never triggers a mode change.
+			if input.SeatLayoutType == "" {
+				input.SeatLayoutType = normalizedExistingMode
+			} else if input.SeatLayoutType != normalizedExistingMode {
+				u.logger.Warn(
+					"event_update_ticketing_mode_change_rejected",
+					"event_id", foundEvent.ID,
+					"user_id", input.UserID,
+					"current_seat_layout_type", normalizedExistingMode,
+					"requested_seat_layout_type", input.SeatLayoutType,
+				)
+				return ErrTicketingModeImmutable
+			}
+
+			if input.EventType == domain.EventTypeOnline && input.SeatLayoutType == SeatLayoutTypeSeated {
+				return ErrInvalidEventSettings
+			}
+
+			if input.SeatLayoutType == SeatLayoutTypeGeneral && len(input.TicketTypes) > 0 {
+				if err := validateTicketTypes(input.TicketTypes); err != nil {
+					return ErrInvalidEventSettings
+				}
 			}
 
 			// Extension point for Week 3: Block event editing once bookings exist.
@@ -1049,49 +1090,20 @@ func (u *EventUsecase) UpdateEvent(
 
 			// Update Event Settings.
 			var setting *domain.EventSetting
-			existingSetting, err := tx.EventSettingRepository().FindByEventID(foundEvent.ID)
-			if err != nil {
-				if errors.Is(err, domain.ErrEventNotFound) {
-					setting = &domain.EventSetting{
-						ID:                  uuid.New(),
-						EventID:             foundEvent.ID,
-						SeatLayoutType:      input.SeatLayoutType,
-						BookingLimitPerUser: input.BookingLimitPerUser,
-						SalesStartDate:      input.SalesStartDate,
-						SalesEndDate:        input.SalesEndDate,
-					}
-					if err := tx.EventSettingRepository().Create(setting); err != nil {
-						u.logger.Error(
-							"event_setting_create_failed",
-							"event_id", foundEvent.ID,
-							"error", err,
-						)
-						return err
-					}
-				} else {
-					u.logger.Error(
-						"event_setting_lookup_failed",
-						"event_id", foundEvent.ID,
-						"error", err,
-					)
-					return err
-				}
-			} else {
-				existingSetting.SeatLayoutType = input.SeatLayoutType
-				existingSetting.BookingLimitPerUser = input.BookingLimitPerUser
-				existingSetting.SalesStartDate = input.SalesStartDate
-				existingSetting.SalesEndDate = input.SalesEndDate
-				existingSetting.UpdatedAt = time.Now()
-				if err := tx.EventSettingRepository().Update(existingSetting); err != nil {
-					u.logger.Error(
-						"event_setting_update_failed",
-						"event_id", foundEvent.ID,
-						"error", err,
-					)
-					return err
-				}
-				setting = existingSetting
+			existingSetting.SeatLayoutType = input.SeatLayoutType
+			existingSetting.BookingLimitPerUser = input.BookingLimitPerUser
+			existingSetting.SalesStartDate = input.SalesStartDate
+			existingSetting.SalesEndDate = input.SalesEndDate
+			existingSetting.UpdatedAt = time.Now()
+			if err := tx.EventSettingRepository().Update(existingSetting); err != nil {
+				u.logger.Error(
+					"event_setting_update_failed",
+					"event_id", foundEvent.ID,
+					"error", err,
+				)
+				return err
 			}
+			setting = existingSetting
 
 			// Update Event Cancellation.
 			var cancellation *domain.EventCancellation
@@ -2583,7 +2595,8 @@ func validateUpdateEventInput(input UpdateEventInput) error {
 		return ErrInvalidEventSettings
 	}
 
-	if input.SeatLayoutType != SeatLayoutTypeSeated &&
+	if input.SeatLayoutType != "" &&
+		input.SeatLayoutType != SeatLayoutTypeSeated &&
 		input.SeatLayoutType != SeatLayoutTypeGeneral {
 		return ErrInvalidEventSettings
 	}
@@ -2733,7 +2746,7 @@ func (u *EventUsecase) PublishEvent(
 	err := u.transactionManager.WithinTransaction(
 
 		func(tx domain.TransactionRepositories) error {
-			
+
 			// 1. Verify organizer.
 			organizer, err := tx.OrganizerRepository().FindByUserID(userID)
 

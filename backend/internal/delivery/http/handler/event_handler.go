@@ -973,6 +973,16 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 
 		case errors.Is(
 			err,
+			eventUsecase.ErrTicketingModeImmutable,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"ticketing mode cannot be changed after event creation",
+				),
+			)
+
+		case errors.Is(
+			err,
 			domain.ErrEventNotFound,
 		):
 			c.Error(
@@ -1364,7 +1374,7 @@ func parseTime(value string) (time.Time, error) {
 }
 
 func (h *EventHandler) PublishEvent(c *gin.Context) {
-	
+
 	userID, err := getAuthenticatedUserID(c)
 	if err != nil {
 		c.Error(err)

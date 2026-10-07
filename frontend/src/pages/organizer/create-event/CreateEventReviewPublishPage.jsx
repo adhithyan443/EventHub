@@ -625,6 +625,9 @@ export default function CreateEventReviewPublishPage() {
   const [showSuccessModal, setShowSuccessModal] =
     useState(false);
 
+  const [createdEventId, setCreatedEventId] =
+    useState(null);
+
   const isOnline =
     isOnlineEvent(locationType);
 
@@ -945,9 +948,25 @@ export default function CreateEventReviewPublishPage() {
         );
       }
 
-      await createOrganizerEvent(
+      const response = await createOrganizerEvent(
         formData
       );
+
+      const newEventId =
+        response?.data?.event?.ID ||
+        response?.data?.event?.id ||
+        response?.data?.Event?.ID ||
+        response?.data?.Event?.id ||
+        response?.data?.ID ||
+        response?.data?.id ||
+        response?.event?.ID ||
+        response?.event?.id ||
+        response?.ID ||
+        response?.id;
+
+      if (newEventId) {
+        setCreatedEventId(newEventId);
+      }
 
       setShowSuccessModal(true);
     } catch (err) {
@@ -961,7 +980,7 @@ export default function CreateEventReviewPublishPage() {
         err.message ||
         (isEditMode
           ? "Failed to update event. Please try again."
-          : "Failed to publish event. Please try again.");
+          : "Failed to save event. Please try again.");
 
       setPublishError(errMsg);
     } finally {
@@ -970,18 +989,15 @@ export default function CreateEventReviewPublishPage() {
   };
 
   const handleReturnToDashboard = () => {
-    const targetEventId = editingEventId;
-    const wasEditMode = isEditMode;
+    const targetEventId = isEditMode ? editingEventId : createdEventId;
 
     setShowSuccessModal(false);
     resetForm();
 
-    if (wasEditMode && targetEventId) {
+    if (targetEventId) {
       navigate(getEventDetailsRoute(targetEventId));
     } else {
-      navigate(
-        ORGANIZER_ROUTES.DASHBOARD
-      );
+      navigate(ORGANIZER_ROUTES.MY_EVENTS);
     }
   };
 
@@ -1497,7 +1513,7 @@ export default function CreateEventReviewPublishPage() {
               <h3 className="text-xl font-bold text-[#141b2b]">
                 {isEditMode
                   ? "Event Updated Successfully!"
-                  : "Event Published Successfully!"}
+                  : "Event Saved Successfully!"}
               </h3>
 
               <p className="text-xs text-[#565e74] leading-relaxed">
@@ -1506,7 +1522,7 @@ export default function CreateEventReviewPublishPage() {
                 </strong>{" "}
                 {isEditMode
                   ? "has been updated successfully. Your changes are now saved."
-                  : "has been listed and is ready for attendee bookings and ticket purchases."}
+                  : "has been saved as a draft. Review the event details and publish it when you’re ready."}
               </p>
             </div>
 
@@ -1547,7 +1563,7 @@ export default function CreateEventReviewPublishPage() {
               onClick={handleReturnToDashboard}
               className="w-full py-3 bg-[#00685f] hover:bg-[#005550] text-white text-sm font-semibold rounded-xl shadow-sm transition-colors cursor-pointer"
             >
-              {isEditMode ? "View Event Details" : "Go to Organizer Dashboard"}
+              View Event Details
             </button>
           </div>
         </div>
