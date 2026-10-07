@@ -489,10 +489,15 @@ export default function CreateEventSeatConfigurationPage() {
   const handleOpenEditModal = (category) => {
     setValidationError("");
 
+    const priceStr =
+      typeof category.price === "number"
+        ? `₹${category.price}`
+        : category.price || "";
+
     setEditForm({
       id: category.id,
       name: category.name || "",
-      price: category.price || "",
+      price: priceStr,
       color: category.color || "#00685f",
     });
 
@@ -506,7 +511,7 @@ export default function CreateEventSeatConfigurationPage() {
     setEditError("");
 
     const categoryName = editForm.name.trim();
-    const rawPrice = editForm.price.trim();
+    const rawPrice = String(editForm.price ?? "").trim();
 
     if (!categoryName) {
       setEditError("Category name is required.");
@@ -1680,7 +1685,7 @@ export default function CreateEventSeatConfigurationPage() {
 
                   <input
                     type="text"
-                    value={editForm.price.replace(
+                    value={String(editForm.price ?? "").replace(
                       "₹",
                       ""
                     )}

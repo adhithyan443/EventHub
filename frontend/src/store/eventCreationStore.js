@@ -945,23 +945,32 @@ const useEventCreationStore = create((set, get) => ({
         "#9333ea",
         "#e11d48",
       ];
-      const categories = seatLayout.Sections.map((sec, idx) => ({
-        id: sec.ID,
-        name: sec.Name || "",
-        price: sec.Price || 0,
-        color: colors[idx % colors.length],
-        rows: (sec.Rows || []).map((row) => ({
-          id: row.ID,
-          name: `Row ${row.RowName}`,
-          rowLetter: row.RowName,
-          seats: (row.Seats || []).map((seat) => ({
-            id: seat.ID,
-            number: seat.SeatNumber,
-            status: seat.Status === "DISABLED" ? "disabled" : "available",
-            categoryId: sec.ID,
+      const categories = seatLayout.Sections.map((sec, idx) => {
+        const rawPrice = sec.Price ?? 0;
+        const formattedPrice =
+          typeof rawPrice === "string" && rawPrice.startsWith("₹")
+            ? rawPrice
+            : `₹${rawPrice}`;
+
+        return {
+          id: sec.ID,
+          name: sec.Name || "",
+          tier: sec.Name || "Standard",
+          price: formattedPrice,
+          color: colors[idx % colors.length],
+          rows: (sec.Rows || []).map((row) => ({
+            id: row.ID,
+            name: `Row ${row.RowName}`,
+            rowLetter: row.RowName,
+            seats: (row.Seats || []).map((seat) => ({
+              id: seat.ID,
+              number: seat.SeatNumber,
+              status: seat.Status === "DISABLED" ? "disabled" : "available",
+              categoryId: sec.ID,
+            })),
           })),
-        })),
-      }));
+        };
+      });
 
       const allRows = categories.flatMap((cat) => cat.rows || []);
       const totalCapacity = allRows.reduce(
@@ -969,11 +978,18 @@ const useEventCreationStore = create((set, get) => ({
         0
       );
 
+      const maxSeatsInAnyRow = allRows.reduce(
+        (max, r) => Math.max(max, r.seats?.length || 0),
+        0
+      );
+      const seatsPerRow = maxSeatsInAnyRow > 0 ? maxSeatsInAnyRow : 8;
+
       seatingConfig = {
         layoutName: seatLayout.LayoutName || "Main Seating Layout",
         categories,
         sections: categories,
         rows: allRows,
+        seatsPerRow,
         selectedSeatIds: [],
         totalCapacity,
       };
