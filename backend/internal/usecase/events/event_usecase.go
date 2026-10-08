@@ -3163,3 +3163,259 @@ func (u *EventUsecase) DiscoverEvents(
 		Total:  total,
 	}, nil
 }
+
+func (u *EventUsecase) GetPublicEventDetails(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (*domain.PublicEventDetails, error) {
+	var output domain.PublicEventDetails
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			event, err := tx.EventRepository().FindByID(eventID)
+			if err != nil {
+				if errors.Is(err, domain.ErrEventNotFound) {
+					return domain.ErrEventNotFound
+				}
+
+				if u.logger != nil {
+					u.logger.Error(
+						"public_event_details_lookup_failed",
+						"event_id", eventID,
+						"error", err,
+					)
+				}
+
+				return err
+			}
+
+			// Public access control: only published events with public visibility are accessible.
+			if event.Status != domain.EventStatusPublished || event.Visibility != "PUBLIC" {
+				return domain.ErrEventNotPublic
+			}
+
+			category, err := tx.CategoryRepository().FindByID(event.CategoryID)
+			if err != nil {
+				return err
+			}
+
+			schedule, err := tx.EventScheduleRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			setting, err := tx.EventSettingRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			cancellation, err := tx.EventCancellationRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			var contact *domain.EventContact
+			if contactRepo := tx.EventContactRepository(); contactRepo != nil {
+				contact, _ = contactRepo.FindByEventID(eventID)
+			}
+
+			var venue *domain.Venue
+			if event.VenueID != nil {
+				if venueRepo := tx.VenueRepository(); venueRepo != nil {
+					venue, err = venueRepo.FindByID(*event.VenueID)
+					if err != nil {
+						return err
+					}
+				}
+			}
+
+			var organizer *domain.Organizer
+			if orgRepo := tx.OrganizerRepository(); orgRepo != nil {
+				organizer, _ = orgRepo.FindByID(event.OrganizerID)
+			}
+
+			var profile *domain.OrganizerProfile
+			if profRepo := tx.OrganizerProfileRepository(); profRepo != nil {
+				profile, _ = profRepo.FindByOrganizerID(event.OrganizerID)
+			}
+
+			bannerImageURL := ""
+			if strings.TrimSpace(event.BannerURL) != "" && u.storageService != nil {
+				presigned, presignErr := u.storageService.GetPresignedURL(ctx, event.BannerURL)
+				if presignErr != nil {
+					if u.logger != nil {
+						u.logger.Error(
+							"public_event_banner_presign_failed",
+							"event_id", eventID,
+							"banner_key", event.BannerURL,
+							"error", presignErr,
+						)
+					}
+					return presignErr
+				}
+				bannerImageURL = presigned
+			}
+
+			organizerAvatarURL := ""
+			if profile != nil && strings.TrimSpace(profile.LogoURL) != "" {
+				if strings.HasPrefix(profile.LogoURL, "http://") || strings.HasPrefix(profile.LogoURL, "https://") {
+					organizerAvatarURL = profile.LogoURL
+				} else if u.storageService != nil {
+					if presigned, presignErr := u.storageService.GetPresignedURL(ctx, profile.LogoURL); presignErr == nil {
+						organizerAvatarURL = presigned
+					}
+				}
+			}
+
+			organizerName := "Event Organizer"
+			if profile != nil && strings.TrimSpace(profile.BusinessName) != "" {
+				organizerName = profile.BusinessName
+			}
+			isVerified := organizer != nil && organizer.Status == "ACTIVE"
+
+			var ticketTypes []domain.PublicEventDetailsTicketType
+			minPrice := -1.0
+
+			if setting.SeatLayoutType == SeatLayoutTypeSeated {
+				if layout, layoutErr := tx.SeatLayoutRepository().FindByEventID(eventID); layoutErr == nil && layout != nil {
+					sectionStats, statsErr := tx.SeatSectionRepository().FindWithStatsBySeatLayoutID(layout.ID)
+					if statsErr != nil {
+						return statsErr
+					}
+
+					ticketTypes = make([]domain.PublicEventDetailsTicketType, 0, len(sectionStats))
+					for _, stat := range sectionStats {
+						status := "AVAILABLE"
+						if stat.AvailableQuantity == 0 {
+							status = "SOLD_OUT"
+						} else if stat.TotalCapacity > 0 && stat.AvailableQuantity <= stat.TotalCapacity/5 {
+							status = "SELLING_FAST"
+						}
+
+						if minPrice < 0 || stat.Price < minPrice {
+							minPrice = stat.Price
+						}
+
+						ticketTypes = append(ticketTypes, domain.PublicEventDetailsTicketType{
+							ID:                stat.ID,
+							Name:              stat.Name,
+							Price:             stat.Price,
+							TotalQuantity:     stat.TotalCapacity,
+							AvailableQuantity: stat.AvailableQuantity,
+							Description:       stat.Name,
+							Status:            status,
+						})
+					}
+				}
+			} else {
+				tts, ttErr := tx.TicketTypeRepository().FindByEventID(ctx, eventID)
+				if ttErr != nil {
+					return ttErr
+				}
+
+				ticketTypes = make([]domain.PublicEventDetailsTicketType, 0, len(tts))
+				for _, tt := range tts {
+					status := "AVAILABLE"
+					if tt.AvailableQuantity == 0 {
+						status = "SOLD_OUT"
+					} else if tt.TotalQuantity > 0 && tt.AvailableQuantity <= tt.TotalQuantity/5 {
+						status = "SELLING_FAST"
+					}
+
+					if minPrice < 0 || tt.Price < minPrice {
+						minPrice = tt.Price
+					}
+
+					ticketTypes = append(ticketTypes, domain.PublicEventDetailsTicketType{
+						ID:                tt.ID,
+						Name:              tt.Name,
+						Price:             tt.Price,
+						TotalQuantity:     tt.TotalQuantity,
+						AvailableQuantity: tt.AvailableQuantity,
+						Description:       tt.Description,
+						Status:            status,
+					})
+				}
+			}
+
+			if minPrice < 0 {
+				minPrice = 0
+			}
+
+			output = domain.PublicEventDetails{
+				ID:                  event.ID,
+				Title:               event.Title,
+				Description:         event.Description,
+				BannerImageURL:      bannerImageURL,
+				CategoryID:          event.CategoryID,
+				CategoryName:        category.Name,
+				EventType:           event.EventType,
+				OnlineURL:           event.OnlineURL,
+				Language:            event.Language,
+				AgeRestriction:      event.AgeRestriction,
+				Highlights:          event.Highlights,
+				Rules:               event.Rules,
+				AttendeeInformation: event.AttendeeInformation,
+				Status:              event.Status,
+				Visibility:          event.Visibility,
+				CreatedAt:           event.CreatedAt,
+				Schedule: domain.PublicEventDetailsSchedule{
+					EventDate: schedule.EventDate,
+					StartTime: formatEventTime(schedule.StartTime),
+					EndTime:   formatEventTime(schedule.EndTime),
+					IsAllDay:  schedule.IsAllDay,
+				},
+				Setting: domain.PublicEventDetailsSetting{
+					SeatLayoutType:      setting.SeatLayoutType,
+					BookingLimitPerUser: setting.BookingLimitPerUser,
+					SalesStartDate:      setting.SalesStartDate,
+					SalesEndDate:        setting.SalesEndDate,
+				},
+				Cancellation: domain.PublicEventDetailsCancellation{
+					CancellationAllowed:       cancellation.CancellationAllowed,
+					CancellationDeadlineHours: cancellation.CancellationDeadlineHours,
+					RefundPolicy:              cancellation.RefundPolicy,
+					RefundPercentage:          cancellation.RefundPercentage,
+				},
+				Organizer: domain.PublicEventDetailsOrganizer{
+					ID:        event.OrganizerID,
+					Name:      organizerName,
+					AvatarURL: organizerAvatarURL,
+					Verified:  isVerified,
+				},
+				TicketTypes:   ticketTypes,
+				StartingPrice: minPrice,
+			}
+
+			if venue != nil {
+				output.Venue = &domain.PublicEventDetailsVenue{
+					ID:         venue.ID,
+					Name:       venue.Name,
+					Address:    venue.Address,
+					City:       venue.City,
+					State:      venue.State,
+					Country:    venue.Country,
+					PostalCode: venue.PostalCode,
+					Latitude:   venue.Latitude,
+					Longitude:  venue.Longitude,
+				}
+			}
+
+			if contact != nil {
+				output.Contact = &domain.PublicEventDetailsContact{
+					Name:  contact.Name,
+					Phone: contact.Phone,
+					Email: contact.Email,
+				}
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &output, nil
+}

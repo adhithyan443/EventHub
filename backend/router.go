@@ -291,4 +291,9 @@ func registerPublicEventRoutes(
 		"/events",
 		eventHandler.ListPublicEvents,
 	)
+
+	api.GET(
+		"/events/:eventId",
+		eventHandler.GetPublicEventDetails,
+	)
 }

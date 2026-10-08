@@ -7,7 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrEventNotFound = errors.New("event not found")
+var (
+	ErrEventNotFound  = errors.New("event not found")
+	ErrEventNotPublic = errors.New("event is not publicly available")
+)
 
 const (
 	EventStatusDraft     = "DRAFT"

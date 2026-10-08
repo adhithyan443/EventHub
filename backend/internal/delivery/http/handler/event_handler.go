@@ -28,6 +28,9 @@ func NewEventHandler(
 	eventUsecase *eventUsecase.EventUsecase,
 	logger *slog.Logger,
 ) *EventHandler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &EventHandler{
 		eventUsecase: eventUsecase,
 		logger:       logger,
@@ -1546,5 +1549,67 @@ func (h *EventHandler) ListPublicEvents(c *gin.Context) {
 			"limit":  output.Limit,
 			"total":  output.Total,
 		},
+	})
+}
+
+func (h *EventHandler) GetPublicEventDetails(c *gin.Context) {
+	rawID := c.Param("eventId")
+	if rawID == "" {
+		rawID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawID)
+	if err != nil {
+		h.logger.Warn(
+			"public_event_details_invalid_id",
+			"event_id", rawID,
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	output, err := h.eventUsecase.GetPublicEventDetails(
+		c.Request.Context(),
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrEventNotFound),
+			errors.Is(err, domain.ErrEventNotPublic):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, domain.ErrCategoryNotFound),
+			errors.Is(err, domain.ErrVenueNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		default:
+			h.logger.Error(
+				"public_event_details_handler_failed",
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to fetch event details",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    output,
 	})
 }
