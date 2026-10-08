@@ -1,6 +1,8 @@
+import { Link } from "react-router-dom";
 import { CalendarIcon, LocationIcon } from "../../../components/layout/icons";
 
 export default function EventCard({ event }) {
+  const eventTargetId = event.id || "sunfield";
   return (
     <article className="bg-[#f9f9ff] rounded-xl overflow-hidden border border-border flex flex-col">
       <div className="relative h-44 w-full">
@@ -28,9 +30,12 @@ export default function EventCard({ event }) {
 
         <div className="mt-auto flex items-center justify-between border-t border-border pt-3">
           <span className="text-sm font-semibold text-ink">From ${event.price}</span>
-          <button className="rounded-md border border-border px-4 py-1.5 text-xs font-medium text-ink/70 hover:bg-background">
+          <Link
+            to={`/events/${eventTargetId}`}
+            className="rounded-md border border-border px-4 py-1.5 text-xs font-medium text-ink/70 hover:bg-background hover:text-ink transition-colors"
+          >
             View Details
-          </button>
+          </Link>
         </div>
       </div>
     </article>
