@@ -93,6 +93,16 @@ export const updateOrganizerEvent = async (eventId, eventData) => {
     return response.data;
 };
 
+// Update the reserved seat layout for an existing draft event.
+export const updateOrganizerSeatLayout = async (eventId, seatLayoutData) => {
+    const response = await apiClient.put(
+        `/organizers/events/${eventId}/seat-layout`,
+        seatLayoutData
+    );
+
+    return response.data;
+};
+
 // Delete a draft event for the authenticated organizer.
 export const deleteOrganizerEvent = async (eventId) => {
     const response = await apiClient.delete(

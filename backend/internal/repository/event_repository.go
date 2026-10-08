@@ -380,3 +380,141 @@ func toEventDomain(
 		UpdatedAt:           eventModel.UpdatedAt,
 	}
 }
+
+func (r *EventRepository) FindPublicEvents(
+	filter domain.PublicEventFilter,
+) ([]*domain.PublicEvent, int64, error) {
+	var events []*domain.PublicEvent
+	var total int64
+
+	offset := (filter.Page - 1) * filter.Limit
+
+	baseQuery := r.db.
+		Table("events AS e").
+		Joins("INNER JOIN categories AS c ON c.id = e.category_id").
+		Joins("LEFT JOIN venues AS v ON v.id = e.venue_id").
+		Joins("INNER JOIN event_schedules AS es ON es.event_id = e.id").
+		Joins("LEFT JOIN event_settings AS eset ON eset.event_id = e.id").
+		Where("e.status = ?", domain.EventStatusPublished).
+		Where("e.visibility = ?", "PUBLIC")
+
+	if filter.Keyword != "" {
+		keyword := "%" + strings.ToLower(filter.Keyword) + "%"
+
+		baseQuery = baseQuery.Where(
+			`(
+				LOWER(e.title) LIKE ?
+				OR LOWER(e.description) LIKE ?
+				OR LOWER(c.name) LIKE ?
+				OR LOWER(COALESCE(v.name, '')) LIKE ?
+				OR LOWER(COALESCE(v.city, '')) LIKE ?
+			)`,
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+			keyword,
+		)
+	}
+
+	if filter.CategoryID != nil {
+		baseQuery = baseQuery.Where(
+			"e.category_id = ?",
+			*filter.CategoryID,
+		)
+	}
+
+	if filter.City != "" {
+		baseQuery = baseQuery.Where(
+			"LOWER(COALESCE(v.city, '')) = ?",
+			strings.ToLower(filter.City),
+		)
+	}
+
+	if filter.EventDate != nil {
+		baseQuery = baseQuery.Where(
+			"es.event_date = ?",
+			filter.EventDate,
+		)
+	}
+
+	if err := baseQuery.Count(&total).Error; err != nil {
+		r.logger.Error(
+			"public_event_count_failed",
+			"error", err,
+		)
+
+		return nil, 0, err
+	}
+
+	query := baseQuery.
+		Select(`
+			e.id,
+			e.category_id,
+			c.name AS category_name,
+
+			e.venue_id,
+			COALESCE(v.name, '') AS venue_name,
+			COALESCE(v.city, '') AS venue_city,
+
+			e.event_type,
+			e.title,
+			e.description,
+			e.banner_url,
+			e.language,
+			e.age_restriction,
+			e.visibility,
+			e.status,
+
+			es.event_date,
+			es.start_time,
+			es.end_time,
+			es.is_all_day,
+
+			CASE
+				WHEN eset.seat_layout_type = 'SEATED' THEN
+					COALESCE((
+						SELECT MIN(ss.price)
+						FROM seat_sections ss
+						INNER JOIN seat_layouts sl
+							ON sl.id = ss.seat_layout_id
+						WHERE sl.event_id = e.id
+					), 0)
+				ELSE
+					COALESCE((
+						SELECT MIN(tt.price)
+						FROM ticket_types tt
+						WHERE tt.event_id = e.id
+					), 0)
+			END AS starting_price,
+
+			e.created_at,
+			e.updated_at
+		`).
+		Order("es.event_date ASC").
+		Order("es.start_time ASC").
+		Order("e.created_at DESC").
+		Offset(offset).
+		Limit(filter.Limit)
+
+	if err := query.Scan(&events).Error; err != nil {
+		r.logger.Error(
+			"public_event_fetch_failed",
+			"page", filter.Page,
+			"limit", filter.Limit,
+			"error", err,
+		)
+
+		return nil, 0, err
+	}
+
+	r.logger.Info(
+		"public_events_fetched",
+		"count", len(events),
+		"total", total,
+		"page", filter.Page,
+		"limit", filter.Limit,
+	)
+
+	return events, total, nil
+}

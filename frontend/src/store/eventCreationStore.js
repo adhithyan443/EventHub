@@ -909,6 +909,150 @@ const useEventCreationStore = create((set, get) => ({
   //   })),
 
 
+  syncSavedSeatLayout: (payload) => {
+    if (!payload) return;
+    const colors = [
+      "#00685f",
+      "#4648d4",
+      "#6d7a77",
+      "#d97706",
+      "#9333ea",
+      "#e11d48",
+    ];
+
+    const data = payload?.data || payload;
+    const layout = data?.layout || data?.SeatLayout || data?.Layout || {};
+    const layoutName =
+      layout.LayoutName || layout.layout_name || "Main Seating Layout";
+
+    let categories = [];
+
+    const rawSections =
+      data.sections || data.Sections || layout.sections || layout.Sections || [];
+    const rawRows = data.rows || data.Rows || [];
+    const rawSeats = data.seats || data.Seats || [];
+
+    const isFlat =
+      Array.isArray(rawRows) &&
+      rawRows.length > 0 &&
+      rawSections.every((s) => !Array.isArray(s.rows) && !Array.isArray(s.Rows));
+
+    if (isFlat) {
+      const seatsByRowId = new Map();
+      rawSeats.forEach((seat) => {
+        const rowId = seat.RowID || seat.row_id || seat.rowId;
+        if (!seatsByRowId.has(rowId)) {
+          seatsByRowId.set(rowId, []);
+        }
+        seatsByRowId.get(rowId).push({
+          id: seat.ID || seat.id,
+          number: seat.SeatNumber || seat.seat_number || seat.seatNumber,
+          status:
+            String(seat.Status || seat.status || "").toUpperCase() ===
+            "DISABLED"
+              ? "disabled"
+              : "available",
+          rowId,
+        });
+      });
+
+      const rowsBySectionId = new Map();
+      rawRows.forEach((row) => {
+        const secId = row.SectionID || row.section_id || row.sectionId;
+        if (!rowsBySectionId.has(secId)) {
+          rowsBySectionId.set(secId, []);
+        }
+        const rowId = row.ID || row.id;
+        const rowSeats = seatsByRowId.get(rowId) || [];
+        rowsBySectionId.get(secId).push({
+          id: rowId,
+          name: `Row ${row.RowName || row.row_name || row.rowName}`,
+          rowLetter: row.RowName || row.row_name || row.rowName,
+          seats: rowSeats.map((s) => ({ ...s, categoryId: secId })),
+        });
+      });
+
+      categories = rawSections.map((sec, idx) => {
+        const rawPrice = sec.Price ?? sec.price ?? 0;
+        const formattedPrice =
+          typeof rawPrice === "string" && rawPrice.startsWith("₹")
+            ? rawPrice
+            : `₹${rawPrice}`;
+        const secId = sec.ID || sec.id;
+        return {
+          id: secId,
+          name: sec.Name || sec.name || "",
+          tier: sec.Name || sec.name || "Standard",
+          price: formattedPrice,
+          color: colors[idx % colors.length],
+          rows: rowsBySectionId.get(secId) || [],
+        };
+      });
+    } else {
+      categories = rawSections.map((sec, idx) => {
+        const rawPrice = sec.Price ?? sec.price ?? 0;
+        const formattedPrice =
+          typeof rawPrice === "string" && rawPrice.startsWith("₹")
+            ? rawPrice
+            : `₹${rawPrice}`;
+        const rows = sec.Rows || sec.rows || [];
+        return {
+          id: sec.ID || sec.id,
+          name: sec.Name || sec.name || "",
+          tier: sec.Name || sec.name || "Standard",
+          price: formattedPrice,
+          color: colors[idx % colors.length],
+          rows: rows.map((row) => {
+            const seats = row.Seats || row.seats || [];
+            return {
+              id: row.ID || row.id,
+              name: `Row ${row.RowName || row.row_name || row.rowName}`,
+              rowLetter: row.RowName || row.row_name || row.rowName,
+              seats: seats.map((seat) => ({
+                id: seat.ID || seat.id,
+                number:
+                  seat.SeatNumber ||
+                  seat.seat_number ||
+                  seat.seatNumber ||
+                  seat.number,
+                status:
+                  String(seat.Status || seat.status || "").toUpperCase() ===
+                  "DISABLED"
+                    ? "disabled"
+                    : "available",
+                categoryId: sec.ID || sec.id,
+              })),
+            };
+          }),
+        };
+      });
+    }
+
+    const allRows = categories.flatMap((cat) => cat.rows || []);
+    const totalCapacity = allRows.reduce(
+      (sum, r) => sum + (r.seats?.length || 0),
+      0
+    );
+    const maxSeatsInAnyRow = allRows.reduce(
+      (max, r) => Math.max(max, r.seats?.length || 0),
+      0
+    );
+    const seatsPerRow = maxSeatsInAnyRow > 0 ? maxSeatsInAnyRow : 8;
+
+    set((state) => ({
+      seatingConfiguration: {
+        ...state.seatingConfiguration,
+        layoutName,
+        categories,
+        sections: categories,
+        rows: allRows,
+        seatsPerRow,
+        selectedSeatIds: [],
+        totalCapacity,
+      },
+    }));
+  },
+
   hydrateForEdit: (data) => {
     if (!data) return;
 

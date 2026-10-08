@@ -90,6 +90,10 @@ type EventRepository interface {
 		status string,
 		search string,
 	) ([]*OrganizerEvent, int64, error)
+
+	FindPublicEvents(
+		filter PublicEventFilter,
+	) ([]*PublicEvent, int64, error)
 }
 
 type EventScheduleRepository interface {

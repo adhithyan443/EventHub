@@ -15,5 +15,8 @@ type SeatRow struct {
 
 type SeatRowRepository interface {
 	Create(row *SeatRow) error
+	Update(row *SeatRow) error
+	Delete(id uuid.UUID) error
+	DeleteBySectionID(sectionID uuid.UUID) error
 	FindBySectionID(sectionID uuid.UUID) ([]SeatRow, error)
 }

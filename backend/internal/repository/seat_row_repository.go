@@ -48,6 +48,66 @@ func (r *SeatRowRepository) Create(row *domain.SeatRow) error {
 	return nil
 }
 
+func (r *SeatRowRepository) Update(row *domain.SeatRow) error {
+	rowModel := toSeatRowModel(row)
+
+	if err := r.db.Save(rowModel).Error; err != nil {
+		r.logger.Error(
+			"seat_row_update_failed",
+			"row_id", row.ID,
+			"section_id", row.SectionID,
+			"error", err,
+		)
+		return err
+	}
+
+	*row = *toSeatRowDomain(rowModel)
+
+	r.logger.Info(
+		"seat_row_updated",
+		"row_id", row.ID,
+		"section_id", row.SectionID,
+	)
+
+	return nil
+}
+
+func (r *SeatRowRepository) Delete(id uuid.UUID) error {
+	if err := r.db.Where("id = ?", id).Delete(&models.SeatRowModel{}).Error; err != nil {
+		r.logger.Error(
+			"seat_row_delete_failed",
+			"row_id", id,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"seat_row_deleted",
+		"row_id", id,
+	)
+
+	return nil
+}
+
+func (r *SeatRowRepository) DeleteBySectionID(sectionID uuid.UUID) error {
+	if err := r.db.Where("section_id = ?", sectionID).Delete(&models.SeatRowModel{}).Error; err != nil {
+		r.logger.Error(
+			"seat_rows_delete_by_section_failed",
+			"section_id", sectionID,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"seat_rows_deleted_by_section",
+		"section_id", sectionID,
+	)
+
+	return nil
+}
+
 func (r *SeatRowRepository) FindBySectionID(
 	sectionID uuid.UUID,
 ) ([]domain.SeatRow, error) {

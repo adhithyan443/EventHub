@@ -50,6 +50,88 @@ func (r *SeatRepository) Create(seat *domain.Seat) error {
 	return nil
 }
 
+func (r *SeatRepository) Update(seat *domain.Seat) error {
+	seatModel := toSeatModel(seat)
+
+	if err := r.db.Save(seatModel).Error; err != nil {
+		r.logger.Error(
+			"seat_update_failed",
+			"seat_id", seat.ID,
+			"row_id", seat.RowID,
+			"error", err,
+		)
+		return err
+	}
+
+	*seat = *toSeatDomain(seatModel)
+
+	r.logger.Info(
+		"seat_updated",
+		"seat_id", seat.ID,
+		"row_id", seat.RowID,
+	)
+
+	return nil
+}
+
+func (r *SeatRepository) Delete(id uuid.UUID) error {
+	if err := r.db.Where("id = ?", id).Delete(&models.SeatModel{}).Error; err != nil {
+		r.logger.Error(
+			"seat_delete_failed",
+			"seat_id", id,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"seat_deleted",
+		"seat_id", id,
+	)
+
+	return nil
+}
+
+func (r *SeatRepository) DeleteByRowID(rowID uuid.UUID) error {
+	if err := r.db.Where("row_id = ?", rowID).Delete(&models.SeatModel{}).Error; err != nil {
+		r.logger.Error(
+			"seats_delete_by_row_failed",
+			"row_id", rowID,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"seats_deleted_by_row",
+		"row_id", rowID,
+	)
+
+	return nil
+}
+
+func (r *SeatRepository) CountBookedByLayoutID(layoutID uuid.UUID) (int64, error) {
+	var count int64
+	query := `
+		SELECT COUNT(s.id)
+		FROM seats s
+		JOIN seat_rows sr ON sr.id = s.row_id
+		JOIN seat_sections ss ON ss.id = sr.section_id
+		WHERE ss.seat_layout_id = ? AND s.status IN (?, ?)
+	`
+
+	if err := r.db.Raw(query, layoutID, domain.SeatStatusBooked, domain.SeatStatusReserved).Scan(&count).Error; err != nil {
+		r.logger.Error(
+			"count_booked_seats_by_layout_failed",
+			"seat_layout_id", layoutID,
+			"error", err,
+		)
+		return 0, err
+	}
+
+	return count, nil
+}
+
 func (r *SeatRepository) FindByRowID(
 	rowID uuid.UUID,
 ) ([]domain.Seat, error) {

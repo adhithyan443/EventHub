@@ -4,7 +4,7 @@ export default function EventCard({ event }) {
   return (
     <article className="bg-[#f9f9ff] rounded-xl overflow-hidden border border-border flex flex-col">
       <div className="relative h-44 w-full">
-        <img src={event.image} alt={event.title} className="h-full w-full object-cover" />
+        <img src={event.image || "/event-placeholder.jpg"} alt={event.title} className="h-full w-full object-cover" />
         <span className="absolute left-2 top-2 flex items-center gap-1.5 rounded-full bg-white/90 backdrop-blur-sm border border-border px-2.5 py-1 text-xs font-medium tracking-wide text-ink">
           <span className="h-2 w-2 rounded-full bg-primary" />
           {event.category}

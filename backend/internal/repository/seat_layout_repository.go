@@ -49,6 +49,30 @@ func (r *SeatLayoutRepository) Create(layout *domain.SeatLayout) error {
 	return nil
 }
 
+func (r *SeatLayoutRepository) Update(layout *domain.SeatLayout) error {
+	layoutModel := toSeatLayoutModel(layout)
+
+	if err := r.db.Save(layoutModel).Error; err != nil {
+		r.logger.Error(
+			"seat_layout_update_failed",
+			"seat_layout_id", layout.ID,
+			"event_id", layout.EventID,
+			"error", err,
+		)
+		return err
+	}
+
+	*layout = *toSeatLayoutDomain(layoutModel)
+
+	r.logger.Info(
+		"seat_layout_updated",
+		"seat_layout_id", layout.ID,
+		"event_id", layout.EventID,
+	)
+
+	return nil
+}
+
 func (r *SeatLayoutRepository) FindByEventID(
 	eventID uuid.UUID,
 ) (*domain.SeatLayout, error) {

@@ -67,6 +67,7 @@ func setupRouter(
 
 	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
 	registerCategoryRoutes(router, categoryHandler)
+	registerPublicEventRoutes(router, eventHandler)
 
 	return router
 }
@@ -204,6 +205,11 @@ func registerOrganizerRoutes(
 	)
 
 	organizer.PUT(
+		"/events/:id/seat-layout",
+		seatLayoutHandler.UpdateSeatLayout,
+	)
+
+	organizer.PUT(
 		"/events/:id",
 		eventHandler.UpdateEvent,
 	)
@@ -272,5 +278,17 @@ func registerCategoryRoutes(
 	api.GET(
 		"/categories",
 		categoryHandler.GetCategories,
+	)
+}
+
+func registerPublicEventRoutes(
+	router *gin.Engine,
+	eventHandler *handler.EventHandler,
+) {
+	api := router.Group("/api/v1")
+
+	api.GET(
+		"/events",
+		eventHandler.ListPublicEvents,
 	)
 }

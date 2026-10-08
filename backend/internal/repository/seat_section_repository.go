@@ -48,6 +48,66 @@ func (r *SeatSectionRepository) Create(section *domain.SeatSection) error {
 	return nil
 }
 
+func (r *SeatSectionRepository) Update(section *domain.SeatSection) error {
+	sectionModel := toSeatSectionModel(section)
+
+	if err := r.db.Save(sectionModel).Error; err != nil {
+		r.logger.Error(
+			"seat_section_update_failed",
+			"section_id", section.ID,
+			"seat_layout_id", section.SeatLayoutID,
+			"error", err,
+		)
+		return err
+	}
+
+	*section = *toSeatSectionDomain(sectionModel)
+
+	r.logger.Info(
+		"seat_section_updated",
+		"section_id", section.ID,
+		"seat_layout_id", section.SeatLayoutID,
+	)
+
+	return nil
+}
+
+func (r *SeatSectionRepository) Delete(id uuid.UUID) error {
+	if err := r.db.Where("id = ?", id).Delete(&models.SeatSectionModel{}).Error; err != nil {
+		r.logger.Error(
+			"seat_section_delete_failed",
+			"section_id", id,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"seat_section_deleted",
+		"section_id", id,
+	)
+
+	return nil
+}
+
+func (r *SeatSectionRepository) DeleteBySeatLayoutID(seatLayoutID uuid.UUID) error {
+	if err := r.db.Where("seat_layout_id = ?", seatLayoutID).Delete(&models.SeatSectionModel{}).Error; err != nil {
+		r.logger.Error(
+			"seat_sections_delete_by_layout_failed",
+			"seat_layout_id", seatLayoutID,
+			"error", err,
+		)
+		return err
+	}
+
+	r.logger.Info(
+		"seat_sections_deleted_by_layout",
+		"seat_layout_id", seatLayoutID,
+	)
+
+	return nil
+}
+
 func (r *SeatSectionRepository) FindBySeatLayoutID(
 	seatLayoutID uuid.UUID,
 ) ([]domain.SeatSection, error) {

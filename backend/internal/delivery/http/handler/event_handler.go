@@ -1444,3 +1444,107 @@ func (h *EventHandler) PublishEvent(c *gin.Context) {
 		"message": "Event published successfully",
 	})
 }
+
+func (h *EventHandler) ListPublicEvents(c *gin.Context) {
+	page := 1
+	limit := 12
+
+	if value := c.Query("page"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid page",
+			})
+			return
+		}
+
+		page = parsed
+	}
+
+	if value := c.Query("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid limit",
+			})
+			return
+		}
+
+		limit = parsed
+	}
+
+	filter := domain.PublicEventFilter{
+		Page:    page,
+		Limit:   limit,
+		Keyword: strings.TrimSpace(c.Query("keyword")),
+		City:    strings.TrimSpace(c.Query("city")),
+	}
+
+	if value := strings.TrimSpace(c.Query("category_id")); value != "" {
+		categoryID, err := uuid.Parse(value)
+		if err != nil {
+			h.logger.Warn(
+				"public_event_invalid_category_id",
+				"category_id", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid category id",
+			})
+			return
+		}
+
+		filter.CategoryID = &categoryID
+	}
+
+	if value := strings.TrimSpace(c.Query("date")); value != "" {
+		eventDate, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			h.logger.Warn(
+				"public_event_invalid_date",
+				"date", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid date",
+			})
+			return
+		}
+
+		filter.EventDate = &eventDate
+	}
+
+	output, err := h.eventUsecase.DiscoverEvents(
+		c.Request.Context(),
+		filter,
+	)
+
+	if err != nil {
+		h.logger.Error(
+			"public_event_handler_failed",
+			"page", page,
+			"limit", limit,
+			"error", err,
+		)
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "failed to fetch events",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"events": output.Events,
+			"page":   output.Page,
+			"limit":  output.Limit,
+			"total":  output.Total,
+		},
+	})
+}

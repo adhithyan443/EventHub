@@ -1377,6 +1377,13 @@ type GetMyEventsOutput struct {
 	// BannerImageURL string
 }
 
+type PublicEventsOutput struct {
+	Events []*domain.PublicEvent
+	Page   int
+	Limit  int
+	Total  int64
+}
+
 type EventDetailsOutput struct {
 	Event        *EventDetailsEvent
 	Schedule     *EventDetailsSchedule
@@ -3058,4 +3065,101 @@ func (u *EventUsecase) PublishEvent(
 	}
 
 	return nil
+}
+
+func (u *EventUsecase) DiscoverEvents(
+	ctx context.Context,
+	filter domain.PublicEventFilter,
+) (*PublicEventsOutput, error) {
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+
+	if filter.Limit < 1 {
+		filter.Limit = 12
+	}
+
+	if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	filter.City = strings.TrimSpace(filter.City)
+
+	var (
+		events []*domain.PublicEvent
+		total  int64
+	)
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			var err error
+
+			events, total, err = tx.EventRepository().FindPublicEvents(filter)
+			if err != nil {
+				u.logger.Error(
+					"public_event_discovery_failed",
+					"page", filter.Page,
+					"limit", filter.Limit,
+					"keyword", filter.Keyword,
+					"city", filter.City,
+					"error", err,
+				)
+
+				return err
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	for _, event := range events {
+		if strings.TrimSpace(event.BannerURL) == "" {
+			continue
+		}
+
+		if u.storageService == nil {
+			u.logger.Warn(
+				"public_event_banner_presign_skipped",
+				"event_id", event.ID,
+			)
+			continue
+		}
+
+		bannerImageURL, err := u.storageService.GetPresignedURL(
+			ctx,
+			event.BannerURL,
+		)
+		if err != nil {
+			u.logger.Error(
+				"public_event_banner_presign_failed",
+				"event_id", event.ID,
+				"banner_key", event.BannerURL,
+				"error", err,
+			)
+
+			return nil, err
+		}
+
+		event.BannerImageURL = bannerImageURL
+	}
+
+	u.logger.Info(
+		"public_event_discovery_completed",
+		"count", len(events),
+		"total", total,
+		"page", filter.Page,
+		"limit", filter.Limit,
+	)
+
+	return &PublicEventsOutput{
+		Events: events,
+		Page:   filter.Page,
+		Limit:  filter.Limit,
+		Total:  total,
+	}, nil
 }

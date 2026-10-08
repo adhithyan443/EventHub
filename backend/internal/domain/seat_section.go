@@ -27,6 +27,9 @@ type SeatSectionWithStats struct {
 
 type SeatSectionRepository interface {
 	Create(section *SeatSection) error
+	Update(section *SeatSection) error
+	Delete(id uuid.UUID) error
+	DeleteBySeatLayoutID(seatLayoutID uuid.UUID) error
 	FindBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSection, error)
 	FindWithStatsBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSectionWithStats, error)
 }
