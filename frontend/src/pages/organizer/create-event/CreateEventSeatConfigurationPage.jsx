@@ -12,6 +12,13 @@ import {
   TICKET_MODES,
   isOnlineEvent,
 } from "../../../constants/eventConstants";
+import { updateOrganizerSeatLayout } from "../../../api/organizerApi";
+
+const isUUID = (str) =>
+  typeof str === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    str
+  );
 
 const COLOR_PALETTE = [
   { label: "Teal", value: "#00685f" },
@@ -21,6 +28,28 @@ const COLOR_PALETTE = [
   { label: "Purple", value: "#9333ea" },
   { label: "Rose", value: "#e11d48" },
 ];
+
+const MAX_TICKETS_PER_ORDER = 20;
+
+const getTodayDateString = () => {
+  const today = new Date();
+
+  return [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, "0"),
+    String(today.getDate()).padStart(2, "0"),
+  ].join("-");
+};
+
+const isValidDateString = (value) => {
+  if (!value) {
+    return false;
+  }
+
+  const date = new Date(`${value}T00:00:00`);
+
+  return !Number.isNaN(date.getTime());
+};
 
 export default function CreateEventSeatConfigurationPage() {
   const navigate = useNavigate();
@@ -78,6 +107,24 @@ export default function CreateEventSeatConfigurationPage() {
     (state) => state.removeRowFromCategory
   );
 
+  const ticketSalesSettings = useEventCreationStore(
+    (state) => state.ticketSalesSettings
+  );
+
+  const updateTicketSalesSettings = useEventCreationStore(
+    (state) => state.updateTicketSalesSettings
+  );
+
+  const dateTime = useEventCreationStore((state) => state.dateTime);
+  const isEditMode = useEventCreationStore((state) => state.isEditMode);
+  const editingEventId = useEventCreationStore((state) => state.editingEventId);
+  const syncSavedSeatLayout = useEventCreationStore(
+    (state) => state.syncSavedSeatLayout
+  );
+
+  const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState("");
+
   // Local state for Layout Settings inputs & Canvas zoom
   const [seatsPerRowInput, setSeatsPerRowInput] = useState(
     seatingConfig.seatsPerRow || 8
@@ -127,11 +174,206 @@ export default function CreateEventSeatConfigurationPage() {
     0
   );
 
+  const todayDate = getTodayDateString();
+
   const handleBack = () => {
     navigate(ORGANIZER_ROUTES.CREATE_STEP_3);
   };
 
-  const handleContinue = () => {
+  const handleSalesSettingChange = (field, value) => {
+    updateTicketSalesSettings({
+      [field]: value,
+    });
+  };
+
+  /*
+   * Validate ticket sales settings for reserved seating.
+   */
+  const validateTicketSalesSettings = () => {
+    const salesStartDate = ticketSalesSettings?.salesStartDate || "";
+    const salesEndDate = ticketSalesSettings?.salesEndDate || "";
+
+    const maxTicketsPerBooking =
+      ticketSalesSettings?.maxTicketsPerBooking ?? "";
+
+    const eventDate = dateTime?.eventDate || "";
+
+    /*
+     * Event date
+     */
+    if (!eventDate) {
+      return "Event date is missing. Please go back to Step 2 and select an event date.";
+    }
+
+    if (!isValidDateString(eventDate)) {
+      return "The event date is invalid. Please go back to Step 2 and select a valid event date.";
+    }
+
+    /*
+     * Sales start date
+     */
+    if (!salesStartDate) {
+      return "Sales start date is required.";
+    }
+
+    if (!isValidDateString(salesStartDate)) {
+      return "Sales start date must be a valid date.";
+    }
+
+    /*
+     * Sales end date
+     */
+    if (!salesEndDate) {
+      return "Sales end date is required.";
+    }
+
+    if (!isValidDateString(salesEndDate)) {
+      return "Sales end date must be a valid date.";
+    }
+
+    /*
+     * Sales date order
+     */
+    if (salesStartDate > salesEndDate) {
+      return "Sales start date cannot be after the sales end date.";
+    }
+
+    /*
+     * Sales cannot continue after the event.
+     */
+    if (salesEndDate > eventDate) {
+      return "Sales end date cannot be after the event date.";
+    }
+
+    if (salesStartDate > eventDate) {
+      return "Sales start date cannot be after the event date.";
+    }
+
+    /*
+     * Sales cannot start in the past.
+     */
+    const today = getTodayDateString();
+
+    if (salesStartDate < today) {
+      return "Sales start date cannot be in the past.";
+    }
+
+    /*
+     * Maximum tickets per order
+     */
+    if (
+      maxTicketsPerBooking === "" ||
+      maxTicketsPerBooking === null ||
+      maxTicketsPerBooking === undefined
+    ) {
+      return "Maximum tickets per order is required.";
+    }
+
+    const maxTickets = Number(maxTicketsPerBooking);
+
+    if (!Number.isInteger(maxTickets) || maxTickets <= 0) {
+      return "Maximum tickets per order must be a positive whole number.";
+    }
+
+    if (maxTickets > MAX_TICKETS_PER_ORDER) {
+      return `Maximum tickets per order cannot exceed ${MAX_TICKETS_PER_ORDER}.`;
+    }
+
+    /*
+     * Maximum tickets per order cannot exceed the total layout capacity.
+     */
+    if (maxTickets > totalSeats) {
+      return "Maximum tickets per order cannot exceed the total available seating capacity.";
+    }
+
+    return null;
+  };
+
+  const saveSeatLayoutToBackend = async () => {
+    if (!isEditMode || !editingEventId) return true;
+
+    const payload = {
+      layout_name: seatingConfig.layoutName || "Main Seating Layout",
+      sections: categories.map((cat) => ({
+        ...(isUUID(cat.id) ? { id: cat.id } : {}),
+        name: cat.name.trim(),
+        price: Number(String(cat.price ?? "").replace(/[₹,\s]/g, "")),
+        rows: (cat.rows || []).map((row) => ({
+          ...(isUUID(row.id) ? { id: row.id } : {}),
+          row_name: row.rowLetter?.trim() || row.name?.trim(),
+          seats: row.seats?.length || 0,
+          seats_list: (row.seats || []).map((seat) => ({
+            ...(isUUID(seat.id) ? { id: seat.id } : {}),
+            seat_number: seat.number || seat.SeatNumber || 1,
+            status:
+              String(seat.status || "AVAILABLE").toUpperCase() === "DISABLED"
+                ? "DISABLED"
+                : "AVAILABLE",
+          })),
+        })),
+      })),
+    };
+
+    const response = await updateOrganizerSeatLayout(editingEventId, payload);
+    if (response?.data) {
+      syncSavedSeatLayout(response.data);
+    }
+    return true;
+  };
+
+  const handleSaveOnly = async () => {
+    if (isSavingLayout) return;
+    setValidationError("");
+    setSaveSuccessMessage("");
+
+    if (categories.length === 0) {
+      setValidationError("Add at least one seating category before saving.");
+      return;
+    }
+
+    for (const category of categories) {
+      const categoryName = category.name?.trim();
+      if (!categoryName) {
+        setValidationError("Every seating category must have a name.");
+        return;
+      }
+      const price = Number(
+        String(category.price ?? "").replace(/[₹,\s]/g, "")
+      );
+      if (!Number.isFinite(price) || price < 0) {
+        setValidationError(`Enter a valid price for the "${categoryName}" category.`);
+        return;
+      }
+      if (!category.rows || category.rows.length === 0) {
+        setValidationError(`The "${categoryName}" category must contain at least one row.`);
+        return;
+      }
+    }
+
+    if (totalSeats <= 0) {
+      setValidationError("Generate at least one seat before saving.");
+      return;
+    }
+
+    try {
+      setIsSavingLayout(true);
+      await saveSeatLayoutToBackend();
+      setSaveSuccessMessage("Seat layout updated and saved successfully!");
+      setTimeout(() => setSaveSuccessMessage(""), 5000);
+    } catch (err) {
+      console.error("Failed to update seat layout:", err);
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Failed to update seat layout.";
+      setValidationError(msg);
+    } finally {
+      setIsSavingLayout(false);
+    }
+  };
+
+  const handleContinue = async () => {
     setValidationError("");
 
     if (categories.length === 0) {
@@ -237,6 +479,32 @@ export default function CreateEventSeatConfigurationPage() {
       return;
     }
 
+    const ticketSalesSettingsError = validateTicketSalesSettings();
+
+    if (ticketSalesSettingsError) {
+      setValidationError(ticketSalesSettingsError);
+      return;
+    }
+
+    if (isEditMode && editingEventId) {
+      try {
+        setIsSavingLayout(true);
+        await saveSeatLayoutToBackend();
+      } catch (err) {
+        console.error("Failed to save seat layout on continue:", err);
+        const msg =
+          err?.response?.data?.message ||
+          err?.response?.data?.error ||
+          err?.message ||
+          "Failed to update seat layout.";
+        setValidationError(msg);
+        setIsSavingLayout(false);
+        return;
+      } finally {
+        setIsSavingLayout(false);
+      }
+    }
+
     navigate(ORGANIZER_ROUTES.CREATE_REVIEW);
   };
 
@@ -339,10 +607,15 @@ export default function CreateEventSeatConfigurationPage() {
   const handleOpenEditModal = (category) => {
     setValidationError("");
 
+    const priceStr =
+      typeof category.price === "number"
+        ? `₹${category.price}`
+        : category.price || "";
+
     setEditForm({
       id: category.id,
       name: category.name || "",
-      price: category.price || "",
+      price: priceStr,
       color: category.color || "#00685f",
     });
 
@@ -356,7 +629,7 @@ export default function CreateEventSeatConfigurationPage() {
     setEditError("");
 
     const categoryName = editForm.name.trim();
-    const rawPrice = editForm.price.trim();
+    const rawPrice = String(editForm.price ?? "").trim();
 
     if (!categoryName) {
       setEditError("Category name is required.");
@@ -447,16 +720,60 @@ export default function CreateEventSeatConfigurationPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3 bg-white border border-[#bcc9c6]/60 rounded-xl px-4 py-2 shadow-xs self-start md:self-auto">
-              <span className="text-xs text-[#565e74]">
-                Total Venue Capacity:
-              </span>
+            <div className="flex items-center gap-3 self-start md:self-auto flex-wrap">
+              <div className="flex items-center gap-3 bg-white border border-[#bcc9c6]/60 rounded-xl px-4 py-2 shadow-xs">
+                <span className="text-xs text-[#565e74]">
+                  Total Venue Capacity:
+                </span>
 
-              <strong className="text-base font-bold text-[#00685f]">
-                {totalSeats} Seats
-              </strong>
+                <strong className="text-base font-bold text-[#00685f]">
+                  {totalSeats} Seats
+                </strong>
+              </div>
+
+              {isEditMode && (
+                <button
+                  type="button"
+                  onClick={handleSaveOnly}
+                  disabled={isSavingLayout}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#00685f] hover:bg-[#005a52] text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingLayout ? (
+                    <>
+                      <div className="size-3.5 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                      <span>Saving Layout...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="size-3.5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                      <span>Save Changes</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
+
+          {/* Success Notification */}
+          {saveSuccessMessage && (
+            <div className="mx-4 sm:mx-6 mt-4 sm:mt-6 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <p className="text-sm font-medium text-emerald-800">
+                ✓ {saveSuccessMessage}
+              </p>
+            </div>
+          )}
 
           {/* Validation Error */}
           {validationError && (
@@ -1188,6 +1505,92 @@ export default function CreateEventSeatConfigurationPage() {
           </div>
         </div>
 
+        {/* Card 2: Ticketing Sales Settings */}
+        <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl shadow-sm overflow-hidden flex flex-col">
+          <div className="p-6 border-b border-[#bcc9c6]/30 bg-[#f9f9ff]">
+            <h2 className="text-base font-bold text-[#141b2b]">
+              Ticketing Settings
+            </h2>
+
+            <p className="text-xs text-[#565e74] mt-1">
+              Sales windows, maximum tickets allowed per customer, and
+              purchase rules.
+            </p>
+          </div>
+
+          <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-5">
+            {/* Sales Start Date */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-semibold text-[#141b2b]">
+                Sales Start Date{" "}
+                <span className="text-[#ba1a1a]">*</span>
+              </label>
+
+              <input
+                type="date"
+                required
+                min={todayDate}
+                max={dateTime?.eventDate || undefined}
+                value={ticketSalesSettings.salesStartDate}
+                onChange={(e) =>
+                  handleSalesSettingChange(
+                    "salesStartDate",
+                    e.target.value
+                  )
+                }
+                className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg px-4 py-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+              />
+            </div>
+
+            {/* Sales End Date */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-semibold text-[#141b2b]">
+                Sales End Date{" "}
+                <span className="text-[#ba1a1a]">*</span>
+              </label>
+
+              <input
+                type="date"
+                required
+                min={ticketSalesSettings.salesStartDate || todayDate}
+                max={dateTime?.eventDate || undefined}
+                value={ticketSalesSettings.salesEndDate}
+                onChange={(e) =>
+                  handleSalesSettingChange(
+                    "salesEndDate",
+                    e.target.value
+                  )
+                }
+                className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg px-4 py-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+              />
+            </div>
+
+            {/* Maximum Tickets */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-semibold text-[#141b2b]">
+                Max Tickets Per Order{" "}
+                <span className="text-[#ba1a1a]">*</span>
+              </label>
+
+              <input
+                type="number"
+                required
+                min={1}
+                max={MAX_TICKETS_PER_ORDER}
+                step={1}
+                value={ticketSalesSettings.maxTicketsPerBooking}
+                onChange={(e) =>
+                  handleSalesSettingChange(
+                    "maxTicketsPerBooking",
+                    e.target.value
+                  )
+                }
+                className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg px-4 py-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+              />
+            </div>
+          </div>
+        </div>
+
         <PayoutBankAccountCard />
       </div>
 
@@ -1195,6 +1598,13 @@ export default function CreateEventSeatConfigurationPage() {
       <EventCreationFooter
         onBack={handleBack}
         onContinue={handleContinue}
+        continueLabel={
+          isEditMode
+            ? isSavingLayout
+              ? "Saving..."
+              : "Save & Continue"
+            : undefined
+        }
       />
 
       {/* Add Category Modal */}
@@ -1444,7 +1854,7 @@ export default function CreateEventSeatConfigurationPage() {
 
                   <input
                     type="text"
-                    value={editForm.price.replace(
+                    value={String(editForm.price ?? "").replace(
                       "₹",
                       ""
                     )}

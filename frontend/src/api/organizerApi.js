@@ -56,3 +56,68 @@ export const getOrganizerProfile = async () => {
 
     return response.data;
 };
+
+// Get events created by the authenticated organizer.
+export const getOrganizerEvents = async ({
+    page = 1,
+    limit = 10,
+    status = "",
+    search = "",
+} = {}) => {
+    const response = await apiClient.get("/organizers/events", {
+        params: {
+            page,
+            limit,
+            ...(status ? { status } : {}),
+            ...(search.trim() ? { search: search.trim() } : {}),
+        },
+    });
+
+    return response.data;
+};
+
+
+export const getOrganizerEventById = async (eventId) => {
+    const response = await apiClient.get(`/organizers/events/${eventId}`);
+
+    return response.data;
+};
+
+// Update an existing draft event for the authenticated organizer.
+export const updateOrganizerEvent = async (eventId, eventData) => {
+    const response = await apiClient.put(
+        `/organizers/events/${eventId}`,
+        eventData
+    );
+
+    return response.data;
+};
+
+// Update the reserved seat layout for an existing draft event.
+export const updateOrganizerSeatLayout = async (eventId, seatLayoutData) => {
+    const response = await apiClient.put(
+        `/organizers/events/${eventId}/seat-layout`,
+        seatLayoutData
+    );
+
+    return response.data;
+};
+
+// Delete a draft event for the authenticated organizer.
+export const deleteOrganizerEvent = async (eventId) => {
+    const response = await apiClient.delete(
+        `/organizers/events/${eventId}`
+    );
+
+    return response.data;
+};
+
+
+// Publish a draft event for the authenticated organizer.
+export const publishOrganizerEvent = async (eventId) => {
+    const response = await apiClient.patch(
+        `/organizers/events/${eventId}/publish`
+    );
+
+    return response.data;
+};

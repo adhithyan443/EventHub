@@ -125,6 +125,21 @@ func (r *EventSettingRepository) Update(
 	return nil
 }
 
+func (r *EventSettingRepository) DeleteByEventID(eventID uuid.UUID) error {
+	result := r.db.Where("event_id = ?", eventID).Delete(&models.EventSettingModel{})
+	if result.Error != nil {
+		r.logger.Error(
+			"event_setting_delete_failed",
+			"event_id", eventID,
+			"error", result.Error,
+		)
+		return result.Error
+	}
+
+	r.logger.Info("event_setting_deleted", "event_id", eventID)
+	return nil
+}
+
 func toEventSettingModel(
 	setting *domain.EventSetting,
 ) *models.EventSettingModel {

@@ -25,4 +25,5 @@ type Category struct {
 
 type CategoryRepository interface {
 	FindActive() ([]*Category, error)
+	FindByID(id uuid.UUID) (*Category, error)
 }

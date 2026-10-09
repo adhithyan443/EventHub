@@ -11,7 +11,7 @@ type EventModel struct {
 
 	OrganizerID uuid.UUID  `gorm:"type:uuid;not null;index"`
 	CategoryID  uuid.UUID  `gorm:"type:uuid;not null;index"`
-	VenueID     *uuid.UUID `gorm:"index"`
+	VenueID     *uuid.UUID `gorm:"type:uuid;index"`
 
 	EventType string `gorm:"type:varchar(20);not null;index"`
 	OnlineURL string `gorm:"type:varchar(500)"`

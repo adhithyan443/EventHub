@@ -13,11 +13,22 @@ import {
   isOnlineEvent,
   isPhysicalEvent,
   isHybridEvent,
+  getEventDetailsRoute,
 } from "../../../constants/eventConstants";
 
-import { createOrganizerEvent } from "../../../api/organizerApi";
+import {
+  createOrganizerEvent,
+  updateOrganizerEvent,
+} from "../../../api/organizerApi";
 
 import imgDefaultBanner from "../../../assets/organizer/0b2568d2a1321299cd93ab73936efb2e8bc467fe.png";
+
+const isUUID = (str) =>
+  typeof str === "string" &&
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    str
+  );
+
 
 const VALID_VISIBILITIES = ["PUBLIC", "PRIVATE"];
 
@@ -80,6 +91,7 @@ const validateEventForPublish = ({
   ticketTypes,
   seatingConfig,
   ticketSalesSettings,
+  isEditMode = false,
 }) => {
   const isOnline = isOnlineEvent(locationType);
   const isPhysical = isPhysicalEvent(locationType);
@@ -105,8 +117,14 @@ const validateEventForPublish = ({
     return "Event language is required.";
   }
 
-  if (!basicInformation.bannerFile) {
-    return "Please select an event banner before publishing.";
+  const hasBanner = isEditMode
+    ? Boolean(basicInformation.bannerFile || basicInformation.banner)
+    : Boolean(basicInformation.bannerFile);
+
+  if (!hasBanner) {
+    return isEditMode
+      ? "Please select an event banner before saving changes."
+      : "Please select an event banner before publishing.";
   }
 
   // --------------------------------------------------
@@ -591,6 +609,13 @@ export default function CreateEventReviewPublishPage() {
     (state) => state.resetForm
   );
 
+  const isEditMode = useEventCreationStore(
+    (state) => state.isEditMode
+  );
+  const editingEventId = useEventCreationStore(
+    (state) => state.editingEventId
+  );
+
   const [publishing, setPublishing] =
     useState(false);
 
@@ -599,6 +624,9 @@ export default function CreateEventReviewPublishPage() {
 
   const [showSuccessModal, setShowSuccessModal] =
     useState(false);
+
+  const [createdEventId, setCreatedEventId] =
+    useState(null);
 
   const isOnline =
     isOnlineEvent(locationType);
@@ -672,6 +700,7 @@ export default function CreateEventReviewPublishPage() {
         ticketTypes,
         seatingConfig,
         ticketSalesSettings,
+        isEditMode,
       });
 
     if (validationError) {
@@ -752,30 +781,87 @@ export default function CreateEventReviewPublishPage() {
         age_restriction:
           ageRestriction,
 
+        visibility:
+          eventDetails.visibility || "PUBLIC",
+
+        highlights:
+          eventDetails.highlights?.trim() || "",
+
+        rules:
+          eventDetails.rules?.trim() || "",
+
+        attendee_information:
+          eventDetails.attendeeInformation?.trim() || "",
+
+        contact: {
+          name: eventDetails.contactInformation?.name?.trim() || "",
+          phone: eventDetails.contactInformation?.phone?.trim() || "",
+          email: eventDetails.contactInformation?.email?.trim() || "",
+        },
+
         event_date:
           dateTime.eventDate,
 
         start_time:
-          dateTime.startTime,
+          dateTime.isAllDay ? "" : dateTime.startTime,
 
         end_time:
-          dateTime.endTime,
+          dateTime.isAllDay ? "" : dateTime.endTime,
+
+        is_all_day:
+          Boolean(dateTime.isAllDay),
+
+        sales_start_date:
+          ticketSalesSettings.salesStartDate || "",
+
+        sales_end_date:
+          ticketSalesSettings.salesEndDate || "",
 
         seat_layout_type:
           showSeatedLayout
             ? "SEATED"
             : "GENERAL",
 
+        ticket_types: showSeatedLayout
+          ? []
+          : ticketTypes.map((ticket) => ({
+            ...(isEditMode && isUUID(ticket.id) ? { id: ticket.id } : {}),
+            name: ticket.name.trim(),
+            price: Number(ticket.price),
+            capacity: Number(ticket.capacity),
+            description: ticket.description?.trim() || "",
+          })),
+
+        ...(!isEditMode &&
+          showSeatedLayout && {
+            seat_layout: {
+              layout_name: "Main Seating Layout",
+              sections: seatingCategories.map((category) => ({
+                name: category.name.trim(),
+                price: Number(
+                  String(category.price ?? "").replace(/[₹,\s]/g, "")
+                ),
+                rows: category.rows.map((row) => ({
+                  row_name: row.rowLetter?.trim() || row.name?.trim(),
+                  seats: row.seats.length,
+                })),
+              })),
+            },
+          }),
+
         booking_limit_per_user:
           Number(
             ticketSalesSettings.maxTicketsPerBooking
           ),
 
-        cancellation_allowed:
-          cancellationAllowed,
-
-        cancellation_deadline_hours:
-          cancellationDeadlineHours,
+        cancellation_allowed: cancellationAllowed,
+        cancellation_deadline_hours: cancellationDeadlineHours,
+        refund_policy: cancellationAllowed
+          ? eventDetails.cancellationPolicy.refundPolicy
+          : "",
+        refund_percentage: cancellationAllowed
+          ? Number(eventDetails.cancellationPolicy.refundPercentage || 0)
+          : 0,
 
         venue: isOnline
           ? {
@@ -821,6 +907,33 @@ export default function CreateEventReviewPublishPage() {
           },
       };
 
+      if (isEditMode && editingEventId) {
+        if (basicInformation.bannerFile) {
+          const formData = new FormData();
+          formData.append(
+            "event",
+            JSON.stringify(eventPayload)
+          );
+          formData.append(
+            "banner",
+            basicInformation.bannerFile
+          );
+
+          await updateOrganizerEvent(
+            editingEventId,
+            formData
+          );
+        } else {
+          await updateOrganizerEvent(
+            editingEventId,
+            eventPayload
+          );
+        }
+
+        setShowSuccessModal(true);
+        return;
+      }
+
       const formData = new FormData();
 
       formData.append(
@@ -835,21 +948,39 @@ export default function CreateEventReviewPublishPage() {
         );
       }
 
-      await createOrganizerEvent(
+      const response = await createOrganizerEvent(
         formData
       );
+
+      const newEventId =
+        response?.data?.event?.ID ||
+        response?.data?.event?.id ||
+        response?.data?.Event?.ID ||
+        response?.data?.Event?.id ||
+        response?.data?.ID ||
+        response?.data?.id ||
+        response?.event?.ID ||
+        response?.event?.id ||
+        response?.ID ||
+        response?.id;
+
+      if (newEventId) {
+        setCreatedEventId(newEventId);
+      }
 
       setShowSuccessModal(true);
     } catch (err) {
       console.error(
-        "Failed to create event:",
+        isEditMode ? "Failed to update event:" : "Failed to create event:",
         err
       );
 
       const errMsg =
         err.response?.data?.message ||
         err.message ||
-        "Failed to publish event. Please try again.";
+        (isEditMode
+          ? "Failed to update event. Please try again."
+          : "Failed to save event. Please try again.");
 
       setPublishError(errMsg);
     } finally {
@@ -858,12 +989,16 @@ export default function CreateEventReviewPublishPage() {
   };
 
   const handleReturnToDashboard = () => {
+    const targetEventId = isEditMode ? editingEventId : createdEventId;
+
     setShowSuccessModal(false);
     resetForm();
 
-    navigate(
-      ORGANIZER_ROUTES.DASHBOARD
-    );
+    if (targetEventId) {
+      navigate(getEventDetailsRoute(targetEventId));
+    } else {
+      navigate(ORGANIZER_ROUTES.MY_EVENTS);
+    }
   };
 
   return (
@@ -872,14 +1007,21 @@ export default function CreateEventReviewPublishPage() {
         <EventCreationStepper currentStep={5} />
 
         <div className="flex flex-col gap-1">
-          <h1 className="text-xl sm:text-2xl font-bold text-[#141b2b]">
-            Review & Publish
-          </h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl sm:text-2xl font-bold text-[#141b2b]">
+              {isEditMode ? "Review & Save Changes" : "Review & Publish"}
+            </h1>
+            {isEditMode && (
+              <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                Edit Mode
+              </span>
+            )}
+          </div>
 
           <p className="text-xs text-[#565e74]">
-            Review all event information,
-            ticket configurations, and location
-            settings before publishing live.
+            {isEditMode
+              ? "Review your changes before updating this draft event."
+              : "Review all event information, ticket configurations, and location settings before publishing live."}
           </p>
         </div>
 
@@ -1351,8 +1493,12 @@ export default function CreateEventReviewPublishPage() {
         onContinue={handlePublish}
         continueLabel={
           publishing
-            ? "Publishing Event..."
-            : "🚀 Publish Event"
+            ? isEditMode
+              ? "Saving Changes..."
+              : "Publishing Event..."
+            : isEditMode
+              ? "💾 Save Changes"
+              : "🚀 Publish Event"
         }
       />
 
@@ -1360,21 +1506,23 @@ export default function CreateEventReviewPublishPage() {
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-2xl border border-[#bcc9c6] flex flex-col items-center text-center gap-5 animate-scale-up">
             <div className="size-16 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-3xl">
-              🎉
+              {isEditMode ? "✅" : "🎉"}
             </div>
 
             <div className="flex flex-col gap-2">
               <h3 className="text-xl font-bold text-[#141b2b]">
-                Event Published Successfully!
+                {isEditMode
+                  ? "Event Updated Successfully!"
+                  : "Event Saved Successfully!"}
               </h3>
 
               <p className="text-xs text-[#565e74] leading-relaxed">
                 <strong>
                   {basicInformation.title}
                 </strong>{" "}
-                has been listed and is ready
-                for attendee bookings and
-                ticket purchases.
+                {isEditMode
+                  ? "has been updated successfully. Your changes are now saved."
+                  : "has been saved as a draft. Review the event details and publish it when you’re ready."}
               </p>
             </div>
 
@@ -1415,7 +1563,7 @@ export default function CreateEventReviewPublishPage() {
               onClick={handleReturnToDashboard}
               className="w-full py-3 bg-[#00685f] hover:bg-[#005550] text-white text-sm font-semibold rounded-xl shadow-sm transition-colors cursor-pointer"
             >
-              Go to Organizer Dashboard
+              View Event Details
             </button>
           </div>
         </div>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -110,3 +111,39 @@ func (s *S3Service) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (s *S3Service) GetPresignedURL(ctx context.Context, key string) (string, error) {
+	if key == "" {
+		return "", nil
+	}
+
+	presignClient := s3.NewPresignClient(s.client)
+
+	result, err := presignClient.PresignGetObject(
+		ctx,
+		&s3.GetObjectInput{
+			Bucket: aws.String(s.bucket),
+			Key:    aws.String(key),
+		},
+		func(options *s3.PresignOptions) {
+			options.Expires = 15 * time.Minute
+		},
+	)
+	if err != nil {
+		s.logger.Error(
+			"s3_object_presign_failed",
+			"bucket", s.bucket,
+			"key", key,
+			"error", err,
+		)
+
+		return "", fmt.Errorf("failed to generate S3 object URL: %w", err)
+	}
+
+	s.logger.Info(
+		"s3_object_presigned",
+		"bucket", s.bucket,
+		"key", key,
+	)
+
+	return result.URL, nil
+}

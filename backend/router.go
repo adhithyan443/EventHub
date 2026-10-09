@@ -26,6 +26,7 @@ func setupRouter(
 
 	// Global middleware.
 	router.Use(
+		
 		cors.New(cors.Config{
 			AllowOrigins: []string{
 				"http://localhost:5173",
@@ -67,6 +68,7 @@ func setupRouter(
 
 	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
 	registerCategoryRoutes(router, categoryHandler)
+	registerPublicEventRoutes(router, eventHandler)
 
 	return router
 }
@@ -171,7 +173,10 @@ func registerOrganizerRoutes(
 	api := router.Group("/api/v1")
 
 	organizer := api.Group("/organizers")
-	organizer.Use(middleware.Auth(jwtService))
+	organizer.Use(
+		middleware.Auth(jwtService),
+		// middleware.RequireRole("ORGANIZER"),
+	)
 
 	// Customer organizer-application endpoints.
 	organizer.POST(
@@ -201,8 +206,33 @@ func registerOrganizerRoutes(
 	)
 
 	organizer.PUT(
+		"/events/:id/seat-layout",
+		seatLayoutHandler.UpdateSeatLayout,
+	)
+
+	organizer.PUT(
 		"/events/:id",
 		eventHandler.UpdateEvent,
+	)
+
+	organizer.DELETE(
+		"/events/:id",
+		eventHandler.DeleteEvent,
+	)
+
+	organizer.GET(
+		"/events",
+		eventHandler.GetMyEvents,
+	)
+
+	organizer.GET(
+		"/events/:id",
+		eventHandler.GetEventDetails,
+	)
+
+	organizer.PATCH(
+		"/events/:id/publish",
+		eventHandler.PublishEvent,
 	)
 }
 
@@ -249,5 +279,22 @@ func registerCategoryRoutes(
 	api.GET(
 		"/categories",
 		categoryHandler.GetCategories,
+	)
+}
+
+func registerPublicEventRoutes(
+	router *gin.Engine,
+	eventHandler *handler.EventHandler,
+) {
+	api := router.Group("/api/v1")
+
+	api.GET(
+		"/events",
+		eventHandler.ListPublicEvents,
+	)
+
+	api.GET(
+		"/events/:eventId",
+		eventHandler.GetPublicEventDetails,
 	)
 }

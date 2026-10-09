@@ -7,6 +7,9 @@ import OAuthCallbackPage from "../pages/auth/OAuthCallbackPage";
 import ForgotPasswordPage from "../pages/auth/ForgotPasswordPage";
 import ResetPasswordPage from "../pages/auth/ResetPasswordPage";
 import DiscoverEventsPage from "../pages/events/DiscoverEventsPage";
+import CustomerEventDetailsPage from "../pages/events/CustomerEventDetailsPage";
+import SeatSelectionPage from "../pages/events/SeatSelectionPage";
+import CheckoutPage from "../pages/events/CheckoutPage";
 import ProfilePage from "../pages/profile/ProfilePage";
 import BecomeOrganizerPage from "../pages/organizer/BecomeOrganizerPage";
 import OrganizerStatusPage from "../pages/organizer/OrganizerStatusPage";
@@ -31,6 +34,9 @@ import CreateEventSeatConfigurationPage from "../pages/organizer/create-event/Cr
 import CreateEventReviewPublishPage from "../pages/organizer/create-event/CreateEventReviewPublishPage";
 import OrganizerPlaceholderPage from "../pages/organizer/OrganizerPlaceholderPage";
 import OrganizerProfilePage from "../pages/organizer/OrganizerProfilePage";
+import MyEventsPage from "../pages/organizer/MyEventsPage";
+import EventDetailsPage from "../pages/organizer/EventDetailsPage";
+import EditEventPage from "../pages/organizer/EditEventPage";
 
 export default function AppRoutes() {
     return (
@@ -57,6 +63,14 @@ export default function AppRoutes() {
             <Route path="/events" element={<DiscoverEventsPage />} />
             <Route path="/users" element={<DiscoverEventsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+
+            {/* Customer Event Details → Seat Selection → Checkout Flow */}
+            <Route path="/events/:eventId" element={<CustomerEventDetailsPage />} />
+            <Route path="/events/:eventId/seats" element={<SeatSelectionPage />} />
+            <Route path="/events/:eventId/select-seats" element={<SeatSelectionPage />} />
+            <Route path="/events/:eventId/checkout" element={<CheckoutPage />} />
+            <Route path="/events/:eventId/payment" element={<CheckoutPage />} />
+            <Route path="/checkout" element={<Navigate to="/events/sunfield/checkout" replace />} />
 
             {/* Become an Organizer Workflow */}
             <Route path="/become-organizer" element={<BecomeOrganizerPage />} />
@@ -93,8 +107,10 @@ export default function AppRoutes() {
                     <Route path="events/create/seat-configuration" element={<CreateEventSeatConfigurationPage />} />
                     <Route path="events/create/review" element={<CreateEventReviewPublishPage />} />
 
-                    {/* Organizer Placeholders */}
-                    <Route path="events" element={<OrganizerPlaceholderPage title="My Events" />} />
+                    {/* Organizer Events Management */}
+                    <Route path="events" element={<MyEventsPage />} />
+                    <Route path="events/:eventId" element={<EventDetailsPage />} />
+                    <Route path="events/:eventId/edit" element={<EditEventPage />} />
                     <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
                     <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
                     <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />

@@ -5,6 +5,9 @@ export default function PayoutBankAccountCard({ className = "" }) {
 
 
   const bankAccount = useOrganizerStore((state) => state.profile?.bank_account);
+  const hasBankAccount = Boolean(
+    bankAccount && (bankAccount.bank_name || bankAccount.account_number_masked)
+  );
 
   return (
     <div
@@ -24,16 +27,24 @@ export default function PayoutBankAccountCard({ className = "" }) {
           </div>
           <div className="flex flex-col">
             <span className="font-bold text-sm text-[#141b2b]">
-              {bankAccount.bank_name}
+              {hasBankAccount ? bankAccount.bank_name : "No Payout Account Linked"}
             </span>
             <span className="text-xs text-[#565e74]">
-              {bankAccount.account_holder_name || "-"} &bull; {bankAccount.account_number_masked || "-"}
+              {hasBankAccount
+                ? `${bankAccount.account_holder_name || "-"} • ${bankAccount.account_number_masked || "-"}`
+                : "Payout account details can be configured in your organizer profile."}
             </span>
           </div>
         </div>
 
-        <span className="text-xs font-semibold text-[#00685f] bg-[#00685f]/10 px-3 py-1.5 rounded-full">
-          Primary Account
+        <span
+          className={`text-xs font-semibold px-3 py-1.5 rounded-full ${
+            hasBankAccount
+              ? "text-[#00685f] bg-[#00685f]/10"
+              : "text-[#565e74] bg-[#f1f3ff] border border-[#bcc9c6]/40"
+          }`}
+        >
+          {hasBankAccount ? "Primary Account" : "Not Configured"}
         </span>
       </div>
     </div>

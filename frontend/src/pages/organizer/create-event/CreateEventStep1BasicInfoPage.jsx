@@ -11,6 +11,7 @@ import { getCategories } from "../../../api/organizerApi";
 import {
   LOCATION_TYPES,
   ORGANIZER_ROUTES,
+  TICKET_MODES,
   isPhysicalEvent,
   isOnlineEvent,
   isHybridEvent,
@@ -19,6 +20,9 @@ import {
 export default function CreateEventStep1BasicInfoPage() {
   const navigate = useNavigate();
 
+  const isEditMode = useEventCreationStore((state) => state.isEditMode);
+  const ticketMode = useEventCreationStore((state) => state.ticketMode);
+  const isSeatedLocked = isEditMode && ticketMode === TICKET_MODES.SEATED;
   const basicInformation = useEventCreationStore(
     (state) => state.basicInformation
   );
@@ -140,8 +144,11 @@ export default function CreateEventStep1BasicInfoPage() {
       return;
     }
 
-    // Revoke previous preview URL if present
-    if (basicInformation.bannerPreviewUrl) {
+    // Revoke previous blob preview URL if present
+    if (
+      basicInformation.bannerPreviewUrl &&
+      basicInformation.bannerPreviewUrl.startsWith("blob:")
+    ) {
       URL.revokeObjectURL(basicInformation.bannerPreviewUrl);
     }
 
@@ -150,10 +157,30 @@ export default function CreateEventStep1BasicInfoPage() {
     updateBasicInformation({
       bannerFile: file,
       bannerPreviewUrl: previewUrl,
-      banner: file.name,
+      ...(isEditMode ? {} : { banner: file.name }),
     });
 
     event.target.value = "";
+  };
+
+  const handleRevertBanner = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (
+      basicInformation.bannerPreviewUrl &&
+      basicInformation.bannerPreviewUrl.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(basicInformation.bannerPreviewUrl);
+    }
+
+    updateBasicInformation({
+      bannerFile: null,
+      bannerPreviewUrl:
+        basicInformation.originalBannerPreviewUrl ||
+        basicInformation.banner ||
+        "",
+    });
   };
 
   const handleCategoryChange = (event) => {
@@ -407,7 +434,6 @@ export default function CreateEventStep1BasicInfoPage() {
             </div>
 
             {/* Banner Upload Box */}
-            {/* Banner Upload Box */}
             <div className="flex flex-col gap-2">
               <label className="text-[13px] font-semibold text-[#141b2b]">
                 Event Banner Image
@@ -426,12 +452,26 @@ export default function CreateEventStep1BasicInfoPage() {
                     <img
                       src={bannerPreview}
                       alt="Event banner preview"
-                      className="w-full max-h-64 object-cover rounded-lg"
+                      className="w-full max-h-64 object-cover rounded-lg shadow-2xs"
                     />
 
-                    <span className="text-xs font-semibold text-[#00685f] mt-3">
-                      Click to change banner
-                    </span>
+                    <div className="flex flex-wrap items-center justify-center gap-3 mt-3">
+                      <span className="text-xs font-semibold text-[#00685f]">
+                        {isEditMode && basicInformation.bannerFile
+                          ? "New banner selected (click to change)"
+                          : "Click to change banner"}
+                      </span>
+
+                      {isEditMode && basicInformation.bannerFile && (
+                        <button
+                          type="button"
+                          onClick={handleRevertBanner}
+                          className="text-xs font-semibold text-amber-700 hover:text-amber-800 underline bg-transparent cursor-pointer"
+                        >
+                          Revert to original banner
+                        </button>
+                      )}
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -516,13 +556,24 @@ export default function CreateEventStep1BasicInfoPage() {
                 {/* Online */}
                 <button
                   type="button"
-                  onClick={() =>
-                    setLocationType(LOCATION_TYPES.ONLINE)
+                  onClick={
+                    isSeatedLocked
+                      ? undefined
+                      : () => setLocationType(LOCATION_TYPES.ONLINE)
                   }
-                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold transition-all cursor-pointer ${locationType === LOCATION_TYPES.ONLINE
-                    ? "bg-[#00685f]/15 border-2 border-[#00685f] text-[#00685f]"
-                    : "bg-white border border-[#bcc9c6] text-[#141b2b] hover:bg-gray-50"
-                    }`}
+                  disabled={isSeatedLocked}
+                  title={
+                    isSeatedLocked
+                      ? "Reserved seating events cannot be changed to online-only events."
+                      : undefined
+                  }
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full text-xs font-semibold transition-all ${
+                    isSeatedLocked
+                      ? "bg-gray-100 border border-gray-200 text-[#565e74]/50 cursor-not-allowed opacity-50"
+                      : locationType === LOCATION_TYPES.ONLINE
+                        ? "bg-[#00685f]/15 border-2 border-[#00685f] text-[#00685f] cursor-pointer"
+                        : "bg-white border border-[#bcc9c6] text-[#141b2b] hover:bg-gray-50 cursor-pointer"
+                  }`}
                 >
                   <svg
                     className="size-4"
@@ -568,6 +619,12 @@ export default function CreateEventStep1BasicInfoPage() {
 
                   <span>Hybrid Event</span>
                 </button>
+
+                {isSeatedLocked && (
+                  <p className="w-full text-[11px] text-[#565e74] mt-1">
+                    ℹ️ Reserved seating events require a physical venue and cannot be changed to online-only events.
+                  </p>
+                )}
               </div>
 
               {/* Physical Event */}

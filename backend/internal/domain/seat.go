@@ -23,5 +23,9 @@ type Seat struct {
 
 type SeatRepository interface {
 	Create(seat *Seat) error
+	Update(seat *Seat) error
+	Delete(id uuid.UUID) error
+	DeleteByRowID(rowID uuid.UUID) error
 	FindByRowID(rowID uuid.UUID) ([]Seat, error)
+	CountBookedByLayoutID(layoutID uuid.UUID) (int64, error)
 }

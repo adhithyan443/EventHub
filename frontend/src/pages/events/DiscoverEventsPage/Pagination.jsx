@@ -1,5 +1,8 @@
 export default function Pagination({ currentPage, totalPages, onPageChange }) {
-  const pages = [1, 2, 3, "...", totalPages];
+  const pages =
+    totalPages <= 3
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : [1, 2, 3, "...", totalPages];
 
   return (
     <div className="flex items-center justify-center gap-2 pt-4">
@@ -17,11 +20,10 @@ export default function Pagination({ currentPage, totalPages, onPageChange }) {
           <button
             key={page}
             onClick={() => onPageChange(page)}
-            className={`h-10 w-10 flex items-center justify-center rounded-lg border text-sm ${
-              currentPage === page
+            className={`h-10 w-10 flex items-center justify-center rounded-lg border text-sm ${currentPage === page
                 ? "border-primary bg-primary text-white"
                 : "border-border text-ink/70 hover:bg-background"
-            }`}
+              }`}
           >
             {page}
           </button>

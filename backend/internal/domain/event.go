@@ -7,7 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrEventNotFound = errors.New("event not found")
+var (
+	ErrEventNotFound  = errors.New("event not found")
+	ErrEventNotPublic = errors.New("event is not publicly available")
+)
 
 const (
 	EventStatusDraft     = "DRAFT"
@@ -81,22 +84,38 @@ type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)
 	Update(event *Event) error
+	Delete(id uuid.UUID) error
+
+	FindByOrganizerID(
+		organizerID uuid.UUID,
+		page int,
+		limit int,
+		status string,
+		search string,
+	) ([]*OrganizerEvent, int64, error)
+
+	FindPublicEvents(
+		filter PublicEventFilter,
+	) ([]*PublicEvent, int64, error)
 }
 
 type EventScheduleRepository interface {
 	Create(schedule *EventSchedule) error
 	FindByEventID(eventID uuid.UUID) (*EventSchedule, error)
 	Update(schedule *EventSchedule) error
+	DeleteByEventID(eventID uuid.UUID) error
 }
 
 type EventSettingRepository interface {
 	Create(setting *EventSetting) error
 	FindByEventID(eventID uuid.UUID) (*EventSetting, error)
 	Update(setting *EventSetting) error
+	DeleteByEventID(eventID uuid.UUID) error
 }
 
 type EventCancellationRepository interface {
 	Create(cancellation *EventCancellation) error
 	FindByEventID(eventID uuid.UUID) (*EventCancellation, error)
 	Update(cancellation *EventCancellation) error
+	DeleteByEventID(eventID uuid.UUID) error
 }

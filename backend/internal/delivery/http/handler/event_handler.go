@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,9 @@ func NewEventHandler(
 	eventUsecase *eventUsecase.EventUsecase,
 	logger *slog.Logger,
 ) *EventHandler {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &EventHandler{
 		eventUsecase: eventUsecase,
 		logger:       logger,
@@ -615,21 +619,129 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 	}
 
 	var req UpdateEventRequest
+	var bannerReader io.Reader
+	var bannerContentType string
+	var bannerSize int64
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		h.logger.Warn(
-			"event_update_invalid_request",
-			"event_id", eventID,
-			"user_id", userID,
-			"error", err,
-		)
+	isMultipart := strings.HasPrefix(c.ContentType(), "multipart/form-data") ||
+		strings.HasPrefix(c.Request.Header.Get("Content-Type"), "multipart/form-data")
 
-		c.Error(
-			appErrors.NewValidationError(
-				"invalid event data",
-			),
-		)
-		return
+	if isMultipart {
+		eventJSON := c.PostForm("event")
+		if eventJSON == "" {
+			h.logger.Warn(
+				"event_update_missing_event_json",
+				"event_id", eventID,
+				"user_id", userID,
+			)
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+			return
+		}
+
+		if err := json.Unmarshal([]byte(eventJSON), &req); err != nil {
+			h.logger.Warn(
+				"event_update_invalid_event_json",
+				"event_id", eventID,
+				"user_id", userID,
+				"error", err,
+			)
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+			return
+		}
+
+		bannerHeader, err := c.FormFile("banner")
+		if err == nil && bannerHeader != nil {
+			if bannerHeader.Size > maxEventBannerSize {
+				h.logger.Warn(
+					"event_banner_validation_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"file_size", bannerHeader.Size,
+					"error", "file exceeds maximum size of 5 MB",
+				)
+				c.Error(
+					appErrors.NewValidationError(
+						"banner image must not exceed 5 MB",
+					),
+				)
+				return
+			}
+
+			bannerFile, err := bannerHeader.Open()
+			if err != nil {
+				h.logger.Error(
+					"event_banner_open_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+				c.Error(err)
+				return
+			}
+			defer bannerFile.Close()
+
+			contentType, err := detectBannerContentType(bannerFile)
+			if err != nil {
+				h.logger.Warn(
+					"event_banner_validation_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+				c.Error(
+					appErrors.NewValidationError(
+						"invalid banner image",
+					),
+				)
+				return
+			}
+
+			if contentType != "image/jpeg" &&
+				contentType != "image/png" &&
+				contentType != "image/webp" {
+				h.logger.Warn(
+					"event_banner_validation_failed",
+					"user_id", userID,
+					"event_id", eventID,
+					"content_type", contentType,
+					"error", "unsupported content type",
+				)
+				c.Error(
+					appErrors.NewValidationError(
+						"only JPEG, PNG, and WebP images are allowed",
+					),
+				)
+				return
+			}
+
+			bannerReader = bannerFile
+			bannerContentType = contentType
+			bannerSize = bannerHeader.Size
+		}
+	} else {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			h.logger.Warn(
+				"event_update_invalid_request",
+				"event_id", eventID,
+				"user_id", userID,
+				"error", err,
+			)
+
+			c.Error(
+				appErrors.NewValidationError(
+					"invalid event data",
+				),
+			)
+			return
+		}
 	}
 
 	eventDate, err := parseDate(req.EventDate)
@@ -787,6 +899,10 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 
 				return ticketTypes
 			}(),
+
+			BannerReader:      bannerReader,
+			BannerContentType: bannerContentType,
+			BannerSize:        bannerSize,
 		},
 	)
 	if err != nil {
@@ -860,6 +976,16 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 
 		case errors.Is(
 			err,
+			eventUsecase.ErrTicketingModeImmutable,
+		):
+			c.Error(
+				appErrors.NewValidationError(
+					"ticketing mode cannot be changed after event creation",
+				),
+			)
+
+		case errors.Is(
+			err,
 			domain.ErrEventNotFound,
 		):
 			c.Error(
@@ -922,6 +1048,245 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 			"contact":      output.Contact,
 			"ticket_types": output.TicketTypes,
 		},
+	})
+}
+
+func (h *EventHandler) GetMyEvents(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "unauthorized",
+		})
+		return
+	}
+
+	parsedUserID, ok := userID.(uuid.UUID)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"success": false,
+			"message": "unauthorized",
+		})
+		return
+	}
+
+	page := 1
+	limit := 10
+
+	if value := c.Query("page"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid page",
+			})
+			return
+		}
+
+		page = parsed
+	}
+
+	if value := c.Query("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid limit",
+			})
+			return
+		}
+
+		limit = parsed
+	}
+
+	status := strings.TrimSpace(c.Query("status"))
+	search := strings.TrimSpace(c.Query("search"))
+
+	output, err := h.eventUsecase.GetMyEvents(
+		c.Request.Context(),
+		parsedUserID,
+		page,
+		limit,
+		status,
+		search,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "organizer access required",
+			})
+
+		default:
+			h.logger.Error(
+				"event_list_handler_failed",
+				"user_id", parsedUserID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to fetch events",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"events": output.Events,
+			"page":   output.Page,
+			"limit":  output.Limit,
+			"total":  output.Total,
+		},
+	})
+}
+
+func (h *EventHandler) GetEventDetails(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_details_invalid_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	output, err := h.eventUsecase.GetEventDetails(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to access this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, domain.ErrCategoryNotFound),
+			errors.Is(err, domain.ErrVenueNotFound),
+			errors.Is(err, domain.ErrSeatLayoutNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event related data not found",
+			})
+
+		default:
+			h.logger.Error(
+				"event_details_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to fetch event details",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    output,
+	})
+}
+
+func (h *EventHandler) DeleteEvent(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_delete_invalid_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	err = h.eventUsecase.DeleteEvent(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to delete this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, eventUsecase.ErrEventNotDeletable):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "only draft events can be deleted",
+			})
+
+		default:
+			h.logger.Error(
+				"event_delete_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to delete event",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Event deleted successfully",
 	})
 }
 
@@ -1009,4 +1374,242 @@ func parseTime(value string) (time.Time, error) {
 	}
 
 	return time.Time{}, err
+}
+
+func (h *EventHandler) PublishEvent(c *gin.Context) {
+
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_publish_invalid_event_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	err = h.eventUsecase.PublishEvent(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to publish this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, eventUsecase.ErrEventNotPublishable):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "event is not ready to be published",
+			})
+
+		default:
+			h.logger.Error(
+				"event_publish_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to publish event",
+			})
+		}
+
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Event published successfully",
+	})
+}
+
+func (h *EventHandler) ListPublicEvents(c *gin.Context) {
+	page := 1
+	limit := 12
+
+	if value := c.Query("page"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid page",
+			})
+			return
+		}
+
+		page = parsed
+	}
+
+	if value := c.Query("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid limit",
+			})
+			return
+		}
+
+		limit = parsed
+	}
+
+	filter := domain.PublicEventFilter{
+		Page:    page,
+		Limit:   limit,
+		Keyword: strings.TrimSpace(c.Query("keyword")),
+		City:    strings.TrimSpace(c.Query("city")),
+	}
+
+	if value := strings.TrimSpace(c.Query("category_id")); value != "" {
+		categoryID, err := uuid.Parse(value)
+		if err != nil {
+			h.logger.Warn(
+				"public_event_invalid_category_id",
+				"category_id", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid category id",
+			})
+			return
+		}
+
+		filter.CategoryID = &categoryID
+	}
+
+	if value := strings.TrimSpace(c.Query("date")); value != "" {
+		eventDate, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			h.logger.Warn(
+				"public_event_invalid_date",
+				"date", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid date",
+			})
+			return
+		}
+
+		filter.EventDate = &eventDate
+	}
+
+	output, err := h.eventUsecase.DiscoverEvents(
+		c.Request.Context(),
+		filter,
+	)
+
+	if err != nil {
+		h.logger.Error(
+			"public_event_handler_failed",
+			"page", page,
+			"limit", limit,
+			"error", err,
+		)
+
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "failed to fetch events",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"events": output.Events,
+			"page":   output.Page,
+			"limit":  output.Limit,
+			"total":  output.Total,
+		},
+	})
+}
+
+func (h *EventHandler) GetPublicEventDetails(c *gin.Context) {
+	rawID := c.Param("eventId")
+	if rawID == "" {
+		rawID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawID)
+	if err != nil {
+		h.logger.Warn(
+			"public_event_details_invalid_id",
+			"event_id", rawID,
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	output, err := h.eventUsecase.GetPublicEventDetails(
+		c.Request.Context(),
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrEventNotFound),
+			errors.Is(err, domain.ErrEventNotPublic):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		case errors.Is(err, domain.ErrCategoryNotFound),
+			errors.Is(err, domain.ErrVenueNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		default:
+			h.logger.Error(
+				"public_event_details_handler_failed",
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to fetch event details",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    output,
+	})
 }
