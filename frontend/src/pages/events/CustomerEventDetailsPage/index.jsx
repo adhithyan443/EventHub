@@ -467,7 +467,7 @@ export default function CustomerEventDetailsPage() {
           {/* Right Sidebar: Ticket Selection & Organizer */}
           <aside className="space-y-6">
             {/* Choose Your Ticket Card */}
-            <section className="sticky top-20 rounded-xl border border-[#bcc9c6] bg-white p-5 sm:p-6 shadow-xs">
+            <section className=" top-20 rounded-xl border border-[#bcc9c6] bg-white p-5 sm:p-6 shadow-xs">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="font-display text-lg font-bold text-ink">
                   Choose your ticket

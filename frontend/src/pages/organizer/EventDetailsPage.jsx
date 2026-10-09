@@ -574,7 +574,7 @@ export default function EventDetailsPage() {
             </button>
           )}
 
-          <button
+          {/* <button
             type="button"
             onClick={() => navigate("/events")}
             className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-medium px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
@@ -582,7 +582,7 @@ export default function EventDetailsPage() {
             <ExternalLinkIcon className="size-3.5 text-white" />
 
             <span>View Public Page</span>
-          </button>
+          </button> */}
         </div>
       </div>
 

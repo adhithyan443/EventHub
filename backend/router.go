@@ -26,6 +26,7 @@ func setupRouter(
 
 	// Global middleware.
 	router.Use(
+		
 		cors.New(cors.Config{
 			AllowOrigins: []string{
 				"http://localhost:5173",
