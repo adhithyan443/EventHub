@@ -35,3 +35,8 @@ export const getPublicEvents = async ({
 
     return response.data;
 };
+
+export const getPublicEventById = async (eventId) => {
+    const response = await apiClient.get(`/events/${eventId}`);
+    return response.data;
+};
