@@ -39,6 +39,7 @@ const initialData = {
 
   businessLogo: null,
   businessLogoPreview: "",
+  businessLogoMeta: null,
   businessLogoUrl: "",
 
   // Status & Submission metadata
@@ -109,25 +110,82 @@ const useOrganizerStore = create((set, get) => ({
   },
 
   setVerificationDocument: (doc) => {
+    const current = get().verificationDocument;
+    if (
+      current?.previewUrl &&
+      typeof current.previewUrl === "string" &&
+      current.previewUrl.startsWith("blob:") &&
+      current.previewUrl !== doc?.previewUrl
+    ) {
+      URL.revokeObjectURL(current.previewUrl);
+    }
     set({ verificationDocument: doc });
   },
 
   removeVerificationDocument: () => {
-    set({ verificationDocument: null });
+    const current = get().verificationDocument;
+    if (
+      current?.previewUrl &&
+      typeof current.previewUrl === "string" &&
+      current.previewUrl.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(current.previewUrl);
+    }
+    set({ verificationDocument: null, verificationDocumentUrl: "" });
   },
 
-  setBusinessLogo: (file, previewUrl) => {
+  setBusinessLogo: (file, previewUrl, meta = null) => {
+    const currentPreview = get().businessLogoPreview;
+    if (
+      currentPreview &&
+      typeof currentPreview === "string" &&
+      currentPreview.startsWith("blob:") &&
+      currentPreview !== previewUrl
+    ) {
+      URL.revokeObjectURL(currentPreview);
+    }
     set({
       businessLogo: file,
       businessLogoPreview: previewUrl,
+      businessLogoMeta:
+        meta ||
+        (file ? { name: file.name, size: "", isExisting: false } : null),
     });
   },
 
   removeBusinessLogo: () => {
+    const currentPreview = get().businessLogoPreview;
+    if (
+      currentPreview &&
+      typeof currentPreview === "string" &&
+      currentPreview.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(currentPreview);
+    }
     set({
       businessLogo: null,
       businessLogoPreview: "",
+      businessLogoMeta: null,
+      businessLogoUrl: "",
     });
+  },
+
+  cleanupObjectUrls: () => {
+    const state = get();
+    if (
+      state.verificationDocument?.previewUrl &&
+      typeof state.verificationDocument.previewUrl === "string" &&
+      state.verificationDocument.previewUrl.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(state.verificationDocument.previewUrl);
+    }
+    if (
+      state.businessLogoPreview &&
+      typeof state.businessLogoPreview === "string" &&
+      state.businessLogoPreview.startsWith("blob:")
+    ) {
+      URL.revokeObjectURL(state.businessLogoPreview);
+    }
   },
 
   saveDraft: () => {
@@ -162,8 +220,17 @@ const useOrganizerStore = create((set, get) => ({
   loadApplication: (application) => {
     if (!application) return;
 
+    get().cleanupObjectUrls();
+
     const status = application.status || "PENDING";
     const isRejected = status === "REJECTED";
+
+    const docUrl =
+      application.verification_document_url ||
+      application.verificationDocumentUrl ||
+      "";
+    const logoUrl =
+      application.logo_url || application.businessLogoUrl || "";
 
     set({
       businessName: application.business_name || application.businessName || "",
@@ -200,13 +267,28 @@ const useOrganizerStore = create((set, get) => ({
         application.account_number || application.accountNumber || "",
       ifscCode: application.ifsc_code || application.ifscCode || "",
 
-      verificationDocumentUrl:
-        application.verification_document_url ||
-        application.verificationDocumentUrl ||
-        "",
-      businessLogoUrl: application.logo_url || application.businessLogoUrl || "",
-      businessLogoPreview:
-        application.logo_url || application.businessLogoUrl || "",
+      verificationDocument: docUrl
+        ? {
+            name: "Previously uploaded document",
+            size: "On file",
+            type: docUrl.toLowerCase().includes(".pdf") ? "PDF" : "IMAGE",
+            file: null,
+            previewUrl: docUrl,
+            isExisting: true,
+          }
+        : null,
+      verificationDocumentUrl: docUrl,
+
+      businessLogo: null,
+      businessLogoPreview: logoUrl,
+      businessLogoMeta: logoUrl
+        ? {
+            name: "Previously uploaded logo",
+            size: "",
+            isExisting: true,
+          }
+        : null,
+      businessLogoUrl: logoUrl,
 
       applicationId: application.id || application.applicationId || null,
       applicationStatus: status,
@@ -286,38 +368,60 @@ const useOrganizerStore = create((set, get) => ({
     });
 
     try {
-      // Build the payload using the exact backend snake_case contract
-      const applicationData = {
-        business_name: state.businessName?.trim(),
-        business_type: state.businessType,
-        business_description: state.description?.trim(),
-        contact_phone: state.phone?.trim(),
-        website: state.website?.trim() || "",
+      // Build FormData payload using the exact backend snake_case contract
+      const formData = new FormData();
 
-        address_line: state.addressLine?.trim(),
-        city: state.city?.trim(),
-        state: state.state?.trim(),
-        country: state.country?.trim(),
-        postal_code: state.postalCode?.trim(),
+      formData.append("business_name", state.businessName?.trim() || "");
+      formData.append("business_type", state.businessType || "");
+      formData.append("business_description", state.description?.trim() || "");
+      formData.append("contact_phone", state.phone?.trim() || "");
+      formData.append("website", state.website?.trim() || "");
 
-        bank_name: state.bankName?.trim(),
-        account_holder_name: state.accountHolderName?.trim(),
-        account_number: state.accountNumber?.trim(),
-        ifsc_code: state.ifscCode?.trim().toUpperCase(),
+      formData.append("address_line", state.addressLine?.trim() || "");
+      formData.append("city", state.city?.trim() || "");
+      formData.append("state", state.state?.trim() || "");
+      formData.append("country", state.country?.trim() || "");
+      formData.append("postal_code", state.postalCode?.trim() || "");
 
-        gst_number: state.gstNumber?.trim().toUpperCase() || "",
-        pan_number: state.panNumber?.trim().toUpperCase(),
+      formData.append("bank_name", state.bankName?.trim() || "");
+      formData.append(
+        "account_holder_name",
+        state.accountHolderName?.trim() || ""
+      );
+      formData.append("account_number", state.accountNumber?.trim() || "");
+      formData.append("ifsc_code", state.ifscCode?.trim().toUpperCase() || "");
 
-        logo_url: state.businessLogoUrl || "",
-        verification_document_url: state.verificationDocumentUrl || "",
-      };
+      formData.append(
+        "gst_number",
+        state.gstNumber?.trim().toUpperCase() || ""
+      );
+      formData.append(
+        "pan_number",
+        state.panNumber?.trim().toUpperCase() || ""
+      );
+
+      // Attach verification document file
+      if (state.verificationDocument?.file instanceof File) {
+        formData.append(
+          "verification_document",
+          state.verificationDocument.file
+        );
+      }
+
+      // Attach business logo file if selected (optional)
+      if (state.businessLogo instanceof File) {
+        formData.append("business_logo", state.businessLogo);
+      }
 
       // Isolate new application vs resubmission endpoint call
       const submitAction = state.isResubmission
         ? resubmitOrganizerApplication
         : applyAsOrganizer;
 
-      const response = await submitAction(applicationData);
+      const response = await submitAction(formData);
+
+      // Clean up local blob object URLs on successful submission
+      get().cleanupObjectUrls();
 
       // Read the application information returned by the backend
       const application = response?.data || response;
@@ -365,6 +469,7 @@ const useOrganizerStore = create((set, get) => ({
   },
 
   resetForm: () => {
+    get().cleanupObjectUrls();
     try {
       localStorage.removeItem(DRAFT_STORAGE_KEY);
     } catch {

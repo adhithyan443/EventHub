@@ -1,37 +1,137 @@
 package organizer
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
+	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/google/uuid"
 )
 
 type ApplicationUsecase struct {
 	repository        domain.OrganizerApplicationRepository
 	encryptionService *encryption.Service
+	storageService    *storage.S3Service
 	logger            *slog.Logger
 }
 
 func NewApplicationUsecase(
 	repository domain.OrganizerApplicationRepository,
 	encryptionService *encryption.Service,
+	storageService *storage.S3Service,
 	logger *slog.Logger,
 ) *ApplicationUsecase {
+
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &ApplicationUsecase{
 		repository:        repository,
 		encryptionService: encryptionService,
+		storageService:    storageService,
 		logger:            logger,
 	}
 }
 
+func (u *ApplicationUsecase) uploadApplicationFile(
+	ctx context.Context,
+	submissionID uuid.UUID,
+	file io.Reader,
+	contentType string,
+	fileType string,
+) (string, error) {
+	if file == nil {
+		return "", fmt.Errorf("%s file is required", fileType)
+	}
+
+	if u.storageService == nil {
+		return "", fmt.Errorf("storage service is not configured")
+	}
+
+	var extension string
+
+	switch contentType {
+	case "application/pdf":
+		extension = ".pdf"
+	case "image/jpeg":
+		extension = ".jpg"
+	case "image/png":
+		extension = ".png"
+	case "image/webp":
+		extension = ".webp"
+	default:
+		return "", fmt.Errorf("unsupported %s file type", fileType)
+	}
+
+	if fileType == "verification-document" && contentType == "image/webp" {
+		return "", fmt.Errorf("unsupported verification document type")
+	}
+
+	key := filepath.ToSlash(filepath.Join(
+		"organizer-applications",
+		submissionID.String(),
+		fileType+extension,
+	))
+
+	if err := u.storageService.Upload(ctx, key, file, contentType); err != nil {
+		u.logger.Error(
+			"organizer_application_file_upload_failed",
+			"file_type", fileType,
+			"error", err,
+		)
+		return "", fmt.Errorf("failed to upload %s", fileType)
+	}
+
+	u.logger.Info(
+		"organizer_application_file_uploaded",
+		"file_type", fileType,
+		"object_key", key,
+	)
+
+	return key, nil
+}
+
+func (u *ApplicationUsecase) cleanupUploadedFiles(
+	ctx context.Context,
+	keys []string,
+) {
+	if u.storageService == nil {
+		return
+	}
+
+	cleanupCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		10*time.Second,
+	)
+	defer cancel()
+
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+
+		if err := u.storageService.Delete(cleanupCtx, key); err != nil {
+			u.logger.Error(
+				"organizer_application_file_cleanup_failed",
+				"object_key", key,
+				"error", err,
+			)
+		}
+	}
+}
+
 func (u *ApplicationUsecase) SubmitApplication(
+	ctx context.Context,
 	userID uuid.UUID,
 	input SubmitApplicationInput,
 ) error {
@@ -77,6 +177,9 @@ func (u *ApplicationUsecase) SubmitApplication(
 		Create the first application with PENDING status.
 	*/
 	if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+		if input.VerificationDocumentReader == nil {
+			return appErrors.NewValidationError("verification document is required")
+		}
 
 		application := u.buildApplication(
 			userID,
@@ -85,13 +188,47 @@ func (u *ApplicationUsecase) SubmitApplication(
 			accountNumberLast4,
 		)
 
+		uploadedKeys := make([]string, 0, 2)
+
+		documentKey, err := u.uploadApplicationFile(
+			ctx,
+			application.ID,
+			input.VerificationDocumentReader,
+			input.VerificationDocumentType,
+			"verification-document",
+		)
+		if err != nil {
+			return err
+		}
+		uploadedKeys = append(uploadedKeys, documentKey)
+
+		application.VerificationDocumentURL = documentKey
+
+		if input.LogoReader != nil {
+			logoKey, err := u.uploadApplicationFile(
+				ctx,
+				application.ID,
+				input.LogoReader,
+				input.LogoContentType,
+				"logo",
+			)
+			if err != nil {
+				u.cleanupUploadedFiles(ctx, uploadedKeys)
+				return err
+			}
+
+			uploadedKeys = append(uploadedKeys, logoKey)
+			application.LogoURL = logoKey
+		}
+
 		if err := u.repository.Create(application); err != nil {
+			u.cleanupUploadedFiles(ctx, uploadedKeys)
+
 			u.logger.Error(
-				"organizer_application_submission_failed",
+				"organizer_application_create_failed",
 				"user_id", userID,
 				"error", err,
 			)
-
 			return fmt.Errorf("failed to create organizer application: %w", err)
 		}
 
@@ -130,10 +267,46 @@ func (u *ApplicationUsecase) SubmitApplication(
 
 	case domain.ApplicationRejected:
 
+		uploadedKeys := make([]string, 0, 2)
+
+		if input.VerificationDocumentReader != nil {
+			documentKey, err := u.uploadApplicationFile(
+				ctx,
+				existing.ID,
+				input.VerificationDocumentReader,
+				input.VerificationDocumentType,
+				"verification-document",
+			)
+			if err != nil {
+				return err
+			}
+			uploadedKeys = append(uploadedKeys, documentKey)
+			existing.VerificationDocumentURL = documentKey
+		} else if strings.TrimSpace(existing.VerificationDocumentURL) == "" {
+			return appErrors.NewValidationError("verification document is required")
+		}
+
+		if input.LogoReader != nil {
+			logoKey, err := u.uploadApplicationFile(
+				ctx,
+				existing.ID,
+				input.LogoReader,
+				input.LogoContentType,
+				"logo",
+			)
+			if err != nil {
+				u.cleanupUploadedFiles(ctx, uploadedKeys)
+				return err
+			}
+			uploadedKeys = append(uploadedKeys, logoKey)
+			existing.LogoURL = logoKey
+		}
+
 		encryptedAccountNumber, err := u.encryptionService.Encrypt(
 			input.AccountNumber,
 		)
 		if err != nil {
+			u.cleanupUploadedFiles(ctx, uploadedKeys)
 			u.logger.Error(
 				"organizer_application_account_encryption_failed",
 				"user_id", userID,
@@ -151,8 +324,9 @@ func (u *ApplicationUsecase) SubmitApplication(
 		existing.RejectionReason = ""
 
 		if err := u.repository.Update(existing); err != nil {
+			u.cleanupUploadedFiles(ctx, uploadedKeys)
 			u.logger.Error(
-				"organizer_application_submission_failed",
+				"organizer_application_resubmit_failed",
 				"user_id", userID,
 				"application_id", existing.ID,
 				"error", err,
@@ -297,13 +471,17 @@ func updateApplication(
 		strings.TrimSpace(input.IFSCCode),
 	)
 
-	application.LogoURL = strings.TrimSpace(
-		input.LogoURL,
-	)
+	if input.LogoURL != "" {
+		application.LogoURL = strings.TrimSpace(
+			input.LogoURL,
+		)
+	}
 
-	application.VerificationDocumentURL = strings.TrimSpace(
-		input.VerificationDocumentURL,
-	)
+	if input.VerificationDocumentURL != "" {
+		application.VerificationDocumentURL = strings.TrimSpace(
+			input.VerificationDocumentURL,
+		)
+	}
 
 	application.AddressLine = strings.TrimSpace(
 		input.AddressLine,
@@ -352,6 +530,7 @@ type OrganizerApplicationResponse struct {
 }
 
 func (u *ApplicationUsecase) GetApplication(
+	ctx context.Context,
 	userID uuid.UUID,
 ) (*OrganizerApplicationResponse, error) {
 
@@ -373,6 +552,34 @@ func (u *ApplicationUsecase) GetApplication(
 		return nil, fmt.Errorf("failed to fetch organizer application")
 	}
 
+	logoURL := application.LogoURL
+	if logoURL != "" && u.storageService != nil {
+		presigned, err := u.storageService.GetPresignedURL(ctx, logoURL)
+		if err != nil {
+			u.logger.Error(
+				"organizer_application_logo_url_failed",
+				"user_id", userID,
+				"error", err,
+			)
+			return nil, fmt.Errorf("failed to generate organizer logo URL")
+		}
+		logoURL = presigned
+	}
+
+	documentURL := application.VerificationDocumentURL
+	if documentURL != "" && u.storageService != nil {
+		presigned, err := u.storageService.GetPresignedURL(ctx, documentURL)
+		if err != nil {
+			u.logger.Error(
+				"organizer_application_document_url_failed",
+				"user_id", userID,
+				"error", err,
+			)
+			return nil, fmt.Errorf("failed to generate verification document URL")
+		}
+		documentURL = presigned
+	}
+
 	return &OrganizerApplicationResponse{
 		ID:                      application.ID,
 		BusinessName:            application.BusinessName,
@@ -390,8 +597,8 @@ func (u *ApplicationUsecase) GetApplication(
 		IFSCCode:                application.IFSCCode,
 		GSTNumber:               application.GSTNumber,
 		PANNumber:               application.PANNumber,
-		LogoURL:                 application.LogoURL,
-		VerificationDocumentURL: application.VerificationDocumentURL,
+		LogoURL:                 logoURL,
+		VerificationDocumentURL: documentURL,
 		Status:                  string(application.Status),
 		RejectionReason:         application.RejectionReason,
 		CreatedAt:               application.CreatedAt,
