@@ -29,10 +29,14 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
 
   const panNumber = useOrganizerStore((state) => state.panNumber);
   const gstNumber = useOrganizerStore((state) => state.gstNumber);
-  const verificationDocument = useOrganizerStore((state) => state.verificationDocument);
-  const verificationDocumentUrl = useOrganizerStore((state) => state.verificationDocumentUrl);
-  const businessLogoPreview = useOrganizerStore((state) => state.businessLogoPreview);
-  const businessLogoUrl = useOrganizerStore((state) => state.businessLogoUrl);
+  const verificationDocument = useOrganizerStore(
+    (state) => state.verificationDocument
+  );
+  const businessLogo = useOrganizerStore((state) => state.businessLogo);
+  const businessLogoPreview = useOrganizerStore(
+    (state) => state.businessLogoPreview
+  );
+  const businessLogoMeta = useOrganizerStore((state) => state.businessLogoMeta);
 
   const bankName = useOrganizerStore((state) => state.bankName);
   const accountHolderName = useOrganizerStore((state) => state.accountHolderName);
@@ -54,9 +58,9 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
 
     if (!termsAccepted || isSubmitting) return;
 
-    if (!verificationDocumentUrl || !verificationDocumentUrl.trim()) {
+    if (!verificationDocument?.file && !verificationDocument?.isExisting) {
       setValidationError(
-        "Verification document upload is not available yet. Please upload the document through the configured storage service before submitting."
+        "Please upload a verification document before submitting your application."
       );
       return;
     }
@@ -186,10 +190,30 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
               <div className="space-y-1">
                 <ReviewRow label="PAN Number" value={maskPAN(panNumber)} isMasked />
                 <ReviewRow label="GST Number" value={gstNumber || "N/A"} isMasked={!!gstNumber} />
-                <ReviewRow label="Document File" value={verificationDocument?.name || "Not uploaded"} />
-                <ReviewRow label="Document URL" value={verificationDocumentUrl || "Not provided"} />
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between py-2 border-b border-slate-100 last:border-0 gap-1 sm:gap-4 text-xs sm:text-sm">
+                  <span className="text-slate-500 font-medium shrink-0 sm:w-36">Verification Document:</span>
+                  {verificationDocument ? (
+                    <div className="flex items-center gap-1.5 sm:text-right flex-wrap sm:justify-end">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        verificationDocument.type === "PDF"
+                          ? "bg-red-50 text-red-600 border border-red-200"
+                          : "bg-blue-50 text-blue-600 border border-blue-200"
+                      }`}>
+                        {verificationDocument.type}
+                      </span>
+                      <span className="text-slate-800 font-semibold truncate max-w-[180px]">
+                        {verificationDocument.name}
+                      </span>
+                      {verificationDocument.size && (
+                        <span className="text-slate-400 text-xs">({verificationDocument.size})</span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-slate-400 font-semibold sm:text-right">Not uploaded</span>
+                  )}
+                </div>
                 <div className="flex items-center justify-between py-2 text-xs sm:text-sm">
-                  <span className="text-slate-500 font-medium">Business Logo:</span>
+                  <span className="text-slate-500 font-medium shrink-0 sm:w-36">Business Logo:</span>
                   {businessLogoPreview ? (
                     <div className="flex items-center gap-2">
                       <img
@@ -197,15 +221,14 @@ export default function Step4ReviewSubmit({ onSubmit, onBack, onSaveLater, onEdi
                         alt="Logo thumbnail"
                         className="w-7 h-7 rounded-full object-cover border border-slate-200 shadow-xs"
                       />
-                      <span className="text-slate-800 font-semibold">Uploaded</span>
+                      <span className="text-slate-800 font-semibold text-xs">
+                        {businessLogo?.name || (businessLogoMeta?.isExisting ? "Saved Logo" : "Uploaded")}
+                      </span>
                     </div>
                   ) : (
-                    <span className="text-slate-400 font-medium">Default</span>
+                    <span className="text-slate-400 font-medium">None (Optional)</span>
                   )}
                 </div>
-                {businessLogoUrl && (
-                  <ReviewRow label="Logo URL" value={businessLogoUrl} />
-                )}
               </div>
             </div>
           </div>

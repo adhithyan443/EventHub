@@ -200,12 +200,14 @@ func main() {
 	organizerApplicationUsecase := organizer.NewApplicationUsecase(
 		organizerApplicationRepo,
 		encryptionService,
+		s3Service,
 		logger,
 	)
 
 	adminApplicationUsecase := organizer.NewAdminApplicationUsecase(
 		organizerApplicationRepo,
 		txManager,
+		s3Service,
 		logger,
 	)
 

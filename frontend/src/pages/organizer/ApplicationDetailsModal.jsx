@@ -31,7 +31,6 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
   const verificationDocument = useOrganizerStore((state) => state.verificationDocument);
   const verificationDocumentUrl = useOrganizerStore((state) => state.verificationDocumentUrl);
   const businessLogoPreview = useOrganizerStore((state) => state.businessLogoPreview);
-  const businessLogoUrl = useOrganizerStore((state) => state.businessLogoUrl);
 
   const bankName = useOrganizerStore((state) => state.bankName);
   const accountHolderName = useOrganizerStore((state) => state.accountHolderName);
@@ -172,8 +171,31 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
             <div className="bg-slate-50 rounded-xl p-4 border border-slate-100">
               <DetailItem label="PAN Number" value={maskPAN(panNumber)} isMasked />
               <DetailItem label="GST Number" value={gstNumber || "N/A"} isMasked={!!gstNumber} />
-              <DetailItem label="Document File" value={verificationDocument?.name || "Not uploaded"} />
-              <DetailItem label="Document URL" value={verificationDocumentUrl || "Not provided"} />
+              <DetailItem
+                label="Verification Document"
+                value={
+                  verificationDocument?.name ||
+                  (verificationDocumentUrl ? "Document on file" : "Not uploaded")
+                }
+              />
+              {verificationDocumentUrl && (
+                <div className="flex flex-col sm:flex-row sm:items-baseline justify-between py-2 border-b border-slate-100 last:border-0 gap-1 sm:gap-4 text-xs sm:text-sm">
+                  <span className="text-slate-500 font-medium shrink-0 sm:w-40">Document Preview</span>
+                  <a
+                    href={verificationDocumentUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline font-semibold inline-flex items-center gap-1 sm:text-right"
+                  >
+                    <span>Open Document</span>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                      <polyline points="15 3 21 3 21 9" />
+                      <line x1="10" y1="14" x2="21" y2="3" />
+                    </svg>
+                  </a>
+                </div>
+              )}
               <div className="flex items-center justify-between py-2 text-xs sm:text-sm">
                 <span className="text-slate-500 font-medium">Business Logo</span>
                 {businessLogoPreview ? (
@@ -186,9 +208,6 @@ export default function ApplicationDetailsModal({ isOpen, onClose }) {
                   <span className="text-slate-400 font-medium">Default</span>
                 )}
               </div>
-              {businessLogoUrl && (
-                <DetailItem label="Logo URL" value={businessLogoUrl} />
-              )}
             </div>
           </div>
 

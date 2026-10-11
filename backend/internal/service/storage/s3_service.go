@@ -52,6 +52,22 @@ func NewS3Service(
 	}, nil
 }
 
+func NewS3ServiceWithClient(
+	client *s3.Client,
+	bucket string,
+	logger *slog.Logger,
+) *S3Service {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	return &S3Service{
+		client: client,
+		bucket: bucket,
+		logger: logger,
+	}
+}
+
 func (s *S3Service) Upload(
 	ctx context.Context,
 	key string,

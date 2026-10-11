@@ -1,6 +1,7 @@
 package organizer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -8,23 +9,32 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
+	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/google/uuid"
 )
 
 type AdminApplicationUsecase struct {
 	repository         domain.OrganizerApplicationRepository
 	transactionManager domain.TransactionManager
+	storageService     *storage.S3Service
 	logger             *slog.Logger
 }
 
 func NewAdminApplicationUsecase(
 	repository domain.OrganizerApplicationRepository,
 	transactionManager domain.TransactionManager,
+	storageService *storage.S3Service,
 	logger *slog.Logger,
 ) *AdminApplicationUsecase {
+
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &AdminApplicationUsecase{
 		repository:         repository,
 		transactionManager: transactionManager,
+		storageService:     storageService,
 		logger:             logger,
 	}
 }
@@ -100,10 +110,10 @@ func (u *AdminApplicationUsecase) ListApplications(
 // }
 
 // GetApplication retrieves a single organizer application for admin review.
+
 func (u *AdminApplicationUsecase) GetApplication(
 	id uuid.UUID,
 ) (*domain.OrganizerApplication, error) {
-
 	application, err := u.repository.FindByID(id)
 	if err != nil {
 		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
@@ -121,10 +131,45 @@ func (u *AdminApplicationUsecase) GetApplication(
 			"application_id", id,
 			"error", err,
 		)
-
 		return nil, fmt.Errorf(
 			"failed to retrieve organizer application",
 		)
+	}
+
+	// Generate a temporary URL for the private logo object.
+	if application.LogoURL != "" {
+		logoURL, err := u.storageService.GetPresignedURL(
+			context.Background(),
+			application.LogoURL,
+		)
+		if err != nil {
+			u.logger.Error(
+				"admin_organizer_application_logo_url_failed",
+				"application_id", id,
+				"error", err,
+			)
+			return nil, fmt.Errorf("failed to generate organizer logo URL")
+		}
+		application.LogoURL = logoURL
+	}
+
+	// Generate a temporary URL for the private verification document.
+	if application.VerificationDocumentURL != "" {
+		documentURL, err := u.storageService.GetPresignedURL(
+			context.Background(),
+			application.VerificationDocumentURL,
+		)
+		if err != nil {
+			u.logger.Error(
+				"admin_organizer_application_document_url_failed",
+				"application_id", id,
+				"error", err,
+			)
+			return nil, fmt.Errorf(
+				"failed to generate verification document URL",
+			)
+		}
+		application.VerificationDocumentURL = documentURL
 	}
 
 	u.logger.Info(

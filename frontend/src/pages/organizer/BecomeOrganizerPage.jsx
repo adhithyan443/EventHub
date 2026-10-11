@@ -36,8 +36,18 @@ export default function BecomeOrganizerPage() {
   const submitApplication = useOrganizerStore(
     (state) => state.submitApplication
   );
+  const cleanupObjectUrls = useOrganizerStore(
+    (state) => state.cleanupObjectUrls
+  );
 
   const [toastMessage, setToastMessage] = useState("");
+
+  // Revoke any created browser object URLs when the page unmounts
+  useEffect(() => {
+    return () => {
+      cleanupObjectUrls();
+    };
+  }, [cleanupObjectUrls]);
 
   // Check application status from backend on mount
   useEffect(() => {
