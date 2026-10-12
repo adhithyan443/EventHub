@@ -208,11 +208,13 @@ func modelToOrganizerApplication(
 }
 
 // organizerApplicationListRow represents an organizer application
-// together with the applicant's name from the users table.
+// together with applicant details from the users table.
 type organizerApplicationListRow struct {
 	models.OrganizerApplicationModel
 
-	ApplicantName string `gorm:"column:applicant_name"`
+	ApplicantName  string `gorm:"column:applicant_name"`
+	ApplicantEmail string `gorm:"column:applicant_email"`
+	ApplicantRole  string `gorm:"column:applicant_role"`
 }
 
 func organizerApplicationRowToDomain(
@@ -223,6 +225,8 @@ func organizerApplicationRowToDomain(
 	)
 
 	application.ApplicantName = row.ApplicantName
+	application.ApplicantEmail = row.ApplicantEmail
+	application.ApplicantRole = row.ApplicantRole
 
 	return application
 }
@@ -262,10 +266,10 @@ func (r *OrganizerApplicationRepository) List(
 		return nil, err
 	}
 
-	// Fetch applications together with users.full_name.
+	// Fetch applications together with user details from users table.
 	if err := query.
 		Select(
-			"organizer_applications.*, users.full_name AS applicant_name",
+			"organizer_applications.*, users.full_name AS applicant_name, users.email AS applicant_email, users.role AS applicant_role",
 		).
 		Order("organizer_applications.created_at DESC").
 		Limit(limit).
@@ -324,7 +328,7 @@ func (r *OrganizerApplicationRepository) FindByID(
 			"JOIN users ON users.id = organizer_applications.user_id",
 		).
 		Select(
-			"organizer_applications.*, users.full_name AS applicant_name",
+			"organizer_applications.*, users.full_name AS applicant_name, users.email AS applicant_email, users.role AS applicant_role",
 		).
 		Where(
 			"organizer_applications.id = ?",

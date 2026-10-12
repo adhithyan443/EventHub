@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 export default function ReviewPanel({
   app,
   loading = false,
@@ -6,7 +8,12 @@ export default function ReviewPanel({
   onReject,
   onApprove,
 }) {
+  const [failedLogoKey, setFailedLogoKey] = useState(null);
+
   if (!app) return null;
+
+  const currentLogoKey = `${app.id || ""}-${app.logo_url || ""}`;
+  const isLogoFailed = failedLogoKey === currentLogoKey;
 
   const submittedDate = app.created_at
     ? new Date(app.created_at).toLocaleDateString()
@@ -19,6 +26,8 @@ export default function ReviewPanel({
       : `https://${app.website}`
     : null;
 
+  const contactEmail = app.applicant_email || app.email || "";
+
   const docUrl = app.verification_document_url || "";
   const isDocLoading = Boolean(loading || app._detailsLoading);
   const isDocError = Boolean(app._loadError);
@@ -26,6 +35,12 @@ export default function ReviewPanel({
     docUrl &&
     (docUrl.startsWith("http://") || docUrl.startsWith("https://"))
   );
+  const hasLogoUrl = Boolean(
+    app.logo_url &&
+    (app.logo_url.startsWith("http://") || app.logo_url.startsWith("https://"))
+  );
+  const businessInitial =
+    (app.business_name || "O").trim()[0]?.toUpperCase() || "O";
   const isPdf = docUrl.toLowerCase().includes(".pdf");
   const isImage =
     docUrl.toLowerCase().includes(".jpg") ||
@@ -57,28 +72,46 @@ export default function ReviewPanel({
       <div className="relative w-full max-w-[480px] bg-white shadow-2xl flex flex-col h-full overflow-hidden z-10 animate-in slide-in-from-right duration-200">
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <h2 className="text-[#141b2b] text-xl font-bold">
-                Review Application
-              </h2>
-
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${app.status === "PENDING"
-                    ? "bg-[#fef3c7] text-[#92400e]"
-                    : app.status === "APPROVED"
-                      ? "bg-[#dcfce7] text-[#166534]"
-                      : "bg-[#ffdad6] text-[#93000a]"
-                  }`}
+          <div className="flex items-center gap-3 min-w-0">
+            {hasLogoUrl && !isLogoFailed ? (
+              <img
+                src={app.logo_url}
+                alt={app.business_name ? `${app.business_name} logo` : "Business logo"}
+                onError={() => setFailedLogoKey(currentLogoKey)}
+                className="w-11 h-11 rounded-xl object-cover border border-[#dce2f7] bg-white shadow-xs shrink-0"
+              />
+            ) : (
+              <div
+                className="w-11 h-11 rounded-xl bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0"
+                aria-label="Default business logo"
               >
-                {app.status}
-              </span>
-            </div>
+                {businessInitial}
+              </div>
+            )}
 
-            <p className="text-[#3d4947] text-sm font-medium">
-              <span className="font-mono">{app.id}</span>{" "}
-              • Submitted {submittedDate}
-            </p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <h2 className="text-[#141b2b] text-lg sm:text-xl font-bold truncate">
+                  Review Application
+                </h2>
+
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${app.status === "PENDING"
+                      ? "bg-[#fef3c7] text-[#92400e]"
+                      : app.status === "APPROVED"
+                        ? "bg-[#dcfce7] text-[#166534]"
+                        : "bg-[#ffdad6] text-[#93000a]"
+                    }`}
+                >
+                  {app.status}
+                </span>
+              </div>
+
+              <p className="text-[#3d4947] text-xs sm:text-sm font-medium truncate">
+                <span className="font-mono">{app.id}</span>{" "}
+                • Submitted {submittedDate}
+              </p>
+            </div>
           </div>
 
           <button
@@ -113,6 +146,35 @@ export default function ReviewPanel({
             </div>
 
             <div className="p-4 space-y-4">
+              <div className="flex items-center gap-3.5 pb-3 border-b border-[#f1f3ff]">
+                {hasLogoUrl && !isLogoFailed ? (
+                  <img
+                    src={app.logo_url}
+                    alt={app.business_name ? `${app.business_name} logo` : "Business logo"}
+                    onError={() => setFailedLogoKey(currentLogoKey)}
+                    className="w-12 h-12 rounded-xl object-cover border border-[#dce2f7] bg-white shadow-xs shrink-0"
+                  />
+                ) : (
+                  <div
+                    className="w-12 h-12 rounded-xl bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0"
+                    aria-label="Default business logo"
+                  >
+                    {businessInitial}
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <div className="text-[#141b2b] text-base font-bold truncate">
+                    {app.business_name || "-"}
+                  </div>
+                  <div className="text-[#6d7a77] text-xs font-medium">
+                    {hasLogoUrl && !isLogoFailed
+                      ? "Custom Business Logo"
+                      : "No Logo Uploaded (Default Placeholder)"}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
@@ -325,7 +387,11 @@ export default function ReviewPanel({
                 </div>
 
                 <div className="text-[#141b2b] text-sm">
-                  -
+                  {app.applicant_role === "ORGANIZER"
+                    ? "Organizer"
+                    : app.applicant_name || contactEmail
+                    ? "Applicant"
+                    : "-"}
                 </div>
               </div>
 
@@ -334,9 +400,18 @@ export default function ReviewPanel({
                   Email
                 </div>
 
-                <div className="text-[#00685f] text-sm font-medium break-all">
-                  -
-                </div>
+                {contactEmail ? (
+                  <a
+                    href={`mailto:${contactEmail}`}
+                    className="text-[#00685f] text-sm font-medium hover:underline break-all"
+                  >
+                    {contactEmail}
+                  </a>
+                ) : (
+                  <div className="text-[#3d4947] text-sm">
+                    -
+                  </div>
+                )}
               </div>
 
               <div>

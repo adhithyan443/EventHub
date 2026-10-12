@@ -240,6 +240,7 @@ export default function AdminApplicationsPage() {
       app.id?.toLowerCase().includes(query) ||
       app.business_name?.toLowerCase().includes(query) ||
       app.applicant_name?.toLowerCase().includes(query) ||
+      app.applicant_email?.toLowerCase().includes(query) ||
       app.business_type?.toLowerCase().includes(query) ||
       app.phone?.toLowerCase().includes(query)
     );

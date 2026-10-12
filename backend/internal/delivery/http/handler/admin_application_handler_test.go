@@ -51,12 +51,18 @@ func (s *stubOrganizerApplicationRepo) List(page int, limit int, status domain.A
 
 type stubStoragePresigner struct {
 	presignedURL string
+	urlMap       map[string]string
 	err          error
 }
 
 func (s *stubStoragePresigner) GetPresignedURL(ctx context.Context, key string) (string, error) {
 	if s.err != nil {
 		return "", s.err
+	}
+	if s.urlMap != nil {
+		if u, exists := s.urlMap[key]; exists {
+			return u, nil
+		}
 	}
 	return s.presignedURL, nil
 }
@@ -106,6 +112,8 @@ func TestAdminGetApplication_AuthorizedWithDocument(t *testing.T) {
 			ID:                      appID,
 			UserID:                  uuid.New(),
 			ApplicantName:           "Alex Admin",
+			ApplicantEmail:          "alex@example.com",
+			ApplicantRole:           "CUSTOMER",
 			BusinessName:            "Alex Productions",
 			VerificationDocumentURL: docKey,
 			Status:                  domain.ApplicationPending,
@@ -129,7 +137,7 @@ func TestAdminGetApplication_AuthorizedWithDocument(t *testing.T) {
 	}
 
 	var resp struct {
-		Success bool                              `json:"success"`
+		Success bool                               `json:"success"`
 		Data    organizer.AdminApplicationResponse `json:"data"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
@@ -141,6 +149,12 @@ func TestAdminGetApplication_AuthorizedWithDocument(t *testing.T) {
 	}
 	if resp.Data.ID != appID {
 		t.Errorf("expected application ID %s, got %s", appID, resp.Data.ID)
+	}
+	if resp.Data.ApplicantEmail != "alex@example.com" {
+		t.Errorf("expected applicant email 'alex@example.com', got '%s'", resp.Data.ApplicantEmail)
+	}
+	if resp.Data.ApplicantRole != "CUSTOMER" {
+		t.Errorf("expected applicant role 'CUSTOMER', got '%s'", resp.Data.ApplicantRole)
 	}
 	if resp.Data.VerificationDocumentURL != expectedURL {
 		t.Errorf("expected verification document URL %s, got %s", expectedURL, resp.Data.VerificationDocumentURL)
@@ -353,5 +367,76 @@ func TestAdminGetApplication_PresignedURLGenerationFailure(t *testing.T) {
 	}
 	if resp["code"] != "INTERNAL_SERVER_ERROR" {
 		t.Errorf("expected code INTERNAL_SERVER_ERROR, got: %+v", resp)
+	}
+}
+
+func TestAdminGetApplication_AuthorizedWithLogoAndContactDetails(t *testing.T) {
+	jwtService := token.NewJWTService("01234567890123456789012345678901")
+	adminToken, err := jwtService.GenerateAccessToken(uuid.New(), "ADMIN")
+	if err != nil {
+		t.Fatalf("failed to generate admin token: %v", err)
+	}
+
+	appID := uuid.New()
+	logoKey := "organizer-applications/" + appID.String() + "/business-logo.png"
+	docKey := "organizer-applications/" + appID.String() + "/verification-document.pdf"
+	expectedLogoURL := "https://test-bucket.s3.amazonaws.com/" + logoKey + "?signed=1"
+	expectedDocURL := "https://test-bucket.s3.amazonaws.com/" + docKey + "?signed=2"
+
+	repo := &stubOrganizerApplicationRepo{
+		application: &domain.OrganizerApplication{
+			ID:                      appID,
+			UserID:                  uuid.New(),
+			ApplicantName:           "Dev Admin",
+			ApplicantEmail:          "dev@example.com",
+			ApplicantRole:           "CUSTOMER",
+			BusinessName:            "Dev Productions",
+			LogoURL:                 logoKey,
+			VerificationDocumentURL: docKey,
+			Status:                  domain.ApplicationPending,
+			CreatedAt:               time.Now(),
+		},
+	}
+	storage := &stubStoragePresigner{
+		urlMap: map[string]string{
+			logoKey: expectedLogoURL,
+			docKey:  expectedDocURL,
+		},
+	}
+
+	router := setupAdminApplicationTestRouter(repo, storage, jwtService)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/organizer-applications/"+appID.String(), nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Success bool                               `json:"success"`
+		Data    organizer.AdminApplicationResponse `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse json response: %v", err)
+	}
+
+	if !resp.Success {
+		t.Error("expected success to be true")
+	}
+	if resp.Data.ApplicantEmail != "dev@example.com" {
+		t.Errorf("expected applicant email 'dev@example.com', got '%s'", resp.Data.ApplicantEmail)
+	}
+	if resp.Data.ApplicantRole != "CUSTOMER" {
+		t.Errorf("expected applicant role 'CUSTOMER', got '%s'", resp.Data.ApplicantRole)
+	}
+	if resp.Data.LogoURL != expectedLogoURL {
+		t.Errorf("expected presigned logo URL %s, got %s", expectedLogoURL, resp.Data.LogoURL)
+	}
+	if resp.Data.VerificationDocumentURL != expectedDocURL {
+		t.Errorf("expected presigned doc URL %s, got %s", expectedDocURL, resp.Data.VerificationDocumentURL)
 	}
 }
