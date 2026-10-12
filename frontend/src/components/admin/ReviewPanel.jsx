@@ -1,10 +1,19 @@
+import { useState } from "react";
+
 export default function ReviewPanel({
   app,
+  loading = false,
+  actionLoading = false,
   onClose,
   onReject,
   onApprove,
 }) {
+  const [failedLogoKey, setFailedLogoKey] = useState(null);
+
   if (!app) return null;
+
+  const currentLogoKey = `${app.id || ""}-${app.logo_url || ""}`;
+  const isLogoFailed = failedLogoKey === currentLogoKey;
 
   const submittedDate = app.created_at
     ? new Date(app.created_at).toLocaleDateString()
@@ -16,6 +25,40 @@ export default function ReviewPanel({
       ? app.website
       : `https://${app.website}`
     : null;
+
+  const contactEmail = app.applicant_email || app.email || "";
+
+  const docUrl = app.verification_document_url || "";
+  const isDocLoading = Boolean(loading || app._detailsLoading);
+  const isDocError = Boolean(app._loadError);
+  const hasPresignedUrl = Boolean(
+    docUrl &&
+    (docUrl.startsWith("http://") || docUrl.startsWith("https://"))
+  );
+  const hasLogoUrl = Boolean(
+    app.logo_url &&
+    (app.logo_url.startsWith("http://") || app.logo_url.startsWith("https://"))
+  );
+  const businessInitial =
+    (app.business_name || "O").trim()[0]?.toUpperCase() || "O";
+  const isPdf = docUrl.toLowerCase().includes(".pdf");
+  const isImage =
+    docUrl.toLowerCase().includes(".jpg") ||
+    docUrl.toLowerCase().includes(".jpeg") ||
+    docUrl.toLowerCase().includes(".png") ||
+    docUrl.toLowerCase().includes(".webp");
+
+  const docSubtitle = isDocLoading
+    ? "Generating secure link..."
+    : isDocError
+    ? "Failed to generate link"
+    : hasPresignedUrl
+    ? isPdf
+      ? "PDF Document"
+      : isImage
+      ? "Image Document"
+      : "Uploaded Document"
+    : "No document uploaded";
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end animate-in fade-in duration-200">
@@ -29,28 +72,46 @@ export default function ReviewPanel({
       <div className="relative w-full max-w-[480px] bg-white shadow-2xl flex flex-col h-full overflow-hidden z-10 animate-in slide-in-from-right duration-200">
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <h2 className="text-[#141b2b] text-xl font-bold">
-                Review Application
-              </h2>
-
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${app.status === "PENDING"
-                    ? "bg-[#fef3c7] text-[#92400e]"
-                    : app.status === "APPROVED"
-                      ? "bg-[#dcfce7] text-[#166534]"
-                      : "bg-[#ffdad6] text-[#93000a]"
-                  }`}
+          <div className="flex items-center gap-3 min-w-0">
+            {hasLogoUrl && !isLogoFailed ? (
+              <img
+                src={app.logo_url}
+                alt={app.business_name ? `${app.business_name} logo` : "Business logo"}
+                onError={() => setFailedLogoKey(currentLogoKey)}
+                className="w-11 h-11 rounded-xl object-cover border border-[#dce2f7] bg-white shadow-xs shrink-0"
+              />
+            ) : (
+              <div
+                className="w-11 h-11 rounded-xl bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0"
+                aria-label="Default business logo"
               >
-                {app.status}
-              </span>
-            </div>
+                {businessInitial}
+              </div>
+            )}
 
-            <p className="text-[#3d4947] text-sm font-medium">
-              <span className="font-mono">{app.id}</span>{" "}
-              • Submitted {submittedDate}
-            </p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <h2 className="text-[#141b2b] text-lg sm:text-xl font-bold truncate">
+                  Review Application
+                </h2>
+
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${app.status === "PENDING"
+                      ? "bg-[#fef3c7] text-[#92400e]"
+                      : app.status === "APPROVED"
+                        ? "bg-[#dcfce7] text-[#166534]"
+                        : "bg-[#ffdad6] text-[#93000a]"
+                    }`}
+                >
+                  {app.status}
+                </span>
+              </div>
+
+              <p className="text-[#3d4947] text-xs sm:text-sm font-medium truncate">
+                <span className="font-mono">{app.id}</span>{" "}
+                • Submitted {submittedDate}
+              </p>
+            </div>
           </div>
 
           <button
@@ -85,6 +146,35 @@ export default function ReviewPanel({
             </div>
 
             <div className="p-4 space-y-4">
+              <div className="flex items-center gap-3.5 pb-3 border-b border-[#f1f3ff]">
+                {hasLogoUrl && !isLogoFailed ? (
+                  <img
+                    src={app.logo_url}
+                    alt={app.business_name ? `${app.business_name} logo` : "Business logo"}
+                    onError={() => setFailedLogoKey(currentLogoKey)}
+                    className="w-12 h-12 rounded-xl object-cover border border-[#dce2f7] bg-white shadow-xs shrink-0"
+                  />
+                ) : (
+                  <div
+                    className="w-12 h-12 rounded-xl bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0"
+                    aria-label="Default business logo"
+                  >
+                    {businessInitial}
+                  </div>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <div className="text-[#141b2b] text-base font-bold truncate">
+                    {app.business_name || "-"}
+                  </div>
+                  <div className="text-[#6d7a77] text-xs font-medium">
+                    {hasLogoUrl && !isLogoFailed
+                      ? "Custom Business Logo"
+                      : "No Logo Uploaded (Default Placeholder)"}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
@@ -184,12 +274,12 @@ export default function ReviewPanel({
               </div>
 
               {/* Document attachment tile */}
-              <div className="border border-[#dce2f7] bg-[#f9f9ff] rounded-lg flex items-center justify-between px-3.5 py-2.5">
+              <div className="border border-[#dce2f7] bg-[#f9f9ff] rounded-lg flex flex-col sm:flex-row sm:items-center justify-between p-3.5 gap-3">
                 <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-[#e8eaf6] rounded flex items-center justify-center shrink-0">
+                  <div className="w-9 h-9 bg-[#e8eaf6] rounded-lg flex items-center justify-center shrink-0">
                     <svg
-                      width="14"
-                      height="16"
+                      width="16"
+                      height="18"
                       viewBox="0 0 14 16"
                       fill="none"
                     >
@@ -202,45 +292,72 @@ export default function ReviewPanel({
 
                   <div>
                     <div className="text-[#141b2b] text-sm font-medium">
-                      {app.verification_document_url
-                        ? "Verification Document"
-                        : "No verification document"}
+                      Verification Document
                     </div>
 
                     <div className="text-[#6d7a77] text-xs">
-                      {app.verification_document_url
-                        ? "PDF Document"
-                        : "-"}
+                      {docSubtitle}
                     </div>
                   </div>
                 </div>
 
-                {app.verification_document_url && (
-                  <a
-                    href={
-                      app.verification_document_url
-                    }
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[#00685f] text-sm font-medium hover:underline flex items-center gap-1 cursor-pointer shrink-0"
-                  >
-                    View
-
-                    <svg
-                      width="10"
-                      height="10"
-                      viewBox="0 0 10 10"
-                      fill="none"
+                <div className="flex items-center self-end sm:self-center shrink-0">
+                  {isDocLoading ? (
+                    <span className="text-[#6d7a77] text-xs font-medium inline-flex items-center gap-1.5 bg-[#eef0fb] px-2.5 py-1 rounded-md">
+                      <svg
+                        className="animate-spin h-3.5 w-3.5 text-[#00685f]"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8v8H4z"
+                        />
+                      </svg>
+                      Loading...
+                    </span>
+                  ) : isDocError ? (
+                    <span className="text-[#93000a] text-xs font-semibold bg-[#ffdad6] px-2.5 py-1 rounded-md">
+                      Unavailable
+                    </span>
+                  ) : hasPresignedUrl ? (
+                    <a
+                      href={docUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[#00685f] hover:text-[#005a52] text-xs sm:text-sm font-semibold hover:underline inline-flex items-center gap-1.5 cursor-pointer bg-[#e6f4f2] hover:bg-[#d5eee9] px-3 py-1.5 rounded-lg transition-colors"
+                      aria-label="View Verification Document"
                     >
-                      <path
-                        d="M1 9L9 1M9 1H4M9 1V6"
-                        stroke="#00685f"
-                        strokeWidth="1.2"
-                        strokeLinecap="round"
-                      />
-                    </svg>
-                  </a>
-                )}
+                      <span>View Verification Document</span>
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 10 10"
+                        fill="none"
+                      >
+                        <path
+                          d="M1 9L9 1M9 1H4M9 1V6"
+                          stroke="currentColor"
+                          strokeWidth="1.3"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </a>
+                  ) : (
+                    <span className="text-[#6d7a77] text-xs font-medium bg-[#f1f3ff] px-2.5 py-1 rounded-md">
+                      Unavailable
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </section>
@@ -270,7 +387,11 @@ export default function ReviewPanel({
                 </div>
 
                 <div className="text-[#141b2b] text-sm">
-                  -
+                  {app.applicant_role === "ORGANIZER"
+                    ? "Organizer"
+                    : app.applicant_name || contactEmail
+                    ? "Applicant"
+                    : "-"}
                 </div>
               </div>
 
@@ -279,9 +400,18 @@ export default function ReviewPanel({
                   Email
                 </div>
 
-                <div className="text-[#00685f] text-sm font-medium break-all">
-                  -
-                </div>
+                {contactEmail ? (
+                  <a
+                    href={`mailto:${contactEmail}`}
+                    className="text-[#00685f] text-sm font-medium hover:underline break-all"
+                  >
+                    {contactEmail}
+                  </a>
+                ) : (
+                  <div className="text-[#3d4947] text-sm">
+                    -
+                  </div>
+                )}
               </div>
 
               <div>
@@ -427,7 +557,8 @@ export default function ReviewPanel({
                 <button
                   type="button"
                   onClick={onReject}
-                  className="border border-[#93000a] text-[#93000a] text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#ffdad6] transition-colors cursor-pointer"
+                  disabled={actionLoading}
+                  className="border border-[#93000a] text-[#93000a] text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#ffdad6] transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Reject
                 </button>
@@ -435,9 +566,10 @@ export default function ReviewPanel({
                 <button
                   type="button"
                   onClick={onApprove}
-                  className="bg-[#00685f] text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#005a52] transition-colors cursor-pointer shadow-sm"
+                  disabled={actionLoading}
+                  className="bg-[#00685f] text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-[#005a52] transition-colors cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Approve Application
+                  {actionLoading ? "Processing..." : "Approve Application"}
                 </button>
               </>
             )}
