@@ -236,7 +236,7 @@ func (h *OrganizerApplicationHandler) GetApplication(ctx *gin.Context) {
 	}
 
 	// Retrieve the application through the admin usecase.
-	application, err := h.adminApplicationUsecase.GetApplication(applicationID)
+	application, err := h.adminApplicationUsecase.GetApplication(ctx.Request.Context(), applicationID)
 	if err != nil {
 		ctx.Error(err)
 		return

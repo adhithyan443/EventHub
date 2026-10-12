@@ -115,6 +115,7 @@ export default function AdminApplicationsPage() {
     try {
       setDetailsLoading(true);
       setError("");
+      setReviewApp({ ...application, _detailsLoading: true });
 
       const response = await getOrganizerApplicationById(
         application.id
@@ -127,9 +128,15 @@ export default function AdminApplicationsPage() {
         err
       );
 
-      setError(
+      const errorMessage =
         err.response?.data?.message ||
-        "Failed to load application details."
+        "Failed to load application details.";
+
+      setError(errorMessage);
+      setReviewApp((prev) =>
+        prev && prev.id === application.id
+          ? { ...prev, _detailsLoading: false, _loadError: errorMessage }
+          : null
       );
     } finally {
       setDetailsLoading(false);
