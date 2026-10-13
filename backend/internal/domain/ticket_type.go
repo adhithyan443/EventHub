@@ -9,6 +9,7 @@ import (
 )
 
 var ErrTicketTypeNotFound = errors.New("ticket type not found")
+var ErrInsufficientTicketQuantity = errors.New("insufficient ticket quantity available")
 
 type TicketType struct {
 	ID                uuid.UUID
@@ -29,4 +30,5 @@ type TicketTypeRepository interface {
 	Update(ctx context.Context, ticketType *TicketType) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteByEventID(ctx context.Context, eventID uuid.UUID) error
+	ReserveQuantityIfAvailable(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error
 }

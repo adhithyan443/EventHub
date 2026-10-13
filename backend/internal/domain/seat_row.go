@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrSeatRowNotFound = errors.New("seat row not found")
 
 type SeatRow struct {
 	ID        uuid.UUID
@@ -19,4 +22,5 @@ type SeatRowRepository interface {
 	Delete(id uuid.UUID) error
 	DeleteBySectionID(sectionID uuid.UUID) error
 	FindBySectionID(sectionID uuid.UUID) ([]SeatRow, error)
+	FindByID(id uuid.UUID) (*SeatRow, error)
 }

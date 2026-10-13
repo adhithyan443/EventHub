@@ -30,4 +30,5 @@ type TransactionRepositories interface {
 	SeatRepository() SeatRepository
 
 	TicketTypeRepository() TicketTypeRepository
+	SeatReservationRepository() SeatReservationRepository
 }

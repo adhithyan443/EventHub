@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,6 +15,14 @@ const (
 	ReservationStatusCancelled = "CANCELLED"
 )
 
+var ErrSeatReservationNotFound = errors.New("seat reservation not found")
+
+var (
+	ErrInvalidReservationRequest = errors.New("invalid reservation request")
+	// ErrEventNotFound             = errors.New("event not found")
+	ErrTicketTypeEventMismatch = errors.New("ticket type does not belong to event")
+)
+
 // SeatReservation represents a temporary hold on tickets or seats.
 type SeatReservation struct {
 	ID        uuid.UUID
@@ -22,6 +32,21 @@ type SeatReservation struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+type SeatReservationRepository interface {
+	Create(ctx context.Context, reservation *SeatReservation) error
+
+	CreateItem(ctx context.Context, item *SeatReservationItem) error
+
+	FindByID(ctx context.Context, id uuid.UUID) (*SeatReservation, error)
+
+	FindItemsByReservationID(
+		ctx context.Context,
+		reservationID uuid.UUID,
+	) ([]SeatReservationItem, error)
+
+	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
 }
 
 // SeatReservationItem represents either a specific seat or

@@ -1,10 +1,13 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var ErrSeatSectionNotFound = errors.New("seat section not found")
 
 type SeatSection struct {
 	ID           uuid.UUID
@@ -32,4 +35,5 @@ type SeatSectionRepository interface {
 	DeleteBySeatLayoutID(seatLayoutID uuid.UUID) error
 	FindBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSection, error)
 	FindWithStatsBySeatLayoutID(seatLayoutID uuid.UUID) ([]SeatSectionWithStats, error)
+	FindByID(id uuid.UUID) (*SeatSection, error)
 }
