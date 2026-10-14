@@ -18,18 +18,28 @@ import (
 type reservationTestRepository struct {
 	domain.SeatReservationRepository
 
-	expireResult bool
-	expireErr    error
-	items        []domain.SeatReservationItem
-	itemsErr     error
-	findCalls    int
+	expireResult        bool
+	expireErr           error
+	items               []domain.SeatReservationItem
+	itemsErr            error
+	findCalls           int
+	expiredReservations []domain.SeatReservation
+	findExpiredErr      error
+	expireResults       map[uuid.UUID]bool
+	expireErrors        map[uuid.UUID]error
 }
 
 func (m *reservationTestRepository) ExpireIfActive(
 	_ context.Context,
-	_ uuid.UUID,
+	id uuid.UUID,
 	_ time.Time,
 ) (bool, error) {
+	if err, ok := m.expireErrors[id]; ok {
+		return false, err
+	}
+	if expired, ok := m.expireResults[id]; ok {
+		return expired, nil
+	}
 	return m.expireResult, m.expireErr
 }
 
@@ -54,6 +64,14 @@ func (m *reservationTestSeatRepository) ReleaseReservedSeat(
 ) error {
 	m.releasedIDs = append(m.releasedIDs, id)
 	return m.releaseErr
+}
+
+func (m *reservationTestRepository) FindExpiredActive(
+	_ context.Context,
+	_ time.Time,
+	_ int,
+) ([]domain.SeatReservation, error) {
+	return m.expiredReservations, m.findExpiredErr
 }
 
 type reservationTestTicketRepository struct {
@@ -240,4 +258,73 @@ func TestExpireReservation_ItemWithoutInventoryReference(t *testing.T) {
 	require.ErrorIs(t, err, domain.ErrInvalidReservationRequest)
 	assert.Empty(t, seats.releasedIDs)
 	assert.Empty(t, tickets.releasedIDs)
+}
+
+func TestProcessExpiredReservations_NoExpiredReservations(t *testing.T) {
+	repo := &reservationTestRepository{
+		expiredReservations: []domain.SeatReservation{},
+	}
+	seats := &reservationTestSeatRepository{}
+	tickets := &reservationTestTicketRepository{}
+
+	usecase, manager := newReservationTestUsecase(repo, seats, tickets)
+
+	err := usecase.ProcessExpiredReservations(context.Background(), 100)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, manager.calls)
+	assert.Empty(t, seats.releasedIDs)
+	assert.Empty(t, tickets.releasedIDs)
+}
+
+func TestProcessExpiredReservations_ContinuesAfterFailure(t *testing.T) {
+	firstID := uuid.New()
+	secondID := uuid.New()
+	expectedErr := errors.New("failed to expire reservation")
+
+	repo := &reservationTestRepository{
+		expiredReservations: []domain.SeatReservation{
+			{ID: firstID},
+			{ID: secondID},
+		},
+		expireErrors: map[uuid.UUID]error{
+			firstID: expectedErr,
+		},
+		expireResults: map[uuid.UUID]bool{
+			secondID: true,
+		},
+		items: []domain.SeatReservationItem{
+			{TicketTypeID: uuidPtr(uuid.New()), Quantity: 2},
+		},
+	}
+	seats := &reservationTestSeatRepository{}
+	tickets := &reservationTestTicketRepository{}
+
+	usecase, _ := newReservationTestUsecase(repo, seats, tickets)
+
+	err := usecase.ProcessExpiredReservations(context.Background(), 100)
+
+	require.ErrorIs(t, err, expectedErr)
+	assert.Equal(t, 1, len(tickets.releasedIDs))
+	assert.Equal(t, []int{2}, tickets.releasedQuantity)
+}
+
+func uuidPtr(id uuid.UUID) *uuid.UUID {
+	return &id
+}
+
+func TestProcessExpiredReservations_InvalidLimit(t *testing.T) {
+	repo := &reservationTestRepository{}
+	seats := &reservationTestSeatRepository{}
+	tickets := &reservationTestTicketRepository{}
+
+	usecase, manager := newReservationTestUsecase(repo, seats, tickets)
+
+	for _, limit := range []int{0, -1} {
+		err := usecase.ProcessExpiredReservations(context.Background(), limit)
+
+		require.ErrorIs(t, err, domain.ErrInvalidReservationRequest)
+	}
+
+	assert.Equal(t, 0, manager.calls)
 }
