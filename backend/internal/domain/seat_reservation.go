@@ -47,6 +47,10 @@ type SeatReservationRepository interface {
 	) ([]SeatReservationItem, error)
 
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
+
+	ExpireIfActive(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
+	FindExpiredActive( ctx context.Context, now time.Time,limit int) ([]SeatReservation, error)
+	
 }
 
 // SeatReservationItem represents either a specific seat or

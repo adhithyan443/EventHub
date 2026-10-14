@@ -1,7 +1,13 @@
 package main
 
 import (
+	"context"
 	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/config"
 	"github.com/adhithyan443/EventHub/backend/internal/database"
@@ -17,6 +23,8 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
+	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/joho/godotenv"
 )
 
@@ -82,6 +90,17 @@ func main() {
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
 
 	txManager := repository.NewTransactionManager(db, logger)
+
+	reservationUsecase := reservation.NewReservationUsecase(
+		txManager,
+		logger,
+	)
+
+	reservationExpiryWorker := worker.NewReservationExpiryWorker(
+		reservationUsecase,
+		logger,
+		30*time.Second,
+	)
 
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
@@ -234,10 +253,46 @@ func main() {
 		"environment", cfg.AppEnv,
 	)
 
-	if err := router.Run(":" + cfg.ServerPort); err != nil {
-		logger.Error(
-			"server failed to start",
-			"error", err,
-		)
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+
+	defer stop()
+
+	server := &http.Server{
+		Addr:    ":" + cfg.ServerPort,
+		Handler: router,
 	}
+
+	go reservationExpiryWorker.Run(ctx)
+
+	go func() {
+		logger.Info("HTTP server starting", "port", cfg.ServerPort)
+
+		if err := server.ListenAndServe(); err != nil &&
+			err != http.ErrServerClosed {
+			logger.Error("server failed to start", "error", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	logger.Info("shutdown signal received")
+
+	shutdownCtx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		logger.Error("graceful server shutdown failed", "error", err)
+		if closeErr := server.Close(); closeErr != nil {
+			logger.Error("forced server close failed", "error", closeErr)
+		}
+	}
+
+	logger.Info("EventHub backend stopped")
 }

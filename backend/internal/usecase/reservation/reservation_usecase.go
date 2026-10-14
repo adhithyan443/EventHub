@@ -250,6 +250,138 @@ func (u *ReservationUsecase) CreateReservation(
 	return reservation, nil
 }
 
+func (u *ReservationUsecase) ExpireReservation(
+	ctx context.Context,
+	reservationID uuid.UUID,
+) error {
+	if reservationID == uuid.Nil {
+		return domain.ErrInvalidReservationRequest
+	}
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			now := time.Now()
+
+			expired, err := tx.SeatReservationRepository().ExpireIfActive(
+				ctx,
+				reservationID,
+				now,
+			)
+			if err != nil {
+				return err
+			}
+
+			// Nothing to release if the reservation was not expired.
+			if !expired {
+				return nil
+			}
+
+			items, err := tx.SeatReservationRepository().
+				FindItemsByReservationID(ctx, reservationID)
+			if err != nil {
+				return err
+			}
+
+			for _, item := range items {
+				if item.SeatID != nil {
+					if err := tx.SeatRepository().ReleaseReservedSeat(
+						ctx,
+						*item.SeatID,
+					); err != nil {
+						return err
+					}
+
+					continue
+				}
+
+				if item.TicketTypeID != nil {
+					if err := tx.TicketTypeRepository().
+						ReleaseReservedQuantity(
+							ctx,
+							*item.TicketTypeID,
+							item.Quantity,
+						); err != nil {
+						return err
+					}
+
+					continue
+				}
+
+				return domain.ErrInvalidReservationRequest
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		u.logger.ErrorContext(ctx, "reservation expiry failed",
+			slog.String("reservation_id", reservationID.String()),
+			slog.String("error", err.Error()),
+		)
+		return err
+	}
+
+	u.logger.InfoContext(ctx, "reservation expiry processed",
+		slog.String("reservation_id", reservationID.String()),
+	)
+
+	return nil
+}
+
+func (u *ReservationUsecase) ProcessExpiredReservations(
+	ctx context.Context,
+	limit int,
+) error {
+	if limit <= 0 {
+		return domain.ErrInvalidReservationRequest
+	}
+
+	var expiredReservations []domain.SeatReservation
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			var err error
+
+			expiredReservations, err =
+				tx.SeatReservationRepository().FindExpiredActive(
+					ctx,
+					time.Now(),
+					limit,
+				)
+
+			return err
+		},
+	)
+	if err != nil {
+		u.logger.ErrorContext(
+			ctx,
+			"failed to fetch expired reservations",
+			slog.String("error", err.Error()),
+		)
+		return err
+	}
+
+	var firstErr error
+
+	for _, reservation := range expiredReservations {
+		if err := u.ExpireReservation(ctx, reservation.ID); err != nil {
+			u.logger.ErrorContext(
+				ctx,
+				"failed to process expired reservation",
+				slog.String("reservation_id", reservation.ID.String()),
+				slog.String("error", err.Error()),
+			)
+
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+
+	return firstErr
+}
+
 func validateReservationRequest(req CreateReservationRequest) error {
 
 	hasSeats := len(req.SeatIDs) > 0

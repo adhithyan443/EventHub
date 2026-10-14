@@ -162,6 +162,25 @@ func (r *SeatRepository) FindByRowID(
 	return seats, nil
 }
 
+func (r *SeatRepository) FindByID(seatID uuid.UUID) (*domain.Seat, error) {
+	var seatModel models.SeatModel
+
+	if err := r.db.First(&seatModel, "id = ?", seatID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrSeatNotFound
+		}
+
+		r.logger.Error(
+			"seat_find_by_id_failed",
+			"seat_id", seatID,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	return toSeatDomain(&seatModel), nil
+}
+
 func (r *SeatRepository) ReserveIfAvailable(
 	ctx context.Context,
 	seatID uuid.UUID,
@@ -196,23 +215,36 @@ func (r *SeatRepository) ReserveIfAvailable(
 	return nil
 }
 
-func (r *SeatRepository) FindByID(seatID uuid.UUID) (*domain.Seat, error) {
-	var seatModel models.SeatModel
+func (r *SeatRepository) ReleaseReservedSeat(
+	ctx context.Context,
+	seatID uuid.UUID,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatModel{}).
+		Where(
+			"id = ? AND status = ?",
+			seatID,
+			domain.SeatStatusReserved,
+		).
+		Update("status", domain.SeatStatusAvailable)
 
-	if err := r.db.First(&seatModel, "id = ?", seatID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, domain.ErrSeatNotFound
-		}
-
-		r.logger.Error(
-			"seat_find_by_id_failed",
-			"seat_id", seatID,
-			"error", err,
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to release reserved seat",
+			slog.String("seat_id", seatID.String()),
+			slog.String("error", result.Error.Error()),
 		)
-		return nil, err
+		return result.Error
 	}
 
-	return toSeatDomain(&seatModel), nil
+	if result.RowsAffected == 0 {
+		return domain.ErrSeatNotAvailable
+	}
+
+	r.logger.InfoContext(ctx, "reserved seat released",
+		slog.String("seat_id", seatID.String()),
+	)
+
+	return nil
 }
 
 func toSeatModel(seat *domain.Seat) *models.SeatModel {

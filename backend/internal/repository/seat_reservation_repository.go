@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -137,4 +138,92 @@ func (r *seatReservationRepository) UpdateStatus(
 	}
 
 	return nil
+}
+
+func (r *seatReservationRepository) ExpireIfActive(
+	ctx context.Context,
+	id uuid.UUID,
+	now time.Time,
+) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatReservationModel{}).
+		Where(
+			"id = ? AND status = ? AND expires_at <= ?",
+			id,
+			domain.ReservationStatusActive,
+			now,
+		).
+		Updates(map[string]interface{}{
+			"status":     domain.ReservationStatusExpired,
+			"updated_at": now,
+		})
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to expire reservation",
+			slog.String("reservation_id", id.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return false, result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+
+	r.logger.InfoContext(ctx, "reservation expired",
+		slog.String("reservation_id", id.String()),
+	)
+
+	return true, nil
+}
+
+func (r *seatReservationRepository) FindExpiredActive(
+	ctx context.Context,
+	now time.Time,
+	limit int,
+) ([]domain.SeatReservation, error) {
+	if limit <= 0 {
+		return nil, domain.ErrInvalidReservationRequest
+	}
+
+	var reservationModels []models.SeatReservationModel
+
+	err := r.db.WithContext(ctx).
+		Where(
+			"status = ? AND expires_at <= ?",
+			domain.ReservationStatusActive,
+			now,
+		).
+		Order("expires_at ASC").
+		Limit(limit).
+		Find(&reservationModels).Error
+
+	if err != nil {
+		r.logger.ErrorContext(
+			ctx,
+			"failed to find expired reservations",
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	reservations := make(
+		[]domain.SeatReservation,
+		0,
+		len(reservationModels),
+	)
+
+	for _, model := range reservationModels {
+		reservations = append(reservations, domain.SeatReservation{
+			ID:        model.ID,
+			UserID:    model.UserID,
+			EventID:   model.EventID,
+			Status:    model.Status,
+			ExpiresAt: model.ExpiresAt,
+			CreatedAt: model.CreatedAt,
+			UpdatedAt: model.UpdatedAt,
+		})
+	}
+
+	return reservations, nil
 }

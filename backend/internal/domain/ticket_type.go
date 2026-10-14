@@ -31,4 +31,5 @@ type TicketTypeRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteByEventID(ctx context.Context, eventID uuid.UUID) error
 	ReserveQuantityIfAvailable(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error
+	ReleaseReservedQuantity( ctx context.Context,ticketTypeID uuid.UUID,quantity int) error
 }

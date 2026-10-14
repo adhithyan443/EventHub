@@ -18,7 +18,6 @@ const (
 var ErrSeatNotAvailable = errors.New("seat is not available")
 var ErrSeatNotFound = errors.New("seat not found")
 
-
 type Seat struct {
 	ID         uuid.UUID
 	RowID      uuid.UUID
@@ -36,4 +35,5 @@ type SeatRepository interface {
 	FindByID(seatID uuid.UUID) (*Seat, error)
 	CountBookedByLayoutID(layoutID uuid.UUID) (int64, error)
 	ReserveIfAvailable(ctx context.Context, seatID uuid.UUID) error
+	ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error
 }
