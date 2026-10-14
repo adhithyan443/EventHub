@@ -97,6 +97,11 @@ func main() {
 		logger,
 	)
 
+	reservationHandler := handler.NewReservationHandler(
+		reservationUsecase,
+		logger,
+	)
+
 	reservationExpiryWorker := worker.NewReservationExpiryWorker(
 		reservationUsecase,
 		logger,
@@ -245,6 +250,7 @@ func main() {
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,
+		reservationHandler,
 		jwtService,
 	)
 

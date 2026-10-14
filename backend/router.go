@@ -20,13 +20,14 @@ func setupRouter(
 	categoryHandler *handler.CategoryHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
+	reservationHandler *handler.ReservationHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
 
 	// Global middleware.
 	router.Use(
-		
+
 		cors.New(cors.Config{
 			AllowOrigins: []string{
 				"http://localhost:5173",
@@ -68,7 +69,8 @@ func setupRouter(
 
 	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
 	registerCategoryRoutes(router, categoryHandler)
-	registerPublicEventRoutes(router, eventHandler)
+	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
+	registerReservationRoutes(router, reservationHandler, jwtService)
 
 	return router
 }
@@ -285,6 +287,7 @@ func registerCategoryRoutes(
 func registerPublicEventRoutes(
 	router *gin.Engine,
 	eventHandler *handler.EventHandler,
+	seatLayoutHandler *handler.SeatLayoutHandler,
 ) {
 	api := router.Group("/api/v1")
 
@@ -296,5 +299,29 @@ func registerPublicEventRoutes(
 	api.GET(
 		"/events/:eventId",
 		eventHandler.GetPublicEventDetails,
+	)
+
+	api.GET(
+		"/events/:eventId/seat-layout",
+		seatLayoutHandler.GetPublicSeatLayout,
+	)
+}
+
+func registerReservationRoutes(
+	router *gin.Engine,
+	reservationHandler *handler.ReservationHandler,
+	jwtService *token.JWTService,
+) {
+	api := router.Group("/api/v1")
+	// reservations := api.Group("/events/:eventId/reservations")
+
+	// reservations.Use(middleware.Auth(jwtService))
+
+	// reservations.POST("", reservationHandler.CreateReservation)
+
+	api.POST(
+		"/events/:eventId/reservations",
+		middleware.Auth(jwtService),
+		reservationHandler.CreateReservation,
 	)
 }

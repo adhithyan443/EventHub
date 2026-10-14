@@ -1,57 +1,150 @@
 import { useState, useEffect } from "react";
-import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
+import { useParams, useLocation, Link } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import StepsProgress from "../components/StepsProgress";
 import OrderPriceSummary from "../components/OrderPriceSummary";
-import { getCustomerEventById } from "../mockCustomerEvent";
+import { getPublicEventById } from "../../../api/eventApi";
+import useAuthStore from "../../../store/authStore";
+
+const formatDate = (dateStr) => {
+  if (!dateStr) return "Date TBA";
+  const d = new Date(dateStr);
+  if (Number.isNaN(d.getTime())) return dateStr;
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
+
+const formatVenueLocation = (ev) => {
+  if (!ev) return "Location TBA";
+  if (ev.event_type === "ONLINE") return "Online Event";
+  if (ev.venue) {
+    const parts = [ev.venue.city, ev.venue.state].filter(Boolean);
+    if (parts.length > 0) return parts.join(", ");
+    return ev.venue.name || "Venue TBA";
+  }
+  return "Venue TBA";
+};
 
 export default function CheckoutPage() {
-  const { eventId = "sunfield" } = useParams();
-  const navigate = useNavigate();
+  const { eventId } = useParams();
   const location = useLocation();
-  const event = getCustomerEventById(eventId);
 
-  // Read state or fallback to defaults
-  const initialSeats = location.state?.selectedSeats || ["A4", "A5"];
-  const initialPricing = location.state?.pricing || {
-    subtotal: "₹2,998",
-    platformFee: "₹99",
-    taxes: "₹180",
-    total: "₹3,277",
+  const user = useAuthStore((state) => state.user);
+
+  // Read state passed from CustomerEventDetailsPage, or fallback to client-side cache
+  const cacheKey = eventId ? `eventhub_reservation_${eventId}` : null;
+  const getInitialState = () => {
+    if (location.state?.reservation) {
+      return location.state;
+    }
+    if (cacheKey) {
+      try {
+        const cachedRaw = sessionStorage.getItem(cacheKey);
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw);
+          return parsed;
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+    return location.state || {};
   };
 
-  // Determine current step: 2 = Checkout, 3 = Payment, 4 = Confirmation
+  const navState = getInitialState();
+  const reservation = navState.reservation;
+  const selectedTicket = navState.selectedTicket;
+  const ticketPrice = navState.ticketPrice;
+  const quantity = navState.quantity || 1;
+  const selectedSeats = navState.selectedSeats;
+  const selectedSeatObjects = navState.selectedSeatObjects;
+
+  // Event details state
+  const [event, setEvent] = useState(null);
+  const [eventLoading, setEventLoading] = useState(true);
+
+  // Reservation countdown & expiration state
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [isExpired, setIsExpired] = useState(false);
+
+  // Current checkout step: 2 = Checkout, 3 = Payment
   const [currentStep, setCurrentStep] = useState(2);
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [agreedPaymentTerms, setAgreedPaymentTerms] = useState(true);
 
-  // Customer info form fields
+  // Customer info form fields initialized from authenticated user
   const [customerInfo, setCustomerInfo] = useState({
-    fullName: "John Doe",
-    email: "john@example.com",
-    phoneNumber: "+91 98765 43210",
+    fullName: "",
+    email: "",
+    phoneNumber: "",
   });
 
-  // Payment method
+  const effectiveFullName = customerInfo.fullName !== "" ? customerInfo.fullName : (user?.fullName || "");
+  const effectiveEmail = customerInfo.email !== "" ? customerInfo.email : (user?.email || "");
+  const effectivePhone = customerInfo.phoneNumber !== "" ? customerInfo.phoneNumber : (user?.phone || "");
+
+  // Payment method UI selection state
   const [paymentMethod, setPaymentMethod] = useState("UPI");
-  const [upiId, setUpiId] = useState("johndoe@okaxis");
-  const [cardNumber, setCardNumber] = useState("4532 •••• •••• 8892");
-  const [cardExpiry, setCardExpiry] = useState("12/28");
-  const [cardCvv, setCardCvv] = useState("•••");
+  const [upiId, setUpiId] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCvv, setCardCvv] = useState("");
   const [selectedBank, setSelectedBank] = useState("HDFC Bank");
   const [selectedWallet, setSelectedWallet] = useState("Paytm");
 
-  // Countdown timer simulation (09:42)
-  const [timeLeft, setTimeLeft] = useState(582);
-  const [paymentSuccessModal, setPaymentSuccessModal] = useState(false);
-
+  // Load live event details
   useEffect(() => {
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+    let cancelled = false;
+    const fetchEvent = async () => {
+      if (!eventId) {
+        setEventLoading(false);
+        return;
+      }
+      setEventLoading(true);
+      try {
+        const response = await getPublicEventById(eventId);
+        if (cancelled) return;
+        setEvent(response?.data);
+      } catch {
+        // Fallback gracefully if event details cannot be loaded
+      } finally {
+        if (!cancelled) setEventLoading(false);
+      }
+    };
+    fetchEvent();
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId]);
+
+  // Server-driven countdown timer based on reservation.ExpiresAt
+  useEffect(() => {
+    const expiresAtRaw = reservation?.ExpiresAt || reservation?.expires_at;
+    if (!expiresAtRaw) {
+      return;
+    }
+
+    const expiryTime = new Date(expiresAtRaw).getTime();
+
+    const updateTimer = () => {
+      const remaining = Math.max(0, Math.floor((expiryTime - Date.now()) / 1000));
+      setTimeLeft(remaining);
+      if (remaining <= 0) {
+        setIsExpired(true);
+        if (cacheKey) {
+          sessionStorage.removeItem(cacheKey);
+        }
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [reservation, cacheKey]);
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -60,14 +153,83 @@ export default function CheckoutPage() {
   };
 
   const handleProceedToPayment = () => {
-    if (!agreedTerms) return;
+    if (!agreedTerms || isExpired) return;
     setCurrentStep(3);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const handlePay = () => {
-    setPaymentSuccessModal(true);
+  // Pricing calculations
+  const subtotalNum =
+    selectedSeatObjects && selectedSeatObjects.length > 0
+      ? selectedSeatObjects.reduce((acc, s) => acc + (Number(s.price) || 0), 0)
+      : (ticketPrice != null
+          ? Number(ticketPrice)
+          : event?.starting_price
+          ? Number(event.starting_price)
+          : 0) * quantity;
+  const platformFeeNum = subtotalNum > 0 ? 99 : 0;
+  const taxesNum = Math.round(subtotalNum * 0.06);
+  const totalNum = subtotalNum + platformFeeNum + taxesNum;
+
+  const pricing = {
+    subtotal: `₹${subtotalNum.toLocaleString("en-IN")}`,
+    platformFee: `₹${platformFeeNum.toLocaleString("en-IN")}`,
+    taxes: `₹${taxesNum.toLocaleString("en-IN")}`,
+    total: `₹${totalNum.toLocaleString("en-IN")}`,
+    rawTotal: totalNum,
   };
+
+  if (eventLoading) {
+    return (
+      <div className="flex min-h-screen flex-col bg-[#f9f9ff] text-[#141b2b]">
+        <AppHeader />
+        <main className="mx-auto w-full max-w-[1280px] flex-1 px-4 sm:px-6 lg:px-8 py-16 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4 bg-white border border-[#bcc9c6] rounded-xl p-10 shadow-xs max-w-md w-full text-center">
+            <div className="size-10 border-3 border-[#00685f]/30 border-t-[#00685f] rounded-full animate-spin" />
+            <h2 className="font-display font-semibold text-lg text-ink">Loading checkout...</h2>
+            <p className="text-xs text-[#565e74]">Fetching event schedule and reservation details.</p>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  // If no reservation exists, direct user back to event page to select tickets
+  if (!reservation) {
+    return (
+      <div className="flex min-h-screen flex-col bg-[#f9f9ff] text-[#141b2b]">
+        <AppHeader />
+        <main className="mx-auto w-full max-w-[1280px] flex-1 px-4 sm:px-6 lg:px-8 py-16 flex items-center justify-center">
+          <div className="flex flex-col items-center gap-4 bg-white border border-[#bcc9c6] rounded-xl p-8 sm:p-12 shadow-xs max-w-lg w-full text-center">
+            <div className="grid h-16 w-16 place-items-center rounded-full bg-[#f1f3ff] text-[#00685f] text-2xl mb-2">
+              🎫
+            </div>
+            <h2 className="font-display font-bold text-xl sm:text-2xl text-ink">
+              No Active Reservation Found
+            </h2>
+            <p className="text-sm text-[#565e74] leading-relaxed">
+              To proceed to checkout, please select your ticket tier and quantity on the event page first.
+            </p>
+            <div className="mt-4">
+              <Link
+                to={eventId ? `/events/${eventId}` : "/events"}
+                className="inline-flex rounded-lg bg-[#00796d] px-5 py-2.5 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+              >
+                Select Tickets
+              </Link>
+            </div>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  const eventTitle = event?.title || "Event Tickets";
+  const eventDateStr = formatDate(event?.schedule?.event_date);
+  const eventLocationStr = formatVenueLocation(event);
+  const eventThumbnail = event?.banner_image_url || "/assets/59c6d.png";
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f9f9ff] text-[#141b2b]">
@@ -84,7 +246,7 @@ export default function CheckoutPage() {
               <button
                 type="button"
                 onClick={() => setCurrentStep(2)}
-                className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline"
+                className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline cursor-pointer"
               >
                 ← Back to Customer Details
               </button>
@@ -98,76 +260,130 @@ export default function CheckoutPage() {
         {currentStep === 2 && (
           <div>
             {/* Reservation Expire Banner */}
-            <div className="rounded-lg bg-[#ffd8d4] p-3 sm:p-4 text-xs sm:text-sm font-medium text-[#a70a18] flex items-center gap-2 mb-6">
-              <span>◷</span>
-              <span>
-                Your seats are reserved for{" "}
-                <span className="font-mono font-bold">{formatTimer(timeLeft)}</span>
-              </span>
-            </div>
+            {isExpired ? (
+              <div className="rounded-lg bg-[#ffd8d4] p-4 text-xs sm:text-sm font-medium text-[#a70a18] flex items-center justify-between gap-4 mb-6 border border-[#fca5a5]">
+                <div className="flex items-center gap-2">
+                  <span>⏱</span>
+                  <span>Your reservation has expired. Please select tickets again.</span>
+                </div>
+                <Link
+                  to={`/events/${eventId}`}
+                  className="rounded-md bg-[#a70a18] text-white px-3 py-1.5 text-xs font-bold hover:bg-[#850813] transition-colors whitespace-nowrap"
+                >
+                  Select Tickets
+                </Link>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-[#ffd8d4] p-3 sm:p-4 text-xs sm:text-sm font-medium text-[#a70a18] flex items-center gap-2 mb-6">
+                <span>◷</span>
+                <span>
+                  Your tickets are reserved for{" "}
+                  <span className="font-mono font-bold">{formatTimer(timeLeft)}</span>
+                </span>
+              </div>
+            )}
 
             <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)] items-start">
-              {/* Left Column: Event details, Selected Seats, Customer Info */}
+              {/* Left Column: Event details, Selected Tickets, Customer Info */}
               <div className="space-y-6">
                 {/* Event Mini Card */}
                 <section className="rounded-xl border border-[#bcc9c6] bg-white p-4 sm:p-5 shadow-xs flex items-center gap-4 sm:gap-5">
                   <img
-                    src={event.thumbnail}
-                    alt={event.title}
+                    src={eventThumbnail}
+                    alt={eventTitle}
                     className="h-20 w-20 sm:h-24 sm:w-24 rounded-lg object-cover border border-slate-200 shrink-0"
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = "/assets/59c6d.png";
+                    }}
                   />
                   <div className="min-w-0">
                     <h2 className="font-display text-xl sm:text-2xl font-bold text-ink leading-snug">
-                      {event.title}
+                      {eventTitle}
                     </h2>
                     <p className="mt-1 text-xs sm:text-sm text-[#565e74] flex items-center gap-1.5">
-                      <span className="text-[#00796d]">▣</span> {event.date}
+                      <span className="text-[#00796d]">▣</span> {eventDateStr}
                     </p>
                     <p className="text-xs sm:text-sm text-[#565e74] flex items-center gap-1.5 mt-0.5">
-                      <span className="text-[#00796d]">⌖</span> {event.location}
+                      <span className="text-[#00796d]">⌖</span> {eventLocationStr}
                     </p>
                   </div>
                 </section>
 
-                {/* Selected Seats Card */}
+                {/* Selected Tickets Card */}
                 <section className="rounded-xl border border-[#bcc9c6] bg-white p-5 sm:p-6 shadow-xs">
                   <div className="mb-4 flex items-center justify-between border-b border-[#bcc9c6] pb-4">
                     <h2 className="font-display text-lg sm:text-xl font-bold text-ink">
-                      Selected Seats
+                      {selectedSeats && selectedSeats.length > 0 ? "Selected Seats" : "Selected Tickets"}
                     </h2>
                     <Link
-                      to={`/events/${eventId}/seats`}
-                      state={{ selectedSeats: initialSeats }}
+                      to={selectedSeats && selectedSeats.length > 0 ? `/events/${eventId}/seats` : `/events/${eventId}`}
                       className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline"
                     >
-                      Change Seats
+                      {selectedSeats && selectedSeats.length > 0 ? "Change Seats" : "Change Tickets"}
                     </Link>
                   </div>
 
-                  <div className="space-y-2.5">
-                    {initialSeats.map((seat) => (
-                      <div
-                        key={seat}
-                        className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm"
-                      >
-                        <span className="font-medium text-ink flex items-center gap-2">
-                          <span className="text-[#00796d]">▱</span> Seat {seat} —{" "}
-                          {seat.startsWith("A")
-                            ? "VIP"
-                            : seat.startsWith("B")
-                            ? "Premium"
-                            : "General"}
-                        </span>
-                        <strong className="font-display font-bold text-ink">
-                          {seat.startsWith("A")
-                            ? "₹1,499"
-                            : seat.startsWith("B")
-                            ? "₹999"
-                            : "₹499"}
-                        </strong>
+                  {selectedSeatObjects && selectedSeatObjects.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {selectedSeatObjects.map((seat) => (
+                        <div
+                          key={seat.id || `${seat.rowName}${seat.seatNumber}`}
+                          className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="text-[#00796d]">▱</span>
+                            <div>
+                              <strong className="block font-medium text-ink">
+                                Row {seat.rowName}, Seat {seat.seatNumber}
+                              </strong>
+                              {seat.sectionName && (
+                                <span className="text-xs text-[#565e74]">
+                                  {seat.sectionName}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <strong className="font-display font-bold text-ink">
+                            ₹{Number(seat.price || 0).toLocaleString("en-IN")}
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : selectedSeats && selectedSeats.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {selectedSeats.map((seat) => (
+                        <div
+                          key={seat}
+                          className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm"
+                        >
+                          <span className="font-medium text-ink flex items-center gap-2">
+                            <span className="text-[#00796d]">▱</span> Seat {seat}
+                          </span>
+                          <strong className="font-display font-bold text-ink">
+                            ₹{Number(ticketPrice || 0).toLocaleString("en-IN")}
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[#00796d]">▣</span>
+                        <div>
+                          <strong className="block font-medium text-ink">
+                            {selectedTicket || "General Admission"}
+                          </strong>
+                          <span className="text-xs text-[#565e74]">
+                            Quantity: {quantity} {quantity === 1 ? "ticket" : "tickets"} (₹{Number(ticketPrice || 0).toLocaleString("en-IN")} each)
+                          </span>
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                      <strong className="font-display font-bold text-ink">
+                        ₹{(Number(ticketPrice || 0) * quantity).toLocaleString("en-IN")}
+                      </strong>
+                    </div>
+                  )}
                 </section>
 
                 {/* Customer Information Card */}
@@ -183,7 +399,7 @@ export default function CheckoutPage() {
                       </label>
                       <input
                         type="text"
-                        value={customerInfo.fullName}
+                        value={effectiveFullName}
                         onChange={(e) =>
                           setCustomerInfo({ ...customerInfo, fullName: e.target.value })
                         }
@@ -198,7 +414,7 @@ export default function CheckoutPage() {
                         </label>
                         <input
                           type="email"
-                          value={customerInfo.email}
+                          value={effectiveEmail}
                           onChange={(e) =>
                             setCustomerInfo({ ...customerInfo, email: e.target.value })
                           }
@@ -212,7 +428,7 @@ export default function CheckoutPage() {
                         </label>
                         <input
                           type="tel"
-                          value={customerInfo.phoneNumber}
+                          value={effectivePhone}
                           onChange={(e) =>
                             setCustomerInfo({
                               ...customerInfo,
@@ -227,21 +443,19 @@ export default function CheckoutPage() {
                 </section>
 
                 {/* Cancellation Policy Banner */}
-                <div className="rounded-xl border border-[#bcc9c6] bg-[#f1f3ff] p-4 text-xs sm:text-sm">
-                  <div className="flex items-center gap-2 font-bold text-ink">
-                    <span>ⓘ</span>
-                    <span>Cancellation Policy</span>
+                {event?.cancellation && (
+                  <div className="rounded-xl border border-[#bcc9c6] bg-[#f1f3ff] p-4 text-xs sm:text-sm">
+                    <div className="flex items-center gap-2 font-bold text-ink">
+                      <span>ⓘ</span>
+                      <span>Cancellation Policy</span>
+                    </div>
+                    <p className="ml-5 mt-1 text-[#565e74]">
+                      {event.cancellation.cancellation_allowed
+                        ? `Refundable up to ${event.cancellation.refund_percentage}% if cancelled at least ${event.cancellation.cancellation_deadline_hours} hours prior to event.`
+                        : "Tickets are non-refundable for this event."}
+                    </p>
                   </div>
-                  <p className="ml-5 mt-1 text-[#565e74]">
-                    Tickets are non-refundable within 48 hours of the event.
-                  </p>
-                  <button
-                    type="button"
-                    className="ml-5 mt-2 font-semibold text-[#00685f] hover:underline"
-                  >
-                    View Policy
-                  </button>
-                </div>
+                )}
               </div>
 
               {/* Right Sidebar: Price Summary & Proceed CTA */}
@@ -252,10 +466,10 @@ export default function CheckoutPage() {
                   </h2>
 
                   <OrderPriceSummary
-                    subtotal={initialPricing.subtotal}
-                    platformFee={initialPricing.platformFee}
-                    taxes={initialPricing.taxes}
-                    total={initialPricing.total}
+                    subtotal={pricing.subtotal}
+                    platformFee={pricing.platformFee}
+                    taxes={pricing.taxes}
+                    total={pricing.total}
                     className="mb-6"
                   />
 
@@ -272,21 +486,21 @@ export default function CheckoutPage() {
                       <span className="font-semibold text-[#00685f] hover:underline">
                         EventHub Terms &amp; Conditions
                       </span>{" "}
-                      and acknowledge the cancellation policy.
+                      and acknowledge the event policies.
                     </span>
                   </label>
 
                   <button
                     type="button"
                     onClick={handleProceedToPayment}
-                    disabled={!agreedTerms}
-                    className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] disabled:cursor-not-allowed disabled:bg-[#9db5b1] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40"
+                    disabled={!agreedTerms || isExpired}
+                    className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] disabled:cursor-not-allowed disabled:bg-[#9db5b1] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 cursor-pointer"
                   >
-                    Proceed to Payment
+                    {isExpired ? "Reservation Expired" : "Proceed to Payment"}
                   </button>
 
                   <p className="mt-4 text-center text-xs text-[#565e74] flex items-center justify-center gap-1.5">
-                    <span>♙</span> Secure payment
+                    <span>♙</span> Temporary hold active
                   </p>
                 </section>
               </aside>
@@ -298,13 +512,28 @@ export default function CheckoutPage() {
         {currentStep === 3 && (
           <div>
             {/* Payment Reservation Warning */}
-            <div className="rounded-lg bg-[#ffd8d4] p-3 sm:p-4 text-xs sm:text-sm font-medium text-[#a70a18] flex items-center gap-2 mb-6">
-              <span>◷</span>
-              <span>
-                Complete payment before your reservation expires:{" "}
-                <span className="font-mono font-bold">{formatTimer(timeLeft)}</span>
-              </span>
-            </div>
+            {isExpired ? (
+              <div className="rounded-lg bg-[#ffd8d4] p-4 text-xs sm:text-sm font-medium text-[#a70a18] flex items-center justify-between gap-4 mb-6 border border-[#fca5a5]">
+                <div className="flex items-center gap-2">
+                  <span>⏱</span>
+                  <span>Your reservation has expired. Please select tickets again.</span>
+                </div>
+                <Link
+                  to={`/events/${eventId}`}
+                  className="rounded-md bg-[#a70a18] text-white px-3 py-1.5 text-xs font-bold hover:bg-[#850813] transition-colors whitespace-nowrap"
+                >
+                  Select Tickets
+                </Link>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-[#ffd8d4] p-3 sm:p-4 text-xs sm:text-sm font-medium text-[#a70a18] flex items-center gap-2 mb-6">
+                <span>◷</span>
+                <span>
+                  Complete payment before your reservation expires:{" "}
+                  <span className="font-mono font-bold">{formatTimer(timeLeft)}</span>
+                </span>
+              </div>
+            )}
 
             <div className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(340px,1fr)] items-start">
               {/* Left Column: Payment Methods & Inputs */}
@@ -327,7 +556,7 @@ export default function CheckoutPage() {
                         key={method.id}
                         type="button"
                         onClick={() => setPaymentMethod(method.id)}
-                        className={`flex flex-col items-center justify-center h-20 rounded-xl border bg-white p-3 text-xs sm:text-sm font-medium transition-all ${
+                        className={`flex flex-col items-center justify-center h-20 rounded-xl border bg-white p-3 text-xs sm:text-sm font-medium transition-all cursor-pointer ${
                           isSelected
                             ? "border-2 border-[#00796d] text-[#00685f] shadow-xs"
                             : "border-[#bcc9c6] text-[#565e74] hover:border-slate-400"
@@ -438,7 +667,7 @@ export default function CheckoutPage() {
                               key={bank}
                               type="button"
                               onClick={() => setSelectedBank(bank)}
-                              className={`rounded-lg border p-3 text-xs font-semibold transition ${
+                              className={`rounded-lg border p-3 text-xs font-semibold transition cursor-pointer ${
                                 selectedBank === bank
                                   ? "border-[#00796d] bg-[#f8fffe] text-[#00685f]"
                                   : "border-[#bcc9c6] bg-[#f9f9ff] text-[#565e74]"
@@ -464,10 +693,10 @@ export default function CheckoutPage() {
                             key={wallet}
                             type="button"
                             onClick={() => setSelectedWallet(wallet)}
-                            className={`rounded-lg border p-3 text-xs font-semibold transition ${
+                            className={`rounded-lg border p-3 text-xs font-semibold transition cursor-pointer ${
                               selectedWallet === wallet
-                                ? "border-[#00796d] bg-[#f8fffe] text-[#00685f]"
-                                : "border-[#bcc9c6] bg-[#f9f9ff] text-[#565e74]"
+                                  ? "border-[#00796d] bg-[#f8fffe] text-[#00685f]"
+                                  : "border-[#bcc9c6] bg-[#f9f9ff] text-[#565e74]"
                             }`}
                           >
                             {wallet}
@@ -477,22 +706,21 @@ export default function CheckoutPage() {
                     </div>
                   )}
 
-                  <div className="mt-6">
+                  {/* Disabled Payment Submission per Requirements */}
+                  <div className="mt-6 space-y-2">
                     <button
                       type="button"
-                      onClick={handlePay}
-                      className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40"
+                      disabled={true}
+                      className="h-12 w-full rounded-lg bg-[#9db5b1] px-5 font-bold text-white shadow-xs cursor-not-allowed opacity-80"
+                      title="Payment processing integration is pending"
                     >
-                      Pay {initialPricing.total}
+                      Pay {pricing.total} (Integration Pending)
                     </button>
+                    <p className="text-center text-xs text-[#565e74]">
+                      Online payment processing is currently in development. Payment submission is temporarily disabled.
+                    </p>
                   </div>
                 </section>
-
-                {/* Secure Payment Footer Note */}
-                <div className="mt-6 rounded-lg bg-[#e8ecff] p-3 text-xs sm:text-sm text-[#141b2b] flex items-center gap-2">
-                  <span className="text-[#4648d4] font-bold">▣</span>
-                  <span>Secure Payment: Your payment is securely processed.</span>
-                </div>
 
                 <label className="mt-4 flex items-center gap-2.5 cursor-pointer text-xs text-[#565e74]">
                   <input
@@ -512,18 +740,20 @@ export default function CheckoutPage() {
                 <section className="sticky top-20 rounded-xl border border-[#bcc9c6] bg-white shadow-xs overflow-hidden">
                   <div className="bg-[#f1f3ff] p-5 sm:p-6 border-b border-[#bcc9c6]/50">
                     <h2 className="font-display text-xl sm:text-2xl font-bold text-ink">
-                      {event.title}
+                      {eventTitle}
                     </h2>
                     <p className="mt-1 text-xs sm:text-sm text-[#565e74] flex items-center gap-1.5">
-                      <span className="text-[#00796d]">▣</span> {event.date}
+                      <span className="text-[#00796d]">▣</span> {eventDateStr}
                     </p>
                     <div className="mt-4 flex items-center gap-2 flex-wrap">
                       <span className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white">
-                        {initialSeats.length}x VIP
+                        {quantity}x {selectedTicket || "General Admission"}
                       </span>
-                      <span className="text-xs sm:text-sm text-[#565e74]">
-                        Seats {initialSeats.join(" & ")}
-                      </span>
+                      {selectedSeats && selectedSeats.length > 0 && (
+                        <span className="text-xs sm:text-sm text-[#565e74]">
+                          Seats {selectedSeats.join(", ")}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -532,65 +762,14 @@ export default function CheckoutPage() {
                       Order Summary
                     </h3>
                     <OrderPriceSummary
-                      subtotal={initialPricing.subtotal}
-                      platformFee={initialPricing.platformFee}
-                      taxes={initialPricing.taxes}
-                      total={initialPricing.total}
+                      subtotal={pricing.subtotal}
+                      platformFee={pricing.platformFee}
+                      taxes={pricing.taxes}
+                      total={pricing.total}
                     />
                   </div>
                 </section>
               </aside>
-            </div>
-          </div>
-        )}
-
-        {/* Payment Success Confirmation Modal (Mock UI) */}
-        {paymentSuccessModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 sm:p-8 text-center shadow-xl">
-              <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-[#e4f1f0] text-2xl text-[#00796d]">
-                ✓
-              </div>
-              <h3 className="font-display text-2xl font-bold text-ink">
-                Booking Confirmed!
-              </h3>
-              <p className="mt-2 text-sm text-[#565e74]">
-                Your tickets for <strong className="text-ink">{event.title}</strong> have been reserved successfully.
-              </p>
-              <div className="mt-5 rounded-lg bg-[#f1f3ff] p-4 text-xs sm:text-sm text-left space-y-1.5">
-                <div className="flex justify-between">
-                  <span className="text-[#565e74]">Seats:</span>
-                  <span className="font-bold text-ink">{initialSeats.join(", ")}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#565e74]">Amount Paid:</span>
-                  <span className="font-bold text-[#00796d]">{initialPricing.total}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-[#565e74]">Method:</span>
-                  <span className="font-medium text-ink">{paymentMethod}</span>
-                </div>
-              </div>
-
-              <div className="mt-6 flex flex-col gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPaymentSuccessModal(false);
-                    navigate("/events");
-                  }}
-                  className="h-11 w-full rounded-lg bg-[#00796d] font-bold text-white transition hover:bg-[#00685f]"
-                >
-                  Return to Events
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentSuccessModal(false)}
-                  className="h-11 w-full rounded-lg border border-[#bcc9c6] font-semibold text-[#565e74] hover:bg-slate-50"
-                >
-                  Close
-                </button>
-              </div>
             </div>
           </div>
         )}

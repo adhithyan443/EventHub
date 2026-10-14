@@ -1069,3 +1069,110 @@ func isStructuralChange(
 
 	return false
 }
+
+func (u *SeatLayoutUsecase) GetPublicSeatLayout(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (*domain.PublicSeatLayout, error) {
+	if eventID == uuid.Nil {
+		return nil, ErrSeatLayoutEventNotFound
+	}
+
+	var output domain.PublicSeatLayout
+
+	err := u.transactionManager.WithinTransaction(
+		func(repos domain.TransactionRepositories) error {
+			event, err := repos.EventRepository().FindByID(eventID)
+			if err != nil {
+				return err
+			}
+
+			if event.Status != domain.EventStatusPublished || event.Visibility != "PUBLIC" {
+				return domain.ErrEventNotPublic
+			}
+
+			if event.EventType == domain.EventTypeOnline {
+				return ErrSeatLayoutSeatedOnly
+			}
+
+			setting, err := repos.EventSettingRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			if setting.SeatLayoutType != SeatLayoutTypeSeated {
+				return ErrSeatLayoutSeatedOnly
+			}
+
+			layout, err := repos.SeatLayoutRepository().FindByEventID(eventID)
+			if err != nil {
+				return err
+			}
+
+			sections, err := repos.SeatSectionRepository().FindBySeatLayoutID(layout.ID)
+			if err != nil {
+				return err
+			}
+
+			publicSections := make([]domain.PublicSeatSection, 0, len(sections))
+
+			for _, sec := range sections {
+				rows, err := repos.SeatRowRepository().FindBySectionID(sec.ID)
+				if err != nil {
+					return err
+				}
+
+				publicRows := make([]domain.PublicSeatRow, 0, len(rows))
+
+				for _, r := range rows {
+					seats, err := repos.SeatRepository().FindByRowID(r.ID)
+					if err != nil {
+						return err
+					}
+
+					publicSeats := make([]domain.PublicSeat, 0, len(seats))
+					for _, s := range seats {
+						publicSeats = append(publicSeats, domain.PublicSeat{
+							ID:         s.ID,
+							SeatNumber: s.SeatNumber,
+							Status:     s.Status,
+						})
+					}
+
+					publicRows = append(publicRows, domain.PublicSeatRow{
+						ID:      r.ID,
+						RowName: r.RowName,
+						Seats:   publicSeats,
+					})
+				}
+
+				publicSections = append(publicSections, domain.PublicSeatSection{
+					ID:    sec.ID,
+					Name:  sec.Name,
+					Price: sec.Price,
+					Rows:  publicRows,
+				})
+			}
+
+			output = domain.PublicSeatLayout{
+				ID:         layout.ID,
+				EventID:    layout.EventID,
+				LayoutName: layout.LayoutName,
+				Sections:   publicSections,
+			}
+
+			return nil
+		},
+	)
+
+	if err != nil {
+		u.logger.ErrorContext(ctx, "failed to get public seat layout",
+			slog.String("event_id", eventID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	return &output, nil
+}
+

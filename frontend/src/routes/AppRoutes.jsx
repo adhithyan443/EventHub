@@ -70,7 +70,7 @@ export default function AppRoutes() {
             <Route path="/events/:eventId/select-seats" element={<SeatSelectionPage />} />
             <Route path="/events/:eventId/checkout" element={<CheckoutPage />} />
             <Route path="/events/:eventId/payment" element={<CheckoutPage />} />
-            <Route path="/checkout" element={<Navigate to="/events/sunfield/checkout" replace />} />
+            <Route path="/checkout" element={<Navigate to="/events" replace />} />
 
             {/* Become an Organizer Workflow */}
             <Route path="/become-organizer" element={<BecomeOrganizerPage />} />
