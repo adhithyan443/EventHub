@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -266,7 +267,13 @@ func main() {
 		Handler: router,
 	}
 
-	go reservationExpiryWorker.Run(ctx)
+	var workerWG sync.WaitGroup
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		reservationExpiryWorker.Run(ctx)
+	}()
 
 	go func() {
 		logger.Info("HTTP server starting", "port", cfg.ServerPort)
@@ -294,5 +301,7 @@ func main() {
 		}
 	}
 
+	stop()
+	workerWG.Wait()
 	logger.Info("EventHub backend stopped")
 }
