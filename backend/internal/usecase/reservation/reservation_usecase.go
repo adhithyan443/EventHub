@@ -329,6 +329,84 @@ func (u *ReservationUsecase) ExpireReservation(
 	return nil
 }
 
+func (u *ReservationUsecase) CancelReservation(
+    ctx context.Context,
+    reservationID uuid.UUID,
+    userID uuid.UUID,
+) error {
+	
+    if reservationID == uuid.Nil || userID == uuid.Nil {
+        return domain.ErrInvalidReservationRequest
+    }
+
+    err := u.transactionManager.WithinTransaction(
+        func(tx domain.TransactionRepositories) error {
+            cancelled, err := tx.SeatReservationRepository().CancelIfActive(
+                ctx,
+                reservationID,
+                userID,
+            )
+            if err != nil {
+                return err
+            }
+
+            if !cancelled {
+                return domain.ErrSeatReservationNotFound
+            }
+
+            items, err := tx.SeatReservationRepository().
+                FindItemsByReservationID(ctx, reservationID)
+            if err != nil {
+                return err
+            }
+
+            for _, item := range items {
+                if item.SeatID != nil {
+                    if err := tx.SeatRepository().ReleaseReservedSeat(
+                        ctx,
+                        *item.SeatID,
+                    ); err != nil {
+                        return err
+                    }
+                    continue
+                }
+
+                if item.TicketTypeID != nil {
+                    if err := tx.TicketTypeRepository().ReleaseReservedQuantity(
+                        ctx,
+                        *item.TicketTypeID,
+                        item.Quantity,
+                    ); err != nil {
+                        return err
+                    }
+                    continue
+                }
+
+                return domain.ErrInvalidReservationRequest
+            }
+
+            return nil
+        },
+    )
+
+    if err != nil {
+        u.logger.ErrorContext(ctx, "reservation cancellation failed",
+            slog.String("reservation_id", reservationID.String()),
+            slog.String("user_id", userID.String()),
+            slog.String("error", err.Error()),
+        )
+        return err
+    }
+
+    u.logger.InfoContext(ctx, "reservation cancelled",
+        slog.String("reservation_id", reservationID.String()),
+        slog.String("user_id", userID.String()),
+    )
+
+    return nil
+}
+
+
 func (u *ReservationUsecase) ProcessExpiredReservations(
 	ctx context.Context,
 	limit int,

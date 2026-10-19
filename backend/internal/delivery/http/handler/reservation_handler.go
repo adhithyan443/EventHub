@@ -133,3 +133,58 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 		},
 	})
 }
+
+func (h *ReservationHandler) CancelReservation(c *gin.Context) {
+	userValue, exists := c.Get("user_id")
+	if !exists {
+		c.Error(appErrors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+
+	userID, ok := userValue.(uuid.UUID)
+	if !ok || userID == uuid.Nil {
+		c.Error(appErrors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+
+	reservationID, err := uuid.Parse(c.Param("reservationId"))
+	if err != nil || reservationID == uuid.Nil {
+		c.Error(appErrors.NewValidationError("invalid reservation ID"))
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	h.logger.InfoContext(ctx, "cancelling reservation",
+		slog.String("reservation_id", reservationID.String()),
+		slog.String("user_id", userID.String()),
+	)
+
+	if err := h.reservationUsecase.CancelReservation(
+		ctx,
+		reservationID,
+		userID,
+	); err != nil {
+		switch {
+		case errors.Is(err, domain.ErrInvalidReservationRequest):
+			c.Error(appErrors.NewValidationError("invalid reservation request"))
+
+		case errors.Is(err, domain.ErrSeatReservationNotFound):
+			c.Error(appErrors.NewNotFoundError("active reservation not found"))
+
+		default:
+			h.logger.ErrorContext(ctx, "reservation cancellation failed",
+				slog.String("reservation_id", reservationID.String()),
+				slog.String("user_id", userID.String()),
+				slog.String("error", err.Error()),
+			)
+			c.Error(err)
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "reservation cancelled successfully",
+	})
+}

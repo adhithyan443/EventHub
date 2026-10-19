@@ -177,6 +177,47 @@ func (r *seatReservationRepository) ExpireIfActive(
 	return true, nil
 }
 
+func (r *seatReservationRepository) CancelIfActive(
+	ctx context.Context,
+	id uuid.UUID,
+	userID uuid.UUID,
+) (bool, error) {
+	now := time.Now()
+
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatReservationModel{}).
+		Where(
+			"id = ? AND user_id = ? AND status = ? AND expires_at > ?",
+			id,
+			userID,
+			domain.ReservationStatusActive,
+			now,
+		).
+		Updates(map[string]interface{}{
+			"status":     domain.ReservationStatusCancelled,
+			"updated_at": now,
+		})
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to cancel reservation",
+			slog.String("reservation_id", id.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return false, result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+
+	r.logger.InfoContext(ctx, "reservation cancelled",
+		slog.String("reservation_id", id.String()),
+		slog.String("user_id", userID.String()),
+	)
+
+	return true, nil
+}
+
 func (r *seatReservationRepository) FindExpiredActive(
 	ctx context.Context,
 	now time.Time,

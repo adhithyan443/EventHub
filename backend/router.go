@@ -324,4 +324,10 @@ func registerReservationRoutes(
 		middleware.Auth(jwtService),
 		reservationHandler.CreateReservation,
 	)
+
+	api.DELETE(
+		"/reservations/:reservationId",
+		middleware.Auth(jwtService),
+		reservationHandler.CancelReservation,
+	)
 }
