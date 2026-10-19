@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var ErrTicketTypeNotFound = errors.New("ticket type not found")
@@ -15,7 +16,7 @@ type TicketType struct {
 	ID                uuid.UUID
 	EventID           uuid.UUID
 	Name              string
-	Price             float64
+	Price             decimal.Decimal
 	TotalQuantity     int
 	AvailableQuantity int
 	Description       string

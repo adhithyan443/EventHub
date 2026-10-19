@@ -11,6 +11,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,4 +328,45 @@ func TestProcessExpiredReservations_InvalidLimit(t *testing.T) {
 	}
 
 	assert.Equal(t, 0, manager.calls)
+}
+
+func TestSeatReservationItem_Total_GeneralAdmission(t *testing.T) {
+	// 3 tickets at 499.99 INR
+	// In float64 arithmetic: 499.99 * 3 = 1499.9700000000002
+	// In exact decimal arithmetic: 499.99 * 3 = 1499.97
+	unitPrice := decimal.RequireFromString("499.99")
+	item := domain.SeatReservationItem{
+		Quantity: 3,
+		Price:    unitPrice,
+	}
+
+	total := item.Total()
+
+	expected := decimal.RequireFromString("1499.97")
+	assert.True(t, expected.Equal(total), "expected %s, got %s", expected.String(), total.String())
+	assert.Equal(t, "1499.97", total.String())
+}
+
+func TestSeatReservationItem_Total_Seated(t *testing.T) {
+	seatPrice := decimal.RequireFromString("1250.00")
+	item := domain.SeatReservationItem{
+		Quantity: 1,
+		Price:    seatPrice,
+	}
+
+	total := item.Total()
+
+	expected := decimal.RequireFromString("1250.00")
+	assert.True(t, expected.Equal(total), "expected %s, got %s", expected.String(), total.String())
+}
+
+func TestSeatReservationItem_Total_ZeroQuantity(t *testing.T) {
+	item := domain.SeatReservationItem{
+		Quantity: 0,
+		Price:    decimal.RequireFromString("500.00"),
+	}
+
+	total := item.Total()
+
+	assert.True(t, decimal.Zero.Equal(total))
 }

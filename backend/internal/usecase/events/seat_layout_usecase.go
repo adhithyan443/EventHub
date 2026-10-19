@@ -9,6 +9,7 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var (
@@ -36,7 +37,7 @@ type CreateSeatLayoutInput struct {
 
 type SeatSectionInput struct {
 	Name  string
-	Price float64
+	Price decimal.Decimal
 	Rows  []SeatRowInput
 }
 
@@ -62,7 +63,7 @@ type UpdateSeatLayoutInput struct {
 type UpdateSeatSectionInput struct {
 	ID    *uuid.UUID
 	Name  string
-	Price float64
+	Price decimal.Decimal
 	Rows  []UpdateSeatRowInput
 }
 
@@ -424,7 +425,7 @@ func validateSeatLayoutStructure(
 			return ErrInvalidSeatSection
 		}
 
-		if section.Price < 0 {
+		if section.Price.IsNegative() {
 			return ErrInvalidSeatSection
 		}
 
@@ -918,7 +919,7 @@ func validateUpdateSeatLayoutInput(input UpdateSeatLayoutInput) error {
 		}
 		seenSectionNames[lowerName] = true
 
-		if section.Price < 0 {
+		if section.Price.IsNegative() {
 			return ErrInvalidSeatSection
 		}
 		if section.ID != nil {
@@ -1149,7 +1150,7 @@ func (u *SeatLayoutUsecase) GetPublicSeatLayout(
 				publicSections = append(publicSections, domain.PublicSeatSection{
 					ID:    sec.ID,
 					Name:  sec.Name,
-					Price: sec.Price,
+					Price: sec.Price.InexactFloat64(),
 					Rows:  publicRows,
 				})
 			}
@@ -1175,4 +1176,3 @@ func (u *SeatLayoutUsecase) GetPublicSeatLayout(
 
 	return &output, nil
 }
-

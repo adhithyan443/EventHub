@@ -14,6 +14,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var ErrEventNotEditable = errors.New("event is not editable")
@@ -110,7 +111,7 @@ type CreateEventInput struct {
 type TicketTypeInput struct {
 	ID          *uuid.UUID
 	Name        string
-	Price       float64
+	Price       decimal.Decimal
 	Capacity    int
 	Description string
 }
@@ -1471,7 +1472,7 @@ type EventDetailsTicketType struct {
 	ID                uuid.UUID
 	EventID           uuid.UUID
 	Name              string
-	Price             float64
+	Price             decimal.Decimal
 	TotalQuantity     int
 	AvailableQuantity int
 	SoldQuantity      int
@@ -1489,7 +1490,7 @@ type EventDetailsSeatLayout struct {
 type EventDetailsSeatSection struct {
 	ID    uuid.UUID
 	Name  string
-	Price float64
+	Price decimal.Decimal
 	Rows  []EventDetailsSeatRow
 }
 
@@ -1509,7 +1510,7 @@ type EventDetailsStatistics struct {
 	TicketsSold    int
 	TicketCapacity int
 	PercentageSold int
-	Revenue        float64
+	Revenue        decimal.Decimal
 	IsMock         bool
 }
 
@@ -1959,7 +1960,7 @@ func (u *EventUsecase) GetEventDetails(
 
 			// Booking/payment functionality is not implemented yet.
 			// Revenue is intentionally mocked until the payment module exists.
-			const mockRevenue = 15000.00
+			mockRevenue := decimal.NewFromInt(15000)
 
 			output.Statistics = EventDetailsStatistics{
 				TicketsSold:    totalSold,
@@ -2705,7 +2706,7 @@ func validateTicketTypes(ticketTypes []TicketTypeInput) error {
 			return errors.New("ticket type name must not exceed 100 characters")
 		}
 
-		if ticket.Price < 0 {
+		if ticket.Price.IsNegative() {
 			return errors.New("ticket type price cannot be negative")
 		}
 
@@ -2979,7 +2980,7 @@ func (u *EventUsecase) PublishEvent(
 
 				for _, ticket := range ticketTypes {
 					if strings.TrimSpace(ticket.Name) == "" ||
-						ticket.Price < 0 ||
+						ticket.Price.IsNegative() ||
 						ticket.TotalQuantity <= 0 ||
 						ticket.AvailableQuantity < 0 ||
 						ticket.AvailableQuantity > ticket.TotalQuantity {
@@ -3017,7 +3018,7 @@ func (u *EventUsecase) PublishEvent(
 
 				for _, section := range sections {
 					if strings.TrimSpace(section.Name) == "" ||
-						section.Price < 0 ||
+						section.Price.IsNegative() ||
 						section.TotalCapacity <= 0 {
 						return ErrEventNotPublishable
 					}
@@ -3274,7 +3275,7 @@ func (u *EventUsecase) GetPublicEventDetails(
 			isVerified := organizer != nil && organizer.Status == "ACTIVE"
 
 			var ticketTypes []domain.PublicEventDetailsTicketType
-			minPrice := -1.0
+			minPrice := decimal.NewFromInt(-1)
 
 			if setting.SeatLayoutType == SeatLayoutTypeSeated {
 				if layout, layoutErr := tx.SeatLayoutRepository().FindByEventID(eventID); layoutErr == nil && layout != nil {
@@ -3292,14 +3293,14 @@ func (u *EventUsecase) GetPublicEventDetails(
 							status = "SELLING_FAST"
 						}
 
-						if minPrice < 0 || stat.Price < minPrice {
+						if minPrice.IsNegative() || stat.Price.LessThan(minPrice) {
 							minPrice = stat.Price
 						}
 
 						ticketTypes = append(ticketTypes, domain.PublicEventDetailsTicketType{
 							ID:                stat.ID,
 							Name:              stat.Name,
-							Price:             stat.Price,
+							Price:             stat.Price.InexactFloat64(),
 							TotalQuantity:     stat.TotalCapacity,
 							AvailableQuantity: stat.AvailableQuantity,
 							Description:       stat.Name,
@@ -3322,14 +3323,14 @@ func (u *EventUsecase) GetPublicEventDetails(
 						status = "SELLING_FAST"
 					}
 
-					if minPrice < 0 || tt.Price < minPrice {
+					if minPrice.IsNegative() || tt.Price.LessThan(minPrice) {
 						minPrice = tt.Price
 					}
 
 					ticketTypes = append(ticketTypes, domain.PublicEventDetailsTicketType{
 						ID:                tt.ID,
 						Name:              tt.Name,
-						Price:             tt.Price,
+						Price:             tt.Price.InexactFloat64(),
 						TotalQuantity:     tt.TotalQuantity,
 						AvailableQuantity: tt.AvailableQuantity,
 						Description:       tt.Description,
@@ -3338,8 +3339,8 @@ func (u *EventUsecase) GetPublicEventDetails(
 				}
 			}
 
-			if minPrice < 0 {
-				minPrice = 0
+			if minPrice.IsNegative() {
+				minPrice = decimal.Zero
 			}
 
 			output = domain.PublicEventDetails{
@@ -3384,7 +3385,7 @@ func (u *EventUsecase) GetPublicEventDetails(
 					Verified:  isVerified,
 				},
 				TicketTypes:   ticketTypes,
-				StartingPrice: minPrice,
+				StartingPrice: minPrice.InexactFloat64(),
 			}
 
 			if venue != nil {

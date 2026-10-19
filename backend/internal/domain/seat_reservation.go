@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -49,9 +50,9 @@ type SeatReservationRepository interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status string) error
 
 	ExpireIfActive(ctx context.Context, id uuid.UUID, now time.Time) (bool, error)
-	FindExpiredActive( ctx context.Context, now time.Time,limit int) ([]SeatReservation, error)
+	FindExpiredActive(ctx context.Context, now time.Time, limit int) ([]SeatReservation, error)
 
-	CancelIfActive(ctx context.Context,id uuid.UUID,userID uuid.UUID) (bool, error)
+	CancelIfActive(ctx context.Context, id uuid.UUID, userID uuid.UUID) (bool, error)
 }
 
 // SeatReservationItem represents either a specific seat or
@@ -74,6 +75,13 @@ type SeatReservationItem struct {
 	SeatID        *uuid.UUID
 	TicketTypeID  *uuid.UUID
 	Quantity      int
-	Price         float64
+	Price         decimal.Decimal
 	CreatedAt     time.Time
+}
+
+// Total calculates the total price of the reservation item using exact decimal arithmetic.
+// For General Admission, it computes unit price * quantity.
+// For reserved seating, quantity is 1 so it yields unit price.
+func (item *SeatReservationItem) Total() decimal.Decimal {
+	return item.Price.Mul(decimal.NewFromInt(int64(item.Quantity)))
 }

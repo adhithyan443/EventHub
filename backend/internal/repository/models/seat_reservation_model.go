@@ -5,6 +5,7 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type SeatReservationModel struct {
@@ -51,12 +52,12 @@ func SeatReservationModelFromDomain(
 // SeatReservationItemModel represents one reserved seat or a
 // quantity of General Admission tickets.
 type SeatReservationItemModel struct {
-	ID            uuid.UUID  `gorm:"type:uuid;primaryKey"`
-	ReservationID uuid.UUID  `gorm:"type:uuid;not null;index"`
-	SeatID        *uuid.UUID `gorm:"type:uuid;index"`
-	TicketTypeID  *uuid.UUID `gorm:"type:uuid;index"`
-	Quantity      int        `gorm:"not null;default:1"`
-	Price         float64    `gorm:"type:numeric(10,2);not null"`
+	ID            uuid.UUID       `gorm:"type:uuid;primaryKey"`
+	ReservationID uuid.UUID       `gorm:"type:uuid;not null;index"`
+	SeatID        *uuid.UUID      `gorm:"type:uuid;index"`
+	TicketTypeID  *uuid.UUID      `gorm:"type:uuid;index"`
+	Quantity      int             `gorm:"not null;default:1"`
+	Price         decimal.Decimal `gorm:"type:numeric(10,2);not null"`
 
 	CreatedAt time.Time `gorm:"not null;autoCreateTime"`
 }

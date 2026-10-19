@@ -11,6 +11,7 @@ import (
 	seatLayoutUsecase "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type SeatLayoutHandler struct {
@@ -101,7 +102,7 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 
 		sections = append(sections, seatLayoutUsecase.SeatSectionInput{
 			Name:  section.Name,
-			Price: section.Price,
+			Price: decimal.NewFromFloat(section.Price).Round(2),
 			Rows:  rows,
 		})
 	}
@@ -274,7 +275,7 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		sections = append(sections, seatLayoutUsecase.UpdateSeatSectionInput{
 			ID:    sec.ID,
 			Name:  strings.TrimSpace(sec.Name),
-			Price: sec.Price,
+			Price: decimal.NewFromFloat(sec.Price).Round(2),
 			Rows:  rows,
 		})
 	}
@@ -381,4 +382,3 @@ func (h *SeatLayoutHandler) GetPublicSeatLayout(c *gin.Context) {
 		},
 	})
 }
-

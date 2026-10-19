@@ -7,6 +7,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -144,13 +145,13 @@ func (r *SeatSectionRepository) FindWithStatsBySeatLayoutID(
 	seatLayoutID uuid.UUID,
 ) ([]domain.SeatSectionWithStats, error) {
 	type sectionStatRow struct {
-		ID                uuid.UUID `gorm:"column:id"`
-		SeatLayoutID      uuid.UUID `gorm:"column:seat_layout_id"`
-		Name              string    `gorm:"column:name"`
-		Price             float64   `gorm:"column:price"`
-		TotalCapacity     int       `gorm:"column:total_capacity"`
-		AvailableQuantity int       `gorm:"column:available_quantity"`
-		SoldQuantity      int       `gorm:"column:sold_quantity"`
+		ID                uuid.UUID       `gorm:"column:id"`
+		SeatLayoutID      uuid.UUID       `gorm:"column:seat_layout_id"`
+		Name              string          `gorm:"column:name"`
+		Price             decimal.Decimal `gorm:"column:price"`
+		TotalCapacity     int             `gorm:"column:total_capacity"`
+		AvailableQuantity int             `gorm:"column:available_quantity"`
+		SoldQuantity      int             `gorm:"column:sold_quantity"`
 	}
 
 	var rows []sectionStatRow
