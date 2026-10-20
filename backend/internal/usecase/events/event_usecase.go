@@ -146,6 +146,24 @@ func (u *EventUsecase) CreateEvent(
 	input.SeatLayoutType = strings.ToUpper(strings.TrimSpace(input.SeatLayoutType))
 	input.BannerContentType = strings.ToLower(strings.TrimSpace(input.BannerContentType))
 
+	normalizedCancellationPolicy, valErr := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	)
+	if valErr != nil {
+		u.logger.Warn(
+			"event_create_validation_failed",
+			"user_id", input.UserID,
+			"event_type", input.EventType,
+			"error", valErr,
+		)
+
+		return nil, valErr
+	}
+	input.RefundPolicy = normalizedCancellationPolicy
+
 	if err := validateCreateEventInput(input); err != nil {
 		u.logger.Warn(
 			"event_create_validation_failed",
@@ -686,6 +704,24 @@ func (u *EventUsecase) UpdateEvent(
 		"event_id", input.EventID,
 		"user_id", input.UserID,
 	)
+
+	normalizedCancellationPolicy, valErr := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	)
+	if valErr != nil {
+		u.logger.Warn(
+			"event_update_validation_failed",
+			"event_id", input.EventID,
+			"user_id", input.UserID,
+			"error", valErr,
+		)
+
+		return nil, valErr
+	}
+	input.RefundPolicy = normalizedCancellationPolicy
 
 	if err := validateUpdateEventInput(input); err != nil {
 		u.logger.Warn(
@@ -2359,20 +2395,13 @@ func validateCreateEventInput(input CreateEventInput) error {
 		return ErrInvalidEventSettings
 	}
 
-	if input.CancellationAllowed &&
-		input.CancellationDeadlineHours <= 0 {
-		return ErrInvalidCancellation
-	}
-	if input.RefundPercentage < 0 || input.RefundPercentage > 100 {
-		return ErrInvalidCancellation
-	}
-	if input.CancellationAllowed && strings.TrimSpace(input.RefundPolicy) == "" {
-		return ErrInvalidCancellation
-	}
-
-	if !input.CancellationAllowed &&
-		(input.CancellationDeadlineHours != 0 || input.RefundPercentage != 0) {
-		return ErrInvalidCancellation
+	if _, err := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	); err != nil {
+		return err
 	}
 
 	if err := validateEventContact(input.Contact); err != nil {
@@ -2380,6 +2409,52 @@ func validateCreateEventInput(input CreateEventInput) error {
 	}
 
 	return nil
+}
+
+func validateCancellationSettings(
+	allowed bool,
+	deadlineHours int,
+	refundPolicy string,
+	refundPercentage int,
+) (string, error) {
+	normPolicy := strings.ToUpper(strings.TrimSpace(refundPolicy))
+
+	if !allowed {
+		if deadlineHours != 0 || refundPercentage != 0 {
+			return "", ErrInvalidCancellation
+		}
+		if normPolicy != "" && normPolicy != domain.RefundPolicyNoRefund {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyNoRefund, nil
+	}
+
+	if deadlineHours <= 0 {
+		return "", ErrInvalidCancellation
+	}
+
+	switch normPolicy {
+	case domain.RefundPolicyFull:
+		if refundPercentage != 100 {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyFull, nil
+
+	case domain.RefundPolicyPartial:
+		if refundPercentage <= 0 || refundPercentage >= 100 {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyPartial, nil
+
+	case domain.RefundPolicyNoRefund:
+		if refundPercentage != 0 {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyNoRefund, nil
+
+	default:
+		return "", ErrInvalidCancellation
+	}
 }
 
 func validateEventContact(input EventContactInput) error {
@@ -2619,14 +2694,13 @@ func validateUpdateEventInput(input UpdateEventInput) error {
 		return ErrInvalidEventSettings
 	}
 
-	if input.CancellationAllowed &&
-		input.CancellationDeadlineHours <= 0 {
-		return ErrInvalidCancellation
-	}
-
-	if !input.CancellationAllowed &&
-		input.CancellationDeadlineHours != 0 {
-		return ErrInvalidCancellation
+	if _, err := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	); err != nil {
+		return err
 	}
 
 	if err := validateEventContact(input.Contact); err != nil {
@@ -2957,13 +3031,20 @@ func (u *EventUsecase) PublishEvent(
 				return ErrEventNotPublishable
 			}
 
-			if cancellation.CancellationAllowed {
-				if cancellation.CancellationDeadlineHours <= 0 ||
-					strings.TrimSpace(cancellation.RefundPolicy) == "" ||
-					cancellation.RefundPercentage < 0 ||
-					cancellation.RefundPercentage > 100 {
-					return ErrEventNotPublishable
-				}
+			if _, err := validateCancellationSettings(
+				cancellation.CancellationAllowed,
+				cancellation.CancellationDeadlineHours,
+				cancellation.RefundPolicy,
+				cancellation.RefundPercentage,
+			); err != nil {
+				u.logger.Warn(
+					"event_publish_cancellation_invalid",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+
+				return ErrEventNotPublishable
 			}
 
 			// 13. Ticket / seat inventory.

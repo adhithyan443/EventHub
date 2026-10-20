@@ -67,6 +67,6 @@ func TestDecimalPrecisionPreservation(t *testing.T) {
 
 	total := price.Mul(qty)
 	expected := decimal.RequireFromString("1399.93")
-
+	
 	assert.True(t, expected.Equal(total), "expected %s, got %s", expected.String(), total.String())
 }
