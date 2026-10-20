@@ -10,6 +10,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type seatReservationRepository struct {
@@ -75,6 +76,30 @@ func (r *seatReservationRepository) FindByID(
 	var model models.SeatReservationModel
 
 	err := r.db.WithContext(ctx).First(&model, "id = ?", id).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrSeatReservationNotFound
+		}
+
+		r.logger.ErrorContext(ctx, "failed to find reservation",
+			"reservation_id", id,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	return model.ToDomain(), nil
+}
+
+func (r *seatReservationRepository) FindByIDForUpdate(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.SeatReservation, error) {
+	var model models.SeatReservationModel
+
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		First(&model, "id = ?", id).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, domain.ErrSeatReservationNotFound

@@ -22,6 +22,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/checkout"
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
@@ -102,12 +103,21 @@ func main() {
 		logger,
 	)
 
+	checkoutUsecase := checkout.NewCheckoutUsecase(
+		txManager,
+		logger,
+	)
+
+	checkoutHandler := handler.NewCheckoutHandler(
+		checkoutUsecase,
+		logger,
+	)
+
 	reservationExpiryWorker := worker.NewReservationExpiryWorker(
 		reservationUsecase,
 		logger,
 		30*time.Second,
 	)
-
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
@@ -251,6 +261,7 @@ func main() {
 		eventHandler,
 		seatLayoutHandler,
 		reservationHandler,
+		checkoutHandler,
 		jwtService,
 	)
 

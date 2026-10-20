@@ -21,6 +21,7 @@ func setupRouter(
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	reservationHandler *handler.ReservationHandler,
+	checkoutHandler *handler.CheckoutHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -71,6 +72,7 @@ func setupRouter(
 	registerCategoryRoutes(router, categoryHandler)
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService)
+	registerCheckoutRoutes(router, checkoutHandler, jwtService)
 
 	return router
 }
@@ -336,4 +338,15 @@ func registerReservationRoutes(
 		middleware.Auth(jwtService),
 		reservationHandler.CancelReservation,
 	)
+}
+
+func registerCheckoutRoutes(
+	router *gin.Engine,
+	checkoutHandler *handler.CheckoutHandler,
+	jwtService *token.JWTService,
+) {
+	api := router.Group("/api/v1")
+	api.Use(middleware.Auth(jwtService))
+
+	api.POST("/bookings/checkout", checkoutHandler.CreateCheckout)
 }

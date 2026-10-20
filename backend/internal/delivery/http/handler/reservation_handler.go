@@ -97,13 +97,18 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 		case errors.Is(err, domain.ErrInvalidReservationRequest):
 			c.Error(appErrors.NewValidationError("invalid reservation request"))
 
+		case errors.Is(err, domain.ErrEventNotPublic):
+			c.Error(appErrors.NewForbiddenError(
+				"event is not publicly available",
+			))
+
 		case errors.Is(err, domain.ErrEventNotFound),
 			errors.Is(err, domain.ErrSeatNotFound),
 			errors.Is(err, domain.ErrSeatLayoutNotFound),
-			errors.Is(err, domain.ErrTicketTypeNotFound),
-			errors.Is(err, domain.ErrEventNotPublic):
-			c.Error(appErrors.NewNotFoundError("event or requested inventory not found"))
-
+			errors.Is(err, domain.ErrTicketTypeNotFound):
+			c.Error(appErrors.NewNotFoundError(
+				"event or requested inventory not found",
+			))
 		case errors.Is(err, domain.ErrSeatNotAvailable),
 			errors.Is(err, domain.ErrInsufficientTicketQuantity):
 			c.Error(appErrors.NewConflictError("requested inventory is no longer available"))
