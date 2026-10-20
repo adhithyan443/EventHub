@@ -319,8 +319,14 @@ func registerReservationRoutes(
 
 	// reservations.POST("", reservationHandler.CreateReservation)
 
+	// api.POST(
+	// 	"/events/:eventId/reservations",
+	// 	middleware.Auth(jwtService),
+	// 	reservationHandler.CreateReservation,
+	// )
+
 	api.POST(
-		"/events/:eventId/reservations",
+		"/bookings/reserve",
 		middleware.Auth(jwtService),
 		reservationHandler.CreateReservation,
 	)

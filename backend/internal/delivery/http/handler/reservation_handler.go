@@ -28,12 +28,14 @@ func NewReservationHandler(
 }
 
 type createReservationBody struct {
+	EventID      string   `json:"eventId"`
 	SeatIDs      []string `json:"seat_ids"`
 	TicketTypeID *string  `json:"ticket_type_id"`
 	Quantity     int      `json:"quantity"`
 }
 
 func (h *ReservationHandler) CreateReservation(c *gin.Context) {
+
 	userValue, exists := c.Get("user_id")
 	if !exists {
 		c.Error(appErrors.NewUnauthorizedError("unauthorized"))
@@ -46,15 +48,15 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("eventId"))
-	if err != nil || eventID == uuid.Nil {
-		c.Error(appErrors.NewValidationError("invalid event ID"))
-		return
-	}
-
 	var body createReservationBody
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.Error(appErrors.NewValidationError("invalid request body"))
+		return
+	}
+
+	eventID, err := uuid.Parse(body.EventID)
+	if err != nil || eventID == uuid.Nil {
+		c.Error(appErrors.NewValidationError("invalid event ID"))
 		return
 	}
 
