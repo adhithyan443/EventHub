@@ -49,4 +49,9 @@ type CheckoutRepository interface {
 		id uuid.UUID,
 		status string,
 	) error
+
+	ExpireActiveByReservationID(
+		ctx context.Context,
+		reservationID uuid.UUID,
+	) (bool, error)
 }

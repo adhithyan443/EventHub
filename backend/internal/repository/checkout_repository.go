@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -127,4 +128,39 @@ func (r *checkoutRepository) UpdateStatus(
 	)
 
 	return nil
+}
+
+func (r *checkoutRepository) ExpireActiveByReservationID(
+	ctx context.Context,
+	reservationID uuid.UUID,
+) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.CheckoutModel{}).
+		Where(
+			"reservation_id = ? AND status = ?",
+			reservationID,
+			domain.CheckoutStatusActive,
+		).
+		Updates(map[string]interface{}{
+			"status":     domain.CheckoutStatusExpired,
+			"updated_at": time.Now(),
+		})
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to expire checkout",
+			slog.String("reservation_id", reservationID.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return false, result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+
+	r.logger.InfoContext(ctx, "checkout expired",
+		slog.String("reservation_id", reservationID.String()),
+	)
+
+	return true, nil
 }
