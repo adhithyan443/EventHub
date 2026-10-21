@@ -15,6 +15,7 @@ import (
 	eventUsecase "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 const maxEventBannerSize = 5 * 1024 * 1024 // 5 MB
@@ -380,7 +381,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 		ticketTypes = append(ticketTypes, eventUsecase.TicketTypeInput{
 			ID:          ticketType.ID,
 			Name:        ticketType.Name,
-			Price:       ticketType.Price,
+			Price:       decimal.NewFromFloat(ticketType.Price).Round(2),
 			Capacity:    ticketType.Capacity,
 			Description: ticketType.Description,
 		})
@@ -400,7 +401,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 
 		seatSections = append(seatSections, eventUsecase.SeatSectionInput{
 			Name:  section.Name,
-			Price: section.Price,
+			Price: decimal.NewFromFloat(section.Price).Round(2),
 			Rows:  rows,
 		})
 	}
@@ -891,7 +892,7 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 					ticketTypes = append(ticketTypes, eventUsecase.TicketTypeInput{
 						ID:          ticketType.ID,
 						Name:        ticketType.Name,
-						Price:       ticketType.Price,
+						Price:       decimal.NewFromFloat(ticketType.Price).Round(2),
 						Capacity:    ticketType.Capacity,
 						Description: ticketType.Description,
 					})

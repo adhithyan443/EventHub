@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,6 +14,9 @@ const (
 	SeatStatusBooked    = "BOOKED"
 	SeatStatusDisabled  = "DISABLED"
 )
+
+var ErrSeatNotAvailable = errors.New("seat is not available")
+var ErrSeatNotFound = errors.New("seat not found")
 
 type Seat struct {
 	ID         uuid.UUID
@@ -27,5 +32,8 @@ type SeatRepository interface {
 	Delete(id uuid.UUID) error
 	DeleteByRowID(rowID uuid.UUID) error
 	FindByRowID(rowID uuid.UUID) ([]Seat, error)
+	FindByID(seatID uuid.UUID) (*Seat, error)
 	CountBookedByLayoutID(layoutID uuid.UUID) (int64, error)
+	ReserveIfAvailable(ctx context.Context, seatID uuid.UUID) error
+	ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error
 }

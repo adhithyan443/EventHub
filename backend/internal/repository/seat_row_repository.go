@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
@@ -134,6 +135,26 @@ func (r *SeatRowRepository) FindBySectionID(
 	}
 
 	return rows, nil
+}
+
+func (r *SeatRowRepository) FindByID(id uuid.UUID) (*domain.SeatRow, error) {
+	var rowModel models.SeatRowModel
+
+	if err := r.db.First(&rowModel, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrSeatRowNotFound
+		}
+
+		r.logger.Error(
+			"seat_row_find_by_id_failed",
+			"row_id", id,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	return toSeatRowDomain(&rowModel), nil
 }
 
 func toSeatRowModel(row *domain.SeatRow) *models.SeatRowModel {

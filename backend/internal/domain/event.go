@@ -24,6 +24,12 @@ const (
 	EventTypeHybrid   = "HYBRID"
 )
 
+const (
+	RefundPolicyFull     = "FULL"
+	RefundPolicyPartial  = "PARTIAL"
+	RefundPolicyNoRefund = "NO_REFUND"
+)
+
 type Event struct {
 	ID                  uuid.UUID
 	OrganizerID         uuid.UUID

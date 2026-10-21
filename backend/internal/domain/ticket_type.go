@@ -6,15 +6,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var ErrTicketTypeNotFound = errors.New("ticket type not found")
+var ErrInsufficientTicketQuantity = errors.New("insufficient ticket quantity available")
 
 type TicketType struct {
 	ID                uuid.UUID
 	EventID           uuid.UUID
 	Name              string
-	Price             float64
+	Price             decimal.Decimal
 	TotalQuantity     int
 	AvailableQuantity int
 	Description       string
@@ -29,4 +31,6 @@ type TicketTypeRepository interface {
 	Update(ctx context.Context, ticketType *TicketType) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteByEventID(ctx context.Context, eventID uuid.UUID) error
+	ReserveQuantityIfAvailable(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error
+	ReleaseReservedQuantity( ctx context.Context,ticketTypeID uuid.UUID,quantity int) error
 }

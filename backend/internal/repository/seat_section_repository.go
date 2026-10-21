@@ -1,11 +1,13 @@
 package repository
 
 import (
+	"errors"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -143,13 +145,13 @@ func (r *SeatSectionRepository) FindWithStatsBySeatLayoutID(
 	seatLayoutID uuid.UUID,
 ) ([]domain.SeatSectionWithStats, error) {
 	type sectionStatRow struct {
-		ID                uuid.UUID `gorm:"column:id"`
-		SeatLayoutID      uuid.UUID `gorm:"column:seat_layout_id"`
-		Name              string    `gorm:"column:name"`
-		Price             float64   `gorm:"column:price"`
-		TotalCapacity     int       `gorm:"column:total_capacity"`
-		AvailableQuantity int       `gorm:"column:available_quantity"`
-		SoldQuantity      int       `gorm:"column:sold_quantity"`
+		ID                uuid.UUID       `gorm:"column:id"`
+		SeatLayoutID      uuid.UUID       `gorm:"column:seat_layout_id"`
+		Name              string          `gorm:"column:name"`
+		Price             decimal.Decimal `gorm:"column:price"`
+		TotalCapacity     int             `gorm:"column:total_capacity"`
+		AvailableQuantity int             `gorm:"column:available_quantity"`
+		SoldQuantity      int             `gorm:"column:sold_quantity"`
 	}
 
 	var rows []sectionStatRow
@@ -194,6 +196,28 @@ func (r *SeatSectionRepository) FindWithStatsBySeatLayoutID(
 	}
 
 	return stats, nil
+}
+
+func (r *SeatSectionRepository) FindByID(
+	id uuid.UUID,
+) (*domain.SeatSection, error) {
+	var sectionModel models.SeatSectionModel
+
+	if err := r.db.First(&sectionModel, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrSeatSectionNotFound
+		}
+
+		r.logger.Error(
+			"seat_section_find_by_id_failed",
+			"section_id", id,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	return toSeatSectionDomain(&sectionModel), nil
 }
 
 func toSeatSectionModel(

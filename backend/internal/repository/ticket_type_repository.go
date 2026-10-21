@@ -18,6 +18,8 @@ type TicketTypeRepository interface {
 	Update(ctx context.Context, ticketType *domain.TicketType) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	DeleteByEventID(ctx context.Context, eventID uuid.UUID) error
+	ReserveQuantityIfAvailable(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error
+	ReleaseReservedQuantity(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error
 }
 
 type ticketTypeRepository struct {
@@ -142,6 +144,65 @@ func (r *ticketTypeRepository) Update(
 	return nil
 }
 
+func (r *ticketTypeRepository) ReserveQuantityIfAvailable(
+	ctx context.Context,
+	ticketTypeID uuid.UUID,
+	quantity int,
+) error {
+	if quantity <= 0 {
+		return errors.New("quantity must be greater than zero")
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&models.TicketTypeModel{}).
+		Where(
+			"id = ? AND available_quantity >= ?",
+			ticketTypeID,
+			quantity,
+		).
+		UpdateColumn(
+			"available_quantity",
+			gorm.Expr("available_quantity - ?", quantity),
+		)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to reserve ticket quantity",
+			slog.String("ticket_type_id", ticketTypeID.String()),
+			slog.Int("quantity", quantity),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		// Distinguish a missing ticket type from insufficient inventory.
+		var count int64
+		if err := r.db.WithContext(ctx).
+			Model(&models.TicketTypeModel{}).
+			Where("id = ?", ticketTypeID).
+			Count(&count).Error; err != nil {
+			r.logger.ErrorContext(ctx, "failed to verify ticket type",
+				slog.String("ticket_type_id", ticketTypeID.String()),
+				slog.String("error", err.Error()),
+			)
+			return err
+		}
+
+		if count == 0 {
+			return domain.ErrTicketTypeNotFound
+		}
+
+		return domain.ErrInsufficientTicketQuantity
+	}
+
+	r.logger.InfoContext(ctx, "ticket quantity reserved",
+		slog.String("ticket_type_id", ticketTypeID.String()),
+		slog.Int("quantity", quantity),
+	)
+
+	return nil
+}
+
 func (r *ticketTypeRepository) Delete(
 	ctx context.Context,
 	id uuid.UUID,
@@ -180,6 +241,65 @@ func (r *ticketTypeRepository) DeleteByEventID(
 
 		return err
 	}
+
+	return nil
+}
+
+func (r *ticketTypeRepository) ReleaseReservedQuantity(
+	ctx context.Context,
+	ticketTypeID uuid.UUID,
+	quantity int,
+) error {
+	if quantity <= 0 {
+		return errors.New("quantity must be greater than zero")
+	}
+
+	result := r.db.WithContext(ctx).
+		Model(&models.TicketTypeModel{}).
+		Where(
+			"id = ? AND available_quantity + ? <= total_quantity",
+			ticketTypeID,
+			quantity,
+		).
+		UpdateColumn(
+			"available_quantity",
+			gorm.Expr("available_quantity + ?", quantity),
+		)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to release ticket quantity",
+			slog.String("ticket_type_id", ticketTypeID.String()),
+			slog.Int("quantity", quantity),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		var ticketType models.TicketTypeModel
+
+		err := r.db.WithContext(ctx).
+			Where("id = ?", ticketTypeID).
+			First(&ticketType).Error
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return domain.ErrTicketTypeNotFound
+		}
+		if err != nil {
+			r.logger.ErrorContext(ctx, "failed to verify ticket type for release",
+				slog.String("ticket_type_id", ticketTypeID.String()),
+				slog.String("error", err.Error()),
+			)
+			return err
+		}
+
+		return domain.ErrInvalidReservationRequest
+	}
+
+	r.logger.InfoContext(ctx, "ticket quantity released",
+		slog.String("ticket_type_id", ticketTypeID.String()),
+		slog.Int("quantity", quantity),
+	)
 
 	return nil
 }

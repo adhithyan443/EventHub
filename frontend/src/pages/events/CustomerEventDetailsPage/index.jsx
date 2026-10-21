@@ -1,8 +1,10 @@
-import { useState, useEffect } from "react";
-import { useParams, useNavigate, Link } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import { getPublicEventById } from "../../../api/eventApi";
+import { createReservation } from "../../../api/reservationApi";
+import useAuthStore from "../../../store/authStore";
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "Date TBA";
@@ -159,9 +161,16 @@ export default function CustomerEventDetailsPage() {
     });
   };
 
+  const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
+  const location = useLocation();
+
+  const [isReserving, setIsReserving] = useState(false);
+  const [reservationError, setReservationError] = useState(null);
+  const reservingRef = useRef(false);
+
   const isSeated = event?.setting?.seat_layout_type === "SEATED";
 
-  const handleProceed = () => {
+  const handleProceed = async () => {
     if (!selectedTicketId) return;
     const qty = quantities[selectedTicketId] || 1;
     if (qty <= 0) return;
@@ -177,15 +186,90 @@ export default function CustomerEventDetailsPage() {
           quantity: qty,
         },
       });
-    } else {
-      navigate(`/events/${eventId}/checkout`, {
-        state: {
-          selectedTicket: selectedTier?.name || "General",
-          selectedTicketId,
-          ticketPrice: selectedTier?.price ?? event?.starting_price,
-          quantity: qty,
-        },
+      return;
+    }
+
+    if (!isAuthenticated) {
+      navigate("/login", {
+        state: { from: `${location.pathname}${location.search}` },
       });
+      return;
+    }
+
+    // Synchronous ref guard against rapid double-clicks
+    if (reservingRef.current) return;
+    reservingRef.current = true;
+    setIsReserving(true);
+    setReservationError(null);
+
+    const cacheKey = `eventhub_reservation_${eventId}`;
+
+    try {
+      // Check client-side cache as an optimization, never as proof of active inventory
+      const cachedRaw = sessionStorage.getItem(cacheKey);
+      if (cachedRaw) {
+        try {
+          const cached = JSON.parse(cachedRaw);
+          const expiresAtRaw = cached.reservation?.ExpiresAt || cached.reservation?.expires_at;
+          const expiresAtTime = expiresAtRaw ? new Date(expiresAtRaw).getTime() : 0;
+          // Only reuse if matching same ticket tier and quantity, and strictly not expired (> 30s remaining)
+          if (
+            cached.selectedTicketId === selectedTicketId &&
+            cached.quantity === qty &&
+            expiresAtTime - Date.now() > 30000
+          ) {
+            navigate(`/events/${eventId}/checkout`, {
+              state: {
+                reservation: cached.reservation,
+                selectedTicket: selectedTier?.name || "General",
+                selectedTicketId,
+                ticketPrice: selectedTier?.price ?? event?.starting_price,
+                quantity: qty,
+              },
+            });
+            return;
+          } else {
+            sessionStorage.removeItem(cacheKey);
+          }
+        } catch {
+          sessionStorage.removeItem(cacheKey);
+        }
+      }
+
+      const response = await createReservation(eventId, {
+        ticket_type_id: selectedTicketId,
+        quantity: qty,
+      });
+
+      const reservationData = response?.data?.reservation;
+      if (!reservationData) {
+        throw new Error("Invalid reservation response from server");
+      }
+
+      const cachePayload = {
+        reservation: reservationData,
+        selectedTicket: selectedTier?.name || "General",
+        selectedTicketId,
+        ticketPrice: selectedTier?.price ?? event?.starting_price,
+        quantity: qty,
+      };
+      sessionStorage.setItem(cacheKey, JSON.stringify(cachePayload));
+
+      navigate(`/events/${eventId}/checkout`, {
+        state: cachePayload,
+      });
+    } catch (err) {
+      const status = err?.response?.status;
+      const errorMsg =
+        status === 409
+          ? "The requested ticket quantity is no longer available. Please select another tier or lower quantity."
+          : status === 401
+          ? "Your session has expired. Please log in again to reserve tickets."
+          : err?.response?.data?.message || "Failed to create reservation. Please try again.";
+      setReservationError(errorMsg);
+    } finally {
+      reservingRef.current = false;
+      setIsReserving(false);
     }
   };
 
@@ -408,6 +492,13 @@ export default function CustomerEventDetailsPage() {
                     Format: {event.event_type}
                   </span>
                 )}
+                <span className={`inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold ${
+                  isSeated
+                    ? "bg-[#e0e7ff] text-[#4338ca]"
+                    : "bg-[#dff2ee] text-[#00796d]"
+                }`}>
+                  {isSeated ? "Reserved Seating" : "General Admission"}
+                </span>
                 {event.starting_price > 0 && (
                   <span className="inline-flex items-center rounded-md bg-[#e4f1f0] px-2.5 py-1 text-xs font-medium text-[#00685f]">
                     Starting from ₹{Number(event.starting_price).toLocaleString("en-IN")}
@@ -466,162 +557,281 @@ export default function CustomerEventDetailsPage() {
 
           {/* Right Sidebar: Ticket Selection & Organizer */}
           <aside className="space-y-6">
-            {/* Choose Your Ticket Card */}
-            <section className=" top-20 rounded-xl border border-[#bcc9c6] bg-white p-5 sm:p-6 shadow-xs">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="font-display text-lg font-bold text-ink">
-                  Choose your ticket
-                </h2>
-                {event.starting_price > 0 && (
-                  <span className="text-xs font-semibold text-[#565e74]">
-                    From ₹{Number(event.starting_price).toLocaleString("en-IN")}
-                  </span>
-                )}
-              </div>
+            {/* Booking Card: Conditional for General Admission vs Reserved Seating */}
+            <section className="top-20 rounded-xl border border-[#bcc9c6] bg-white p-5 sm:p-6 shadow-xs">
+              {isSeated ? (
+                /* RESERVED SEATING CARD */
+                <div>
+                  <div className="mb-4">
+                    <span className="inline-block text-[11px] font-bold uppercase tracking-wider text-[#4338ca] bg-[#e0e7ff] px-2.5 py-0.5 rounded-full mb-1.5">
+                      Reserved Seating
+                    </span>
+                    <h2 className="font-display text-lg sm:text-xl font-bold text-ink">
+                      Choose Your Seats
+                    </h2>
+                    <p className="mt-1 text-xs text-[#565e74] leading-relaxed">
+                      This event uses reserved seating. Pick your exact seats directly on the interactive venue layout.
+                    </p>
+                  </div>
 
-              {event.ticket_types && event.ticket_types.length > 0 ? (
-                <div className="space-y-4">
-                  {event.ticket_types.map((tier) => {
-                    const isSelected = selectedTicketId === tier.id;
-                    const qty = quantities[tier.id] || 0;
-                    const isSoldOut =
-                      tier.status === "SOLD_OUT" || tier.available_quantity === 0;
-                    const maxBooking = event.setting?.booking_limit_per_user || 9;
-                    const maxQty = Math.min(
-                      maxBooking,
-                      tier.available_quantity > 0 ? tier.available_quantity : maxBooking
-                    );
-
-                    return (
-                      <div
-                        key={tier.id}
-                        onClick={() => {
-                          if (!isSoldOut) {
-                            setSelectedTicketId(tier.id);
-                            if (!quantities[tier.id]) {
-                              setQuantities((prev) => ({ ...prev, [tier.id]: 1 }));
-                            }
-                          }
-                        }}
-                        className={`rounded-lg border p-4 transition-all ${
-                          isSoldOut
-                            ? "border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed"
-                            : isSelected
-                            ? "border-[#00796d] bg-[#f8fffe] shadow-xs cursor-pointer"
-                            : "border-[#bcc9c6] bg-[#f9f9ff] hover:border-slate-400 cursor-pointer"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <span className="font-semibold text-sm tracking-wide uppercase text-ink">
-                            {tier.name}
-                          </span>
-                          <strong className="text-base font-bold text-ink font-display">
-                            ₹{Number(tier.price).toLocaleString("en-IN")}
-                          </strong>
-                        </div>
-
-                        <p className="mt-1 text-xs sm:text-sm text-[#565e74]">
-                          {tier.description || `${tier.name} admission`}
-                        </p>
-
-                        <div className="mt-4 flex items-center justify-between border-t border-[#d8dfdd] pt-3">
-                          <span
-                            className={`rounded px-2 py-0.5 text-xs font-semibold ${
-                              isSoldOut
-                                ? "bg-red-100 text-red-700"
-                                : tier.status === "SELLING_FAST"
-                                ? "bg-amber-100 text-amber-800"
-                                : "bg-[#dff2ee] text-[#00796d]"
-                            }`}
-                          >
-                            {isSoldOut
-                              ? "Sold Out"
-                              : tier.status === "SELLING_FAST"
-                              ? "Selling Fast"
-                              : "Available"}
-                          </span>
-
-                          <div
-                            className="flex items-center gap-3"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => handleQuantityChange(tier.id, -1, maxQty)}
-                              disabled={qty <= 0 || isSoldOut}
-                              className="counter-btn disabled:opacity-30 disabled:cursor-not-allowed"
-                              aria-label={`Decrease ${tier.name} ticket quantity`}
+                  {/* Section Pricing Breakdown */}
+                  {event.ticket_types && event.ticket_types.length > 0 ? (
+                    <div className="my-5 space-y-2.5 border-t border-b border-[#e2e8f0] py-4">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-[#565e74]">
+                        Sections &amp; Pricing
+                      </h3>
+                      <div className="space-y-2">
+                        {event.ticket_types.map((section) => {
+                          const isSoldOut = section.status === "SOLD_OUT" || section.available_quantity === 0;
+                          return (
+                            <div
+                              key={section.id}
+                              className="flex items-center justify-between rounded-lg bg-[#f9f9ff] border border-[#e2e8f0] p-3 text-xs sm:text-sm"
                             >
-                              −
-                            </button>
-                            <span className="w-5 text-center font-bold text-sm text-ink">
-                              {qty}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleQuantityChange(tier.id, 1, maxQty)}
-                              disabled={qty >= maxQty || isSoldOut}
-                              className="counter-btn disabled:opacity-30 disabled:cursor-not-allowed"
-                              aria-label={`Increase ${tier.name} ticket quantity`}
-                            >
-                              ＋
-                            </button>
-                          </div>
-                        </div>
+                              <div>
+                                <span className="font-semibold text-ink block">{section.name}</span>
+                                <span className="text-[11px] text-[#565e74]">
+                                  {section.available_quantity > 0
+                                    ? `${section.available_quantity} seats available`
+                                    : "Sold Out"}
+                                </span>
+                              </div>
+                              <div className="text-right">
+                                <strong className="font-display font-bold text-ink text-sm sm:text-base block">
+                                  ₹{Number(section.price).toLocaleString("en-IN")}
+                                </strong>
+                                <span
+                                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded inline-block mt-0.5 ${
+                                    isSoldOut
+                                      ? "bg-red-100 text-red-700"
+                                      : section.status === "SELLING_FAST"
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-[#dff2ee] text-[#00796d]"
+                                  }`}
+                                >
+                                  {isSoldOut ? "Sold Out" : section.status === "SELLING_FAST" ? "Selling Fast" : "Available"}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ) : (
+                    <div className="my-4 rounded-lg border border-dashed border-[#bcc9c6] p-4 text-center text-xs text-[#565e74]">
+                      Seating sections to be announced.
+                    </div>
+                  )}
+
+                  {/* Cancellation policy note */}
+                  {event.cancellation && (
+                    <div className="mb-5 rounded-lg bg-[#eef0ff] p-3 text-xs leading-relaxed text-[#565e74] flex items-start gap-2">
+                      <span className="text-[#4648d4] font-bold">ⓘ</span>
+                      <div>
+                        {event.cancellation.cancellation_allowed ? (
+                          <span>
+                            <strong>Refundable:</strong> Up to{" "}
+                            {event.cancellation.refund_percentage}% refund if cancelled at least{" "}
+                            {event.cancellation.cancellation_deadline_hours}h prior.
+                          </span>
+                        ) : (
+                          <span>Non-refundable booking.</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/events/${eventId}/seats`)}
+                    disabled={allSoldOut}
+                    className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    Select Seats on Map →
+                  </button>
+
+                  <p className="mt-3 text-center text-xs text-[#565e74]">
+                    Select specific seats from the venue layout
+                  </p>
                 </div>
               ) : (
-                <div className="rounded-lg border border-dashed border-[#bcc9c6] p-6 text-center text-xs text-[#565e74]">
-                  No ticket tiers are currently available for this event.
-                </div>
-              )}
-
-              {/* Cancellation policy note */}
-              {event.cancellation && (
-                <div className="my-5 rounded-lg bg-[#eef0ff] p-3 text-xs leading-relaxed text-[#565e74] flex items-start gap-2">
-                  <span className="text-[#4648d4] font-bold">ⓘ</span>
-                  <div>
-                    {event.cancellation.cancellation_allowed ? (
-                      <span>
-                        <strong>Refundable:</strong> Up to{" "}
-                        {event.cancellation.refund_percentage}% refund available if
-                        cancelled at least{" "}
-                        {event.cancellation.cancellation_deadline_hours} hours
-                        prior to the event.
-                        {event.cancellation.refund_policy && (
-                          <span className="block mt-0.5 text-[#565e74]/90">
-                            {event.cancellation.refund_policy}
-                          </span>
-                        )}
+                /* GENERAL ADMISSION CARD */
+                <div>
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <span className="inline-block text-[11px] font-bold uppercase tracking-wider text-[#00796d] bg-[#dff2ee] px-2.5 py-0.5 rounded-full mb-1.5">
+                        General Admission
                       </span>
-                    ) : (
-                      <span>
-                        <strong>Non-refundable:</strong> Cancellations are not
-                        permitted for this event.
+                      <h2 className="font-display text-lg font-bold text-ink">
+                        Select Tickets
+                      </h2>
+                    </div>
+                    {event.starting_price > 0 && (
+                      <span className="text-xs font-semibold text-[#565e74]">
+                        From ₹{Number(event.starting_price).toLocaleString("en-IN")}
                       </span>
                     )}
                   </div>
+
+                  {event.ticket_types && event.ticket_types.length > 0 ? (
+                    <div className="space-y-4">
+                      {event.ticket_types.map((tier) => {
+                        const isSelected = selectedTicketId === tier.id;
+                        const qty = quantities[tier.id] || 0;
+                        const isSoldOut =
+                          tier.status === "SOLD_OUT" || tier.available_quantity === 0;
+                        const maxBooking = event.setting?.booking_limit_per_user || 9;
+                        const maxQty = Math.min(
+                          maxBooking,
+                          tier.available_quantity > 0 ? tier.available_quantity : maxBooking
+                        );
+
+                        return (
+                          <div
+                            key={tier.id}
+                            onClick={() => {
+                              if (!isSoldOut) {
+                                setSelectedTicketId(tier.id);
+                                if (!quantities[tier.id]) {
+                                  setQuantities((prev) => ({ ...prev, [tier.id]: 1 }));
+                                }
+                              }
+                            }}
+                            className={`rounded-lg border p-4 transition-all ${
+                              isSoldOut
+                                ? "border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed"
+                                : isSelected
+                                ? "border-[#00796d] bg-[#f8fffe] shadow-xs cursor-pointer"
+                                : "border-[#bcc9c6] bg-[#f9f9ff] hover:border-slate-400 cursor-pointer"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-semibold text-sm tracking-wide uppercase text-ink">
+                                {tier.name}
+                              </span>
+                              <strong className="text-base font-bold text-ink font-display">
+                                ₹{Number(tier.price).toLocaleString("en-IN")}
+                              </strong>
+                            </div>
+
+                            <p className="mt-1 text-xs sm:text-sm text-[#565e74]">
+                              {tier.description || `${tier.name} admission`}
+                            </p>
+
+                            <div className="mt-4 flex items-center justify-between border-t border-[#d8dfdd] pt-3">
+                              <span
+                                className={`rounded px-2 py-0.5 text-xs font-semibold ${
+                                  isSoldOut
+                                    ? "bg-red-100 text-red-700"
+                                    : tier.status === "SELLING_FAST"
+                                    ? "bg-amber-100 text-amber-800"
+                                    : "bg-[#dff2ee] text-[#00796d]"
+                                }`}
+                              >
+                                {isSoldOut
+                                  ? "Sold Out"
+                                  : tier.status === "SELLING_FAST"
+                                  ? "Selling Fast"
+                                  : "Available"}
+                              </span>
+
+                              <div
+                                className="flex items-center gap-3"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuantityChange(tier.id, -1, maxQty)}
+                                  disabled={qty <= 0 || isSoldOut}
+                                  className="counter-btn disabled:opacity-30 disabled:cursor-not-allowed"
+                                  aria-label={`Decrease ${tier.name} ticket quantity`}
+                                >
+                                  −
+                                </button>
+                                <span className="w-5 text-center font-bold text-sm text-ink">
+                                  {qty}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuantityChange(tier.id, 1, maxQty)}
+                                  disabled={qty >= maxQty || isSoldOut}
+                                  className="counter-btn disabled:opacity-30 disabled:cursor-not-allowed"
+                                  aria-label={`Increase ${tier.name} ticket quantity`}
+                                >
+                                  ＋
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-[#bcc9c6] p-6 text-center text-xs text-[#565e74]">
+                      No ticket tiers are currently available for this event.
+                    </div>
+                  )}
+
+                  {/* Cancellation policy note */}
+                  {event.cancellation && (
+                    <div className="my-5 rounded-lg bg-[#eef0ff] p-3 text-xs leading-relaxed text-[#565e74] flex items-start gap-2">
+                      <span className="text-[#4648d4] font-bold">ⓘ</span>
+                      <div>
+                        {event.cancellation.cancellation_allowed ? (
+                          <span>
+                            <strong>Refundable:</strong> Up to{" "}
+                            {event.cancellation.refund_percentage}% refund available if
+                            cancelled at least{" "}
+                            {event.cancellation.cancellation_deadline_hours} hours
+                            prior to the event.
+                            {event.cancellation.refund_policy && (
+                              <span className="block mt-0.5 text-[#565e74]/90">
+                                {event.cancellation.refund_policy}
+                              </span>
+                            )}
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>Non-refundable:</strong> Cancellations are not
+                            permitted for this event.
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {reservationError && (
+                    <div className="my-4 rounded-lg bg-red-50 border border-red-200 p-3 text-xs text-red-700 flex items-start gap-2">
+                      <span className="font-bold">⚠</span>
+                      <span>{reservationError}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleProceed}
+                    disabled={
+                      !selectedTicketId ||
+                      (quantities[selectedTicketId] || 0) <= 0 ||
+                      isReserving
+                    }
+                    className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    {isReserving ? (
+                      <>
+                        <span className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Reserving Tickets...</span>
+                      </>
+                    ) : (
+                      "Book Tickets"
+                    )}
+                  </button>
+
+                  <p className="mt-3 text-center text-xs text-[#565e74]">
+                    Proceed to checkout with selected tickets
+                  </p>
                 </div>
               )}
-
-              <button
-                type="button"
-                onClick={handleProceed}
-                disabled={
-                  !selectedTicketId || (quantities[selectedTicketId] || 0) <= 0
-                }
-                className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-              >
-                {isSeated ? "Select Seats" : "Book Tickets"}
-              </button>
-
-              <p className="mt-3 text-center text-xs text-[#565e74]">
-                {isSeated
-                  ? "Select your seats to continue"
-                  : "Proceed to checkout with selected tickets"}
-              </p>
             </section>
 
             {/* Organizer Card */}

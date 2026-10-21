@@ -40,3 +40,10 @@ export const getPublicEventById = async (eventId) => {
     const response = await apiClient.get(`/events/${eventId}`);
     return response.data;
 };
+
+export const getPublicEventSeatLayout = async (eventId) => {
+    const response = await apiClient.get(`/events/${eventId}/seat-layout`);
+    return response.data;
+};
+
+

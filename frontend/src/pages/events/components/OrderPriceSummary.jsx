@@ -1,8 +1,8 @@
 export default function OrderPriceSummary({
-  subtotal = "₹2,998",
-  platformFee = "₹99",
-  taxes = "₹180",
-  total = "₹3,277",
+  subtotal = "₹0",
+  platformFee = "₹0",
+  taxes = "₹0",
+  total = "₹0",
   className = "",
 }) {
   return (

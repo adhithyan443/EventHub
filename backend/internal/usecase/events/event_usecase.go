@@ -14,6 +14,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var ErrEventNotEditable = errors.New("event is not editable")
@@ -110,7 +111,7 @@ type CreateEventInput struct {
 type TicketTypeInput struct {
 	ID          *uuid.UUID
 	Name        string
-	Price       float64
+	Price       decimal.Decimal
 	Capacity    int
 	Description string
 }
@@ -144,6 +145,24 @@ func (u *EventUsecase) CreateEvent(
 	input.EventType = strings.ToUpper(strings.TrimSpace(input.EventType))
 	input.SeatLayoutType = strings.ToUpper(strings.TrimSpace(input.SeatLayoutType))
 	input.BannerContentType = strings.ToLower(strings.TrimSpace(input.BannerContentType))
+
+	normalizedCancellationPolicy, valErr := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	)
+	if valErr != nil {
+		u.logger.Warn(
+			"event_create_validation_failed",
+			"user_id", input.UserID,
+			"event_type", input.EventType,
+			"error", valErr,
+		)
+
+		return nil, valErr
+	}
+	input.RefundPolicy = normalizedCancellationPolicy
 
 	if err := validateCreateEventInput(input); err != nil {
 		u.logger.Warn(
@@ -685,6 +704,24 @@ func (u *EventUsecase) UpdateEvent(
 		"event_id", input.EventID,
 		"user_id", input.UserID,
 	)
+
+	normalizedCancellationPolicy, valErr := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	)
+	if valErr != nil {
+		u.logger.Warn(
+			"event_update_validation_failed",
+			"event_id", input.EventID,
+			"user_id", input.UserID,
+			"error", valErr,
+		)
+
+		return nil, valErr
+	}
+	input.RefundPolicy = normalizedCancellationPolicy
 
 	if err := validateUpdateEventInput(input); err != nil {
 		u.logger.Warn(
@@ -1471,7 +1508,7 @@ type EventDetailsTicketType struct {
 	ID                uuid.UUID
 	EventID           uuid.UUID
 	Name              string
-	Price             float64
+	Price             decimal.Decimal
 	TotalQuantity     int
 	AvailableQuantity int
 	SoldQuantity      int
@@ -1489,7 +1526,7 @@ type EventDetailsSeatLayout struct {
 type EventDetailsSeatSection struct {
 	ID    uuid.UUID
 	Name  string
-	Price float64
+	Price decimal.Decimal
 	Rows  []EventDetailsSeatRow
 }
 
@@ -1509,7 +1546,7 @@ type EventDetailsStatistics struct {
 	TicketsSold    int
 	TicketCapacity int
 	PercentageSold int
-	Revenue        float64
+	Revenue        decimal.Decimal
 	IsMock         bool
 }
 
@@ -1959,7 +1996,7 @@ func (u *EventUsecase) GetEventDetails(
 
 			// Booking/payment functionality is not implemented yet.
 			// Revenue is intentionally mocked until the payment module exists.
-			const mockRevenue = 15000.00
+			mockRevenue := decimal.NewFromInt(15000)
 
 			output.Statistics = EventDetailsStatistics{
 				TicketsSold:    totalSold,
@@ -2358,20 +2395,13 @@ func validateCreateEventInput(input CreateEventInput) error {
 		return ErrInvalidEventSettings
 	}
 
-	if input.CancellationAllowed &&
-		input.CancellationDeadlineHours <= 0 {
-		return ErrInvalidCancellation
-	}
-	if input.RefundPercentage < 0 || input.RefundPercentage > 100 {
-		return ErrInvalidCancellation
-	}
-	if input.CancellationAllowed && strings.TrimSpace(input.RefundPolicy) == "" {
-		return ErrInvalidCancellation
-	}
-
-	if !input.CancellationAllowed &&
-		(input.CancellationDeadlineHours != 0 || input.RefundPercentage != 0) {
-		return ErrInvalidCancellation
+	if _, err := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	); err != nil {
+		return err
 	}
 
 	if err := validateEventContact(input.Contact); err != nil {
@@ -2379,6 +2409,52 @@ func validateCreateEventInput(input CreateEventInput) error {
 	}
 
 	return nil
+}
+
+func validateCancellationSettings(
+	allowed bool,
+	deadlineHours int,
+	refundPolicy string,
+	refundPercentage int,
+) (string, error) {
+	normPolicy := strings.ToUpper(strings.TrimSpace(refundPolicy))
+
+	if !allowed {
+		if deadlineHours != 0 || refundPercentage != 0 {
+			return "", ErrInvalidCancellation
+		}
+		if normPolicy != "" && normPolicy != domain.RefundPolicyNoRefund {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyNoRefund, nil
+	}
+
+	if deadlineHours <= 0 {
+		return "", ErrInvalidCancellation
+	}
+
+	switch normPolicy {
+	case domain.RefundPolicyFull:
+		if refundPercentage != 100 {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyFull, nil
+
+	case domain.RefundPolicyPartial:
+		if refundPercentage <= 0 || refundPercentage >= 100 {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyPartial, nil
+
+	case domain.RefundPolicyNoRefund:
+		if refundPercentage != 0 {
+			return "", ErrInvalidCancellation
+		}
+		return domain.RefundPolicyNoRefund, nil
+
+	default:
+		return "", ErrInvalidCancellation
+	}
 }
 
 func validateEventContact(input EventContactInput) error {
@@ -2618,14 +2694,13 @@ func validateUpdateEventInput(input UpdateEventInput) error {
 		return ErrInvalidEventSettings
 	}
 
-	if input.CancellationAllowed &&
-		input.CancellationDeadlineHours <= 0 {
-		return ErrInvalidCancellation
-	}
-
-	if !input.CancellationAllowed &&
-		input.CancellationDeadlineHours != 0 {
-		return ErrInvalidCancellation
+	if _, err := validateCancellationSettings(
+		input.CancellationAllowed,
+		input.CancellationDeadlineHours,
+		input.RefundPolicy,
+		input.RefundPercentage,
+	); err != nil {
+		return err
 	}
 
 	if err := validateEventContact(input.Contact); err != nil {
@@ -2705,7 +2780,7 @@ func validateTicketTypes(ticketTypes []TicketTypeInput) error {
 			return errors.New("ticket type name must not exceed 100 characters")
 		}
 
-		if ticket.Price < 0 {
+		if ticket.Price.IsNegative() {
 			return errors.New("ticket type price cannot be negative")
 		}
 
@@ -2956,13 +3031,20 @@ func (u *EventUsecase) PublishEvent(
 				return ErrEventNotPublishable
 			}
 
-			if cancellation.CancellationAllowed {
-				if cancellation.CancellationDeadlineHours <= 0 ||
-					strings.TrimSpace(cancellation.RefundPolicy) == "" ||
-					cancellation.RefundPercentage < 0 ||
-					cancellation.RefundPercentage > 100 {
-					return ErrEventNotPublishable
-				}
+			if _, err := validateCancellationSettings(
+				cancellation.CancellationAllowed,
+				cancellation.CancellationDeadlineHours,
+				cancellation.RefundPolicy,
+				cancellation.RefundPercentage,
+			); err != nil {
+				u.logger.Warn(
+					"event_publish_cancellation_invalid",
+					"user_id", userID,
+					"event_id", eventID,
+					"error", err,
+				)
+
+				return ErrEventNotPublishable
 			}
 
 			// 13. Ticket / seat inventory.
@@ -2979,7 +3061,7 @@ func (u *EventUsecase) PublishEvent(
 
 				for _, ticket := range ticketTypes {
 					if strings.TrimSpace(ticket.Name) == "" ||
-						ticket.Price < 0 ||
+						ticket.Price.IsNegative() ||
 						ticket.TotalQuantity <= 0 ||
 						ticket.AvailableQuantity < 0 ||
 						ticket.AvailableQuantity > ticket.TotalQuantity {
@@ -3017,7 +3099,7 @@ func (u *EventUsecase) PublishEvent(
 
 				for _, section := range sections {
 					if strings.TrimSpace(section.Name) == "" ||
-						section.Price < 0 ||
+						section.Price.IsNegative() ||
 						section.TotalCapacity <= 0 {
 						return ErrEventNotPublishable
 					}
@@ -3274,7 +3356,7 @@ func (u *EventUsecase) GetPublicEventDetails(
 			isVerified := organizer != nil && organizer.Status == "ACTIVE"
 
 			var ticketTypes []domain.PublicEventDetailsTicketType
-			minPrice := -1.0
+			minPrice := decimal.NewFromInt(-1)
 
 			if setting.SeatLayoutType == SeatLayoutTypeSeated {
 				if layout, layoutErr := tx.SeatLayoutRepository().FindByEventID(eventID); layoutErr == nil && layout != nil {
@@ -3292,14 +3374,14 @@ func (u *EventUsecase) GetPublicEventDetails(
 							status = "SELLING_FAST"
 						}
 
-						if minPrice < 0 || stat.Price < minPrice {
+						if minPrice.IsNegative() || stat.Price.LessThan(minPrice) {
 							minPrice = stat.Price
 						}
 
 						ticketTypes = append(ticketTypes, domain.PublicEventDetailsTicketType{
 							ID:                stat.ID,
 							Name:              stat.Name,
-							Price:             stat.Price,
+							Price:             stat.Price.InexactFloat64(),
 							TotalQuantity:     stat.TotalCapacity,
 							AvailableQuantity: stat.AvailableQuantity,
 							Description:       stat.Name,
@@ -3322,14 +3404,14 @@ func (u *EventUsecase) GetPublicEventDetails(
 						status = "SELLING_FAST"
 					}
 
-					if minPrice < 0 || tt.Price < minPrice {
+					if minPrice.IsNegative() || tt.Price.LessThan(minPrice) {
 						minPrice = tt.Price
 					}
 
 					ticketTypes = append(ticketTypes, domain.PublicEventDetailsTicketType{
 						ID:                tt.ID,
 						Name:              tt.Name,
-						Price:             tt.Price,
+						Price:             tt.Price.InexactFloat64(),
 						TotalQuantity:     tt.TotalQuantity,
 						AvailableQuantity: tt.AvailableQuantity,
 						Description:       tt.Description,
@@ -3338,8 +3420,8 @@ func (u *EventUsecase) GetPublicEventDetails(
 				}
 			}
 
-			if minPrice < 0 {
-				minPrice = 0
+			if minPrice.IsNegative() {
+				minPrice = decimal.Zero
 			}
 
 			output = domain.PublicEventDetails{
@@ -3384,7 +3466,7 @@ func (u *EventUsecase) GetPublicEventDetails(
 					Verified:  isVerified,
 				},
 				TicketTypes:   ticketTypes,
-				StartingPrice: minPrice,
+				StartingPrice: minPrice.InexactFloat64(),
 			}
 
 			if venue != nil {

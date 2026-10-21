@@ -11,6 +11,7 @@ import (
 	seatLayoutUsecase "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type SeatLayoutHandler struct {
@@ -101,7 +102,7 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 
 		sections = append(sections, seatLayoutUsecase.SeatSectionInput{
 			Name:  section.Name,
-			Price: section.Price,
+			Price: decimal.NewFromFloat(section.Price).Round(2),
 			Rows:  rows,
 		})
 	}
@@ -274,7 +275,7 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		sections = append(sections, seatLayoutUsecase.UpdateSeatSectionInput{
 			ID:    sec.ID,
 			Name:  strings.TrimSpace(sec.Name),
-			Price: sec.Price,
+			Price: decimal.NewFromFloat(sec.Price).Round(2),
 			Rows:  rows,
 		})
 	}
@@ -327,6 +328,57 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 			"sections": output.Sections,
 			"rows":     output.Rows,
 			"seats":    output.Seats,
+		},
+	})
+}
+
+func (h *SeatLayoutHandler) GetPublicSeatLayout(c *gin.Context) {
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
+	if err != nil || eventID == uuid.Nil {
+		h.logger.Warn(
+			"invalid event ID for public seat layout",
+			slog.String("event_id", rawEventID),
+		)
+		c.Error(appErrors.NewValidationError("invalid event ID"))
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	h.logger.InfoContext(ctx, "fetching public seat layout",
+		slog.String("event_id", eventID.String()),
+	)
+
+	output, err := h.seatLayoutUsecase.GetPublicSeatLayout(ctx, eventID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrEventNotFound),
+			errors.Is(err, domain.ErrSeatLayoutNotFound),
+			errors.Is(err, domain.ErrEventNotPublic):
+			c.Error(appErrors.NewNotFoundError("event or seat layout not found"))
+
+		case errors.Is(err, seatLayoutUsecase.ErrSeatLayoutSeatedOnly):
+			c.Error(appErrors.NewValidationError("event does not use reserved seating"))
+
+		default:
+			h.logger.ErrorContext(ctx, "public seat layout fetch failed",
+				slog.String("event_id", eventID.String()),
+				slog.String("error", err.Error()),
+			)
+			c.Error(err)
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"seat_layout": output,
 		},
 	})
 }

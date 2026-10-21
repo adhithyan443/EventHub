@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
@@ -158,6 +160,91 @@ func (r *SeatRepository) FindByRowID(
 	}
 
 	return seats, nil
+}
+
+func (r *SeatRepository) FindByID(seatID uuid.UUID) (*domain.Seat, error) {
+	var seatModel models.SeatModel
+
+	if err := r.db.First(&seatModel, "id = ?", seatID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrSeatNotFound
+		}
+
+		r.logger.Error(
+			"seat_find_by_id_failed",
+			"seat_id", seatID,
+			"error", err,
+		)
+		return nil, err
+	}
+
+	return toSeatDomain(&seatModel), nil
+}
+
+func (r *SeatRepository) ReserveIfAvailable(
+	ctx context.Context,
+	seatID uuid.UUID,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatModel{}).
+		Where("id = ? AND status = ?", seatID, domain.SeatStatusAvailable).
+		Update("status", domain.SeatStatusReserved)
+
+	if result.Error != nil {
+		r.logger.Error(
+			"seat_reservation_failed",
+			"seat_id", seatID,
+			"error", result.Error,
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.Warn(
+			"seat_reservation_unavailable",
+			"seat_id", seatID,
+		)
+		return domain.ErrSeatNotAvailable
+	}
+
+	r.logger.Info(
+		"seat_reserved",
+		"seat_id", seatID,
+	)
+
+	return nil
+}
+
+func (r *SeatRepository) ReleaseReservedSeat(
+	ctx context.Context,
+	seatID uuid.UUID,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatModel{}).
+		Where(
+			"id = ? AND status = ?",
+			seatID,
+			domain.SeatStatusReserved,
+		).
+		Update("status", domain.SeatStatusAvailable)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to release reserved seat",
+			slog.String("seat_id", seatID.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return domain.ErrSeatNotAvailable
+	}
+
+	r.logger.InfoContext(ctx, "reserved seat released",
+		slog.String("seat_id", seatID.String()),
+	)
+
+	return nil
 }
 
 func toSeatModel(seat *domain.Seat) *models.SeatModel {
