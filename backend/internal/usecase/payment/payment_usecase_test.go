@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	bookinguc "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	paymentuc "github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -56,6 +57,9 @@ type mockPaymentRepo struct {
 }
 
 func (m *mockPaymentRepo) Create(ctx context.Context, payment *domain.Payment) error {
+	if payment.ID == "" {
+		payment.ID = uuid.New().String()
+	}
 	m.payments[payment.ID] = payment
 	return nil
 }
@@ -156,7 +160,12 @@ func (m *mockBookingRepo) FindByBookingNumber(ctx context.Context, num string) (
 }
 
 func (m *mockBookingRepo) FindByReservationID(ctx context.Context, resID uuid.UUID) (*domain.Booking, error) {
-	return nil, nil
+	for _, b := range m.bookings {
+		if b.ReservationID != nil && *b.ReservationID == resID {
+			return b, nil
+		}
+	}
+	return nil, domain.ErrBookingNotFound
 }
 
 func (m *mockBookingRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
@@ -405,8 +414,9 @@ func setupPaymentUsecaseTest() (*paymentuc.PaymentUsecase, *mockTxRepos, *mockPa
 
 	txManager := &mockTxManager{repos: txRepos}
 	provider := &mockPaymentProvider{}
+	bookingUsecase := bookinguc.NewBookingUsecase(txManager, logger)
 
-	uc := paymentuc.NewPaymentUsecase(txManager, nil, provider, logger)
+	uc := paymentuc.NewPaymentUsecase(txManager, bookingUsecase, provider, logger)
 	return uc, txRepos, provider
 }
 
@@ -1201,4 +1211,292 @@ func TestPaymentUsecase_Webhook_Captured_CheckoutUpdateFailure_RollsBack(t *test
 	// Verify that payment and booking were NOT confirmed
 	assert.Equal(t, domain.PaymentStatusPending, txRepos.paymentRepo.payments[paymentID].Status, "payment must not be marked SUCCESS")
 	assert.Equal(t, domain.BookingStatusPending, txRepos.bookingRepo.bookings[bookingID].Status, "booking must not be marked CONFIRMED")
+}
+
+func TestPaymentUsecase_CreatePayment_Success(t *testing.T) {
+	uc, txRepos, _ := setupPaymentUsecaseTest()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	reservationID := uuid.New()
+	checkoutID := uuid.New()
+	seatID := uuid.New()
+	now := time.Now()
+
+	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: reservationID,
+			SeatID:        &seatID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(500),
+		},
+	}
+	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:             checkoutID,
+		ReservationID:  reservationID,
+		UserID:         userID,
+		Subtotal:       decimal.NewFromInt(500),
+		PlatformFee:    decimal.NewFromInt(25),
+		TaxAmount:      decimal.NewFromInt(90),
+		DiscountAmount: decimal.Zero,
+		TotalAmount:    decimal.NewFromInt(615),
+		Status:         domain.CheckoutStatusActive,
+		ExpiresAt:      now.Add(15 * time.Minute),
+	}
+
+	payment, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+		Method:     domain.PaymentMethodCard,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, payment)
+
+	assert.Equal(t, domain.PaymentStatusPending, payment.Status)
+	assert.True(t, payment.Amount.Equal(decimal.NewFromInt(615)), "Payment amount must match checkout total amount")
+	require.NotNil(t, payment.ProviderOrderID)
+	assert.Equal(t, "order_test_123", *payment.ProviderOrderID)
+
+	// Verify booking was created and holds consistent amounts
+	require.NotEmpty(t, txRepos.bookingRepo.bookings)
+	var createdBooking *domain.Booking
+	for _, b := range txRepos.bookingRepo.bookings {
+		if b.ReservationID != nil && *b.ReservationID == reservationID {
+			createdBooking = b
+			break
+		}
+	}
+	require.NotNil(t, createdBooking)
+	assert.Equal(t, domain.BookingStatusPending, createdBooking.Status)
+	assert.True(t, createdBooking.Subtotal.Equal(decimal.NewFromInt(500)))
+	assert.True(t, createdBooking.PlatformFee.Equal(decimal.NewFromInt(25)))
+	assert.True(t, createdBooking.Tax.Equal(decimal.NewFromInt(90)))
+	assert.True(t, createdBooking.Total.Equal(decimal.NewFromInt(615)))
+}
+
+func TestPaymentUsecase_CreatePayment_ReusesExistingPendingPayment(t *testing.T) {
+	uc, txRepos, _ := setupPaymentUsecaseTest()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	reservationID := uuid.New()
+	checkoutID := uuid.New()
+	bookingID := uuid.New()
+	existingOrderID := "order_existing_123"
+	now := time.Now()
+
+	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:            checkoutID,
+		ReservationID: reservationID,
+		UserID:        userID,
+		Subtotal:      decimal.NewFromInt(500),
+		TotalAmount:   decimal.NewFromInt(500),
+		Status:        domain.CheckoutStatusActive,
+		ExpiresAt:     now.Add(15 * time.Minute),
+	}
+	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
+		ID:            bookingID,
+		UserID:        userID,
+		EventID:       eventID,
+		ReservationID: &reservationID,
+		Subtotal:      decimal.NewFromInt(500),
+		Total:         decimal.NewFromInt(500),
+		Status:        domain.BookingStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	existingPaymentID := "pay_existing_1"
+	txRepos.paymentRepo.payments[existingPaymentID] = &domain.Payment{
+		ID:              existingPaymentID,
+		BookingID:       bookingID.String(),
+		Provider:        domain.PaymentProviderRazorpay,
+		ProviderOrderID: &existingOrderID,
+		Amount:          decimal.NewFromInt(500),
+		Status:          domain.PaymentStatusPending,
+	}
+
+	payment, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+		Method:     domain.PaymentMethodCard,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, payment)
+	assert.Equal(t, existingPaymentID, payment.ID)
+	assert.Equal(t, existingOrderID, *payment.ProviderOrderID)
+	// No extra payment created
+	assert.Len(t, txRepos.paymentRepo.payments, 1)
+}
+
+func TestPaymentUsecase_CreatePayment_AmountMismatch_Rejected(t *testing.T) {
+	uc, txRepos, _ := setupPaymentUsecaseTest()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	reservationID := uuid.New()
+	checkoutID := uuid.New()
+	bookingID := uuid.New()
+	now := time.Now()
+
+	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	// Checkout total is 500
+	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:            checkoutID,
+		ReservationID: reservationID,
+		UserID:        userID,
+		Subtotal:      decimal.NewFromInt(500),
+		TotalAmount:   decimal.NewFromInt(500),
+		Status:        domain.CheckoutStatusActive,
+		ExpiresAt:     now.Add(15 * time.Minute),
+	}
+	// Existing booking total is 600 (tampered or mismatched)
+	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
+		ID:            bookingID,
+		UserID:        userID,
+		EventID:       eventID,
+		ReservationID: &reservationID,
+		Subtotal:      decimal.NewFromInt(600),
+		Total:         decimal.NewFromInt(600),
+		Status:        domain.BookingStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	_, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+		Method:     domain.PaymentMethodCard,
+	})
+
+	assert.ErrorIs(t, err, domain.ErrPaymentAmountMismatch)
+}
+
+func TestPaymentUsecase_CreatePayment_AlreadyCompleted_Rejected(t *testing.T) {
+	uc, txRepos, _ := setupPaymentUsecaseTest()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	reservationID := uuid.New()
+	checkoutID := uuid.New()
+	bookingID := uuid.New()
+	now := time.Now()
+
+	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:            checkoutID,
+		ReservationID: reservationID,
+		UserID:        userID,
+		Subtotal:      decimal.NewFromInt(500),
+		TotalAmount:   decimal.NewFromInt(500),
+		Status:        domain.CheckoutStatusActive,
+		ExpiresAt:     now.Add(15 * time.Minute),
+	}
+	// Booking already confirmed
+	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
+		ID:            bookingID,
+		UserID:        userID,
+		EventID:       eventID,
+		ReservationID: &reservationID,
+		Total:         decimal.NewFromInt(500),
+		Status:        domain.BookingStatusConfirmed,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+
+	_, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+		Method:     domain.PaymentMethodCard,
+	})
+
+	assert.ErrorIs(t, err, domain.ErrPaymentAlreadyComplete)
+}
+
+func TestPaymentUsecase_CreatePayment_SupportedMethods_UPI(t *testing.T) {
+	uc, txRepos, _ := setupPaymentUsecaseTest()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	reservationID := uuid.New()
+	checkoutID := uuid.New()
+	seatID := uuid.New()
+	now := time.Now()
+
+	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: reservationID,
+			SeatID:        &seatID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(500),
+		},
+	}
+	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:             checkoutID,
+		ReservationID:  reservationID,
+		UserID:         userID,
+		Subtotal:       decimal.NewFromInt(500),
+		PlatformFee:    decimal.NewFromInt(25),
+		TaxAmount:      decimal.NewFromInt(90),
+		DiscountAmount: decimal.Zero,
+		TotalAmount:    decimal.NewFromInt(615),
+		Status:         domain.CheckoutStatusActive,
+		ExpiresAt:      now.Add(15 * time.Minute),
+	}
+
+	payment, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, payment)
+	assert.Equal(t, domain.PaymentMethodUPI, payment.Method)
+	assert.Equal(t, domain.PaymentStatusPending, payment.Status)
+	assert.True(t, payment.Amount.Equal(decimal.NewFromInt(615)))
+	require.NotNil(t, payment.ProviderOrderID)
+	assert.Equal(t, "order_test_123", *payment.ProviderOrderID)
 }

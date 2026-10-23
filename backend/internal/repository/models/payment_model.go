@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
-	"gorm.io/gorm"
 )
 
 type PaymentModel struct {
@@ -19,7 +18,6 @@ type PaymentModel struct {
 	PaidAt          *time.Time      `gorm:"type:timestamp"`
 	CreatedAt       time.Time       `gorm:"not null;default:now()"`
 	UpdatedAt       time.Time       `gorm:"not null;default:now()"`
-	DeletedAt       gorm.DeletedAt  `gorm:"index"`
 }
 
 func (PaymentModel) TableName() string {

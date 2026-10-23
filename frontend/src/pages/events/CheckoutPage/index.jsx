@@ -251,6 +251,52 @@ export default function CheckoutPage() {
       const orderId = payment.ProviderOrderID || payment.providerOrderId;
       const amountPaise = Math.round(Number(payment.Amount || payment.amount || totalNum) * 100);
 
+      // Map UI payment method to Razorpay checkout method code
+      const rzpMethodMap = {
+        "UPI": "upi",
+        "Card": "card",
+        "Net Banking": "netbanking",
+        "Wallet": "wallet",
+      };
+      const rzpMethod = rzpMethodMap[paymentMethod] || "upi";
+
+      // Configure dynamic Razorpay Checkout display blocks and sequencing
+      const allRzpMethods = [
+        { code: "upi", label: "UPI" },
+        { code: "card", label: "Card" },
+        { code: "netbanking", label: "Net Banking" },
+        { code: "wallet", label: "Wallet" },
+      ];
+
+      const otherInstruments = allRzpMethods
+        .filter((m) => m.code !== rzpMethod)
+        .map((m) => ({ method: m.code }));
+
+      const displayConfig = {
+        blocks: {
+          preferred: {
+            name: `Pay via ${paymentMethod || "UPI"}`,
+            instruments: [{ method: rzpMethod }],
+          },
+          other: {
+            name: "Other Payment Methods",
+            instruments: otherInstruments,
+          },
+        },
+        sequence: ["block.preferred", "block.other"],
+        preferences: {
+          show_default_blocks: false,
+        },
+      };
+
+      const prefill = {
+        name: effectiveFullName,
+        email: effectiveEmail,
+        contact: effectivePhone,
+        method: rzpMethod,
+        ...(paymentMethod === "UPI" && upiId?.trim() ? { vpa: upiId.trim() } : {}),
+      };
+
       const options = {
         key: keyId,
         amount: amountPaise,
@@ -259,11 +305,11 @@ export default function CheckoutPage() {
         description: `Tickets for ${eventTitle}`,
         image: eventThumbnail || undefined,
         order_id: orderId,
-        prefill: {
-          name: effectiveFullName,
-          email: effectiveEmail,
-          contact: effectivePhone,
+        prefill,
+        config: {
+          display: displayConfig,
         },
+        display: displayConfig,
         notes: {
           booking_id: payment.BookingID || payment.bookingId,
           payment_id: payment.ID || payment.id,
