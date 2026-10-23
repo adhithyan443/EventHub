@@ -165,6 +165,41 @@ func (r *seatReservationRepository) UpdateStatus(
 	return nil
 }
 
+func (r *seatReservationRepository) CompleteIfActive(
+	ctx context.Context,
+	id uuid.UUID,
+) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatReservationModel{}).
+		Where(
+			"id = ? AND status = ?",
+			id,
+			domain.ReservationStatusActive,
+		).
+		Updates(map[string]interface{}{
+			"status":     domain.ReservationStatusCompleted,
+			"updated_at": time.Now(),
+		})
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to complete reservation",
+			slog.String("reservation_id", id.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return false, result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+
+	r.logger.InfoContext(ctx, "reservation completed",
+		slog.String("reservation_id", id.String()),
+	)
+
+	return true, nil
+}
+
 func (r *seatReservationRepository) ExpireIfActive(
 	ctx context.Context,
 	id uuid.UUID,

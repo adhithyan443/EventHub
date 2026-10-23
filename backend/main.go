@@ -170,6 +170,7 @@ func main() {
 
 	paymentHandler := handler.NewPaymentHandler(
 		paymentUsecase,
+		cfg.RazorpayKeyID,
 		logger,
 	)
 	// paymentHandler := handler.NewPaymentHandler(paymentUsecase, logger)

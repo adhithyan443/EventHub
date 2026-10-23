@@ -111,6 +111,17 @@ func (m *routerTestPaymentRepo) MarkFailed(ctx context.Context, paymentID string
 	return nil
 }
 
+func (m *routerTestPaymentRepo) MarkRefundRequired(ctx context.Context, paymentID, transactionID string, paidAt time.Time) error {
+	p, ok := m.payments[paymentID]
+	if !ok {
+		return domain.ErrPaymentNotFound
+	}
+	p.Status = domain.PaymentStatusRefundRequired
+	p.TransactionID = &transactionID
+	p.PaidAt = &paidAt
+	return nil
+}
+
 type routerTestBookingRepo struct {
 	bookings map[uuid.UUID]*domain.Booking
 }
@@ -193,7 +204,7 @@ func setupTestRouterInstance(secret string) (*gin.Engine, *token.JWTService, *ro
 	provider := &routerTestPaymentProvider{secret: secret}
 
 	paymentUsecase := paymentuc.NewPaymentUsecase(txManager, nil, provider, logger)
-	paymentHandler := handler.NewPaymentHandler(paymentUsecase, logger)
+	paymentHandler := handler.NewPaymentHandler(paymentUsecase, "rzp_test_key", logger)
 
 	router := setupRouter(
 		logger,
@@ -203,8 +214,8 @@ func setupTestRouterInstance(secret string) (*gin.Engine, *token.JWTService, *ro
 		&handler.CategoryHandler{},
 		&handler.EventHandler{},
 		&handler.SeatLayoutHandler{},
-		&handler.ReservationHandler{},
-		&handler.CheckoutHandler{},
+		handler.NewReservationHandler(nil, logger),
+		handler.NewCheckoutHandler(nil, logger),
 		paymentHandler,
 		jwtService,
 	)
@@ -345,4 +356,55 @@ func TestRouter_HealthRoute_Public(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), `"status":"ok"`)
+}
+
+func TestRouter_ReservationAndCheckoutRoutes_ProtectedByJWT(t *testing.T) {
+	router, jwtService, _, _ := setupTestRouterInstance("any_secret")
+
+	// 1. POST /api/v1/bookings/reserve without token -> 401
+	reqReserveNoAuth := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/reserve", bytes.NewReader([]byte(`{}`)))
+	reqReserveNoAuth.Header.Set("Content-Type", "application/json")
+	wReserveNoAuth := httptest.NewRecorder()
+	router.ServeHTTP(wReserveNoAuth, reqReserveNoAuth)
+	assert.Equal(t, http.StatusUnauthorized, wReserveNoAuth.Code)
+
+	// 2. POST /api/v1/events/:eventId/reservations without token -> 401
+	eventID := uuid.New().String()
+	reqEventReserveNoAuth := httptest.NewRequest(http.MethodPost, "/api/v1/events/"+eventID+"/reservations", bytes.NewReader([]byte(`{}`)))
+	reqEventReserveNoAuth.Header.Set("Content-Type", "application/json")
+	wEventReserveNoAuth := httptest.NewRecorder()
+	router.ServeHTTP(wEventReserveNoAuth, reqEventReserveNoAuth)
+	assert.Equal(t, http.StatusUnauthorized, wEventReserveNoAuth.Code)
+
+	// 3. POST /api/v1/bookings/checkout without token -> 401
+	reqCheckoutNoAuth := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/checkout", bytes.NewReader([]byte(`{}`)))
+	reqCheckoutNoAuth.Header.Set("Content-Type", "application/json")
+	wCheckoutNoAuth := httptest.NewRecorder()
+	router.ServeHTTP(wCheckoutNoAuth, reqCheckoutNoAuth)
+	assert.Equal(t, http.StatusUnauthorized, wCheckoutNoAuth.Code)
+
+	// 4. Valid JWT token allows access past middleware to handler (returning 400 validation error)
+	validToken, err := jwtService.GenerateAccessToken(uuid.New(), "CUSTOMER")
+	require.NoError(t, err)
+
+	reqReserveWithAuth := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/reserve", bytes.NewReader([]byte(`{}`)))
+	reqReserveWithAuth.Header.Set("Content-Type", "application/json")
+	reqReserveWithAuth.Header.Set("Authorization", "Bearer "+validToken)
+	wReserveWithAuth := httptest.NewRecorder()
+	router.ServeHTTP(wReserveWithAuth, reqReserveWithAuth)
+	assert.Equal(t, http.StatusBadRequest, wReserveWithAuth.Code)
+
+	reqEventReserveWithAuth := httptest.NewRequest(http.MethodPost, "/api/v1/events/"+eventID+"/reservations", bytes.NewReader([]byte(`invalid-json`)))
+	reqEventReserveWithAuth.Header.Set("Content-Type", "application/json")
+	reqEventReserveWithAuth.Header.Set("Authorization", "Bearer "+validToken)
+	wEventReserveWithAuth := httptest.NewRecorder()
+	router.ServeHTTP(wEventReserveWithAuth, reqEventReserveWithAuth)
+	assert.Equal(t, http.StatusBadRequest, wEventReserveWithAuth.Code)
+
+	reqCheckoutWithAuth := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/checkout", bytes.NewReader([]byte(`{}`)))
+	reqCheckoutWithAuth.Header.Set("Content-Type", "application/json")
+	reqCheckoutWithAuth.Header.Set("Authorization", "Bearer "+validToken)
+	wCheckoutWithAuth := httptest.NewRecorder()
+	router.ServeHTTP(wCheckoutWithAuth, reqCheckoutWithAuth)
+	assert.Equal(t, http.StatusBadRequest, wCheckoutWithAuth.Code)
 }

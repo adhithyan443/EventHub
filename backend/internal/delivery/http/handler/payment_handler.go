@@ -16,15 +16,18 @@ import (
 
 type PaymentHandler struct {
 	paymentUsecase *paymentUC.PaymentUsecase
+	razorpayKeyID  string
 	logger         *slog.Logger
 }
 
 func NewPaymentHandler(
 	usecase *paymentUC.PaymentUsecase,
+	razorpayKeyID string,
 	logger *slog.Logger,
 ) *PaymentHandler {
 	return &PaymentHandler{
 		paymentUsecase: usecase,
+		razorpayKeyID:  razorpayKeyID,
 		logger:         logger,
 	}
 }
@@ -135,6 +138,7 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"payment": result,
+			"keyId":   h.razorpayKeyID,
 		},
 	})
 }
@@ -179,6 +183,12 @@ func (h *PaymentHandler) VerifyPayment(c *gin.Context) {
 			errors.Is(err, domain.ErrPaymentAmountMismatch):
 			c.Error(appErrors.NewValidationError("payment verification failed"))
 
+		case errors.Is(err, domain.ErrReservationExpired):
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"error":   "Reservation expired before payment completion. Your payment has been safely flagged for a refund.",
+			})
+
 		case errors.Is(err, domain.ErrPaymentAlreadyComplete):
 			c.Error(appErrors.NewValidationError("payment already completed"))
 
@@ -197,15 +207,16 @@ func (h *PaymentHandler) VerifyPayment(c *gin.Context) {
 	}
 
 	h.logger.InfoContext(ctx, "payment verification completed",
-		slog.String("payment_id", result.ID),
+		slog.String("payment_id", result.Payment.ID),
 		slog.String("user_id", userID.String()),
-		slog.String("status", string(result.Status)),
+		slog.String("status", string(result.Payment.Status)),
 	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data": gin.H{
-			"payment": result,
+			"payment": result.Payment,
+			"booking": result.Booking,
 		},
 	})
 }
@@ -250,6 +261,11 @@ func (h *PaymentHandler) RazorpayWebhook(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "payment not found"})
 		case errors.Is(err, domain.ErrPaymentAmountMismatch):
 			c.JSON(http.StatusBadRequest, gin.H{"error": "payment amount mismatch"})
+		case errors.Is(err, domain.ErrReservationExpired):
+			c.JSON(http.StatusOK, gin.H{
+				"message": "payment captured after reservation expiry; refund required",
+			})
+
 		case errors.Is(err, domain.ErrPaymentAlreadyComplete):
 			c.JSON(http.StatusOK, gin.H{"message": "payment already complete"})
 		default:

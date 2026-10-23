@@ -103,6 +103,7 @@ func (u *PaymentUsecase) CreatePayment(
 				return findErr
 			}
 
+			var activePending *domain.Payment
 			for i := range existingPayments {
 				existing := &existingPayments[i]
 
@@ -110,8 +111,17 @@ func (u *PaymentUsecase) CreatePayment(
 				case domain.PaymentStatusSuccess:
 					return domain.ErrPaymentAlreadyComplete
 				case domain.PaymentStatusPending:
-					return domain.ErrPaymentInProgress
+					if existing.ProviderOrderID != nil && *existing.ProviderOrderID != "" {
+						activePending = existing
+					} else {
+						return domain.ErrPaymentInProgress
+					}
 				}
+			}
+
+			if activePending != nil {
+				payment = activePending
+				return nil
 			}
 
 			payment = &domain.Payment{
@@ -132,6 +142,15 @@ func (u *PaymentUsecase) CreatePayment(
 			slog.Any("error", err),
 		)
 		return nil, err
+	}
+
+	// If an existing pending order was already initiated, reuse it directly.
+	if payment.ProviderOrderID != nil && *payment.ProviderOrderID != "" {
+		u.logger.InfoContext(ctx, "reusing existing pending payment order",
+			slog.String("payment_id", payment.ID),
+			slog.String("provider_order_id", *payment.ProviderOrderID),
+		)
+		return payment, nil
 	}
 
 	// Call the gateway only after the database transaction commits.
@@ -184,10 +203,15 @@ type VerifyPaymentRequest struct {
 	RazorpaySignature string
 }
 
+type VerifyPaymentResult struct {
+	Payment *domain.Payment
+	Booking *domain.Booking
+}
+
 func (u *PaymentUsecase) VerifyPayment(
 	ctx context.Context,
 	req VerifyPaymentRequest,
-) (*domain.Payment, error) {
+) (*VerifyPaymentResult, error) {
 	if req.UserID == uuid.Nil ||
 		req.ProviderOrderID == "" ||
 		req.RazorpayPaymentID == "" ||
@@ -195,7 +219,10 @@ func (u *PaymentUsecase) VerifyPayment(
 		return nil, domain.ErrInvalidPayment
 	}
 
-	var payment *domain.Payment
+	var (
+		payment          *domain.Payment
+		confirmedBooking *domain.Booking
+	)
 
 	// Find the local payment and validate booking ownership.
 	err := u.transactionManager.WithinTransaction(
@@ -231,6 +258,7 @@ func (u *PaymentUsecase) VerifyPayment(
 				return domain.ErrInvalidPayment
 			}
 
+			confirmedBooking = booking
 			return nil
 		},
 	)
@@ -242,10 +270,17 @@ func (u *PaymentUsecase) VerifyPayment(
 	if payment.Status == domain.PaymentStatusSuccess {
 		if payment.TransactionID != nil &&
 			*payment.TransactionID == req.RazorpayPaymentID {
-			return payment, nil
+			return &VerifyPaymentResult{
+				Payment: payment,
+				Booking: confirmedBooking,
+			}, nil
 		}
 
 		return nil, domain.ErrPaymentAlreadyComplete
+	}
+
+	if payment.Status == domain.PaymentStatusRefundRequired {
+		return nil, domain.ErrReservationExpired
 	}
 
 	if payment.Status != domain.PaymentStatusPending {
@@ -282,6 +317,7 @@ func (u *PaymentUsecase) VerifyPayment(
 	// Both conditional repository operations must use transaction-scoped
 	// repositories so either both changes commit or neither does.
 	now := time.Now()
+	var isRefundRequired bool
 
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
@@ -300,6 +336,16 @@ func (u *PaymentUsecase) VerifyPayment(
 				}
 
 				return domain.ErrPaymentAlreadyComplete
+			}
+
+			if current.Status == domain.PaymentStatusRefundRequired {
+				if current.TransactionID != nil &&
+					*current.TransactionID == req.RazorpayPaymentID {
+					isRefundRequired = true
+					return nil
+				}
+
+				return domain.ErrReservationExpired
 			}
 
 			if current.Status != domain.PaymentStatusPending ||
@@ -328,23 +374,27 @@ func (u *PaymentUsecase) VerifyPayment(
 				return domain.ErrInvalidPayment
 			}
 
-			// Conditional update: succeeds only while payment is pending.
-			if err := tx.PaymentRepository().MarkSuccessful(
+			var finalizeErr error
+			isRefundRequired, finalizeErr = u.finalizeBookingPayment(
 				ctx,
-				current.ID,
+				tx,
+				current,
+				booking,
 				req.RazorpayPaymentID,
 				now,
-			); err != nil {
-				return err
+			)
+			if finalizeErr != nil {
+				return finalizeErr
 			}
 
-			// Conditional update: succeeds only while booking is pending.
-			// Failure causes the entire transaction to roll back.
-			if err := tx.BookingRepository().ConfirmPending(
-				ctx,
-				bookingID,
-			); err != nil {
-				return err
+			if isRefundRequired {
+				current.Status = domain.PaymentStatusRefundRequired
+				current.TransactionID = &req.RazorpayPaymentID
+				current.PaidAt = &now
+				booking.Status = domain.BookingStatusCancelled
+				payment = current
+				confirmedBooking = booking
+				return nil
 			}
 
 			// Keep the returned domain object consistent with the database.
@@ -352,7 +402,11 @@ func (u *PaymentUsecase) VerifyPayment(
 			current.TransactionID = &req.RazorpayPaymentID
 			current.PaidAt = &now
 
+			booking.Status = domain.BookingStatusConfirmed
+			booking.UpdatedAt = now
+
 			payment = current
+			confirmedBooking = booking
 			return nil
 		},
 	)
@@ -364,12 +418,170 @@ func (u *PaymentUsecase) VerifyPayment(
 		return nil, err
 	}
 
+	if isRefundRequired {
+		return nil, domain.ErrReservationExpired
+	}
+
 	u.logger.InfoContext(ctx, "payment verified and booking confirmed",
 		slog.String("payment_id", payment.ID),
 		slog.String("booking_id", payment.BookingID),
 	)
 
-	return payment, nil
+	return &VerifyPaymentResult{
+		Payment: payment,
+		Booking: confirmedBooking,
+	}, nil
+}
+
+// finalizeBookingPayment processes reservation and inventory locking, marking either:
+// 1. Success path: reservation COMPLETED, seats BOOKED, checkout COMPLETED, booking CONFIRMED, payment SUCCESS.
+// 2. Expired path (strict rejection): payment REFUND_REQUIRED, booking CANCELLED.
+// Returns (isRefundRequired bool, err error).
+func (u *PaymentUsecase) finalizeBookingPayment(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	payment *domain.Payment,
+	booking *domain.Booking,
+	transactionID string,
+	now time.Time,
+) (bool, error) {
+	// If the booking is linked to a temporary hold reservation:
+	if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
+		reservationID := *booking.ReservationID
+
+		reservation, err := tx.SeatReservationRepository().FindByID(ctx, reservationID)
+		if err != nil {
+			return false, err
+		}
+
+		// Check if the reservation is expired or not active.
+		isExpired := reservation.Status != domain.ReservationStatusActive || now.After(reservation.ExpiresAt)
+
+		if isExpired {
+			// Option B: Strict rejection with reliable refund tracking.
+			// Mark payment REFUND_REQUIRED and cancel the pending booking.
+			if err := tx.PaymentRepository().MarkRefundRequired(
+				ctx,
+				payment.ID,
+				transactionID,
+				now,
+			); err != nil {
+				return false, err
+			}
+
+			if err := tx.BookingRepository().UpdateStatus(
+				ctx,
+				booking.ID,
+				domain.BookingStatusCancelled,
+			); err != nil {
+				return false, err
+			}
+
+			u.logger.WarnContext(ctx, "payment captured after reservation expiry; marked REFUND_REQUIRED",
+				slog.String("payment_id", payment.ID),
+				slog.String("booking_id", booking.ID.String()),
+				slog.String("reservation_id", reservationID.String()),
+				slog.String("transaction_id", transactionID),
+			)
+
+			return true, nil
+		}
+
+		// Reservation is still active. Atomically complete the reservation hold
+		// so the background expiry worker cannot release it.
+		completed, err := tx.SeatReservationRepository().CompleteIfActive(ctx, reservationID)
+		if err != nil {
+			return false, err
+		}
+
+		if !completed {
+			// Concurrently expired by the worker right at this millisecond!
+			if err := tx.PaymentRepository().MarkRefundRequired(
+				ctx,
+				payment.ID,
+				transactionID,
+				now,
+			); err != nil {
+				return false, err
+			}
+
+			if err := tx.BookingRepository().UpdateStatus(
+				ctx,
+				booking.ID,
+				domain.BookingStatusCancelled,
+			); err != nil {
+				return false, err
+			}
+
+			u.logger.WarnContext(ctx, "reservation expired concurrently during payment capture; marked REFUND_REQUIRED",
+				slog.String("payment_id", payment.ID),
+				slog.String("booking_id", booking.ID.String()),
+				slog.String("reservation_id", reservationID.String()),
+			)
+
+			return true, nil
+		}
+
+		// Transition any reserved seats to BOOKED.
+		items, err := tx.SeatReservationRepository().FindItemsByReservationID(ctx, reservationID)
+		if err != nil {
+			return false, err
+		}
+
+		for _, item := range items {
+			if item.SeatID != nil && *item.SeatID != uuid.Nil {
+				if err := tx.SeatRepository().BookReservedSeat(ctx, *item.SeatID); err != nil {
+					return false, err
+				}
+			}
+		}
+
+		// Complete the persistent checkout snapshot if it exists.
+		checkout, err := tx.CheckoutRepository().FindByReservationID(ctx, reservationID)
+		if err != nil && !errors.Is(err, domain.ErrCheckoutNotFound) {
+			u.logger.ErrorContext(ctx, "failed to find checkout by reservation ID",
+				slog.String("reservation_id", reservationID.String()),
+				slog.Any("error", err),
+			)
+			return false, err
+		}
+
+		if errors.Is(err, domain.ErrCheckoutNotFound) || checkout == nil {
+			u.logger.DebugContext(ctx, "no checkout snapshot associated with reservation, skipping checkout completion",
+				slog.String("reservation_id", reservationID.String()),
+			)
+		} else {
+			if err := tx.CheckoutRepository().UpdateStatus(ctx, checkout.ID, domain.CheckoutStatusCompleted); err != nil {
+				u.logger.ErrorContext(ctx, "failed to update checkout status to completed",
+					slog.String("checkout_id", checkout.ID.String()),
+					slog.String("reservation_id", reservationID.String()),
+					slog.Any("error", err),
+				)
+				return false, err
+			}
+		}
+	}
+
+	// Conditional update: succeeds only while payment is pending.
+	if err := tx.PaymentRepository().MarkSuccessful(
+		ctx,
+		payment.ID,
+		transactionID,
+		now,
+	); err != nil {
+		return false, err
+	}
+
+	// Conditional update: succeeds only while booking is pending.
+	// Failure causes the entire transaction to roll back.
+	if err := tx.BookingRepository().ConfirmPending(
+		ctx,
+		booking.ID,
+	); err != nil {
+		return false, err
+	}
+
+	return false, nil
 }
 
 func (u *PaymentUsecase) VerifyWebhookSignature(
@@ -502,6 +714,11 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return domain.ErrPaymentAlreadyComplete
 					}
 
+					if payment.Status == domain.PaymentStatusRefundRequired {
+						// Webhook delivery for an already refund-flagged payment is acknowledged safely
+						return nil
+					}
+
 					if payment.Status != domain.PaymentStatusPending {
 						u.logger.WarnContext(ctx, "payment.captured received for non-pending payment",
 							slog.String("payment_id", payment.ID),
@@ -525,21 +742,32 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return domain.ErrInvalidPayment
 					}
 
-					now := time.Now()
-					if err := tx.PaymentRepository().MarkSuccessful(
-						ctx,
-						payment.ID,
-						entity.ID,
-						now,
-					); err != nil {
+					booking, err := tx.BookingRepository().FindByID(ctx, bookingID)
+					if err != nil {
 						return err
 					}
 
-					if err := tx.BookingRepository().ConfirmPending(
+					now := time.Now()
+					isRefundRequired, err := u.finalizeBookingPayment(
 						ctx,
-						bookingID,
-					); err != nil {
+						tx,
+						payment,
+						booking,
+						entity.ID,
+						now,
+					)
+					if err != nil {
 						return err
+					}
+
+					if isRefundRequired {
+						u.logger.WarnContext(ctx, "payment captured via webhook after reservation expiry; refund required",
+							slog.String("payment_id", payment.ID),
+							slog.String("booking_id", payment.BookingID),
+							slog.String("provider_order_id", entity.OrderID),
+							slog.String("transaction_id", entity.ID),
+						)
+						return nil
 					}
 
 					u.logger.InfoContext(ctx, "payment captured and booking confirmed via webhook",
@@ -559,8 +787,8 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return err
 					}
 
-					if payment.Status == domain.PaymentStatusSuccess {
-						u.logger.InfoContext(ctx, "ignoring payment.failed for already successful payment",
+					if payment.Status == domain.PaymentStatusSuccess || payment.Status == domain.PaymentStatusRefundRequired {
+						u.logger.InfoContext(ctx, "ignoring payment.failed for already successful or refund-flagged payment",
 							slog.String("payment_id", payment.ID),
 							slog.String("provider_order_id", entity.OrderID),
 						)

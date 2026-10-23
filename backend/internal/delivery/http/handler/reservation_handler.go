@@ -54,6 +54,10 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 		return
 	}
 
+	if body.EventID == "" {
+		body.EventID = c.Param("eventId")
+	}
+
 	eventID, err := uuid.Parse(body.EventID)
 	if err != nil || eventID == uuid.Nil {
 		c.Error(appErrors.NewValidationError("invalid event ID"))

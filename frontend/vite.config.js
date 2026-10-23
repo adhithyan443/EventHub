@@ -16,6 +16,9 @@ export default defineConfig(({ mode }) => {
       "import.meta.env.VITE_API_BASE_URL": JSON.stringify(
         env.VITE_API_BASE_URL
       ),
+      "import.meta.env.VITE_RAZORPAY_KEY_ID": JSON.stringify(
+        env.RAZORPAY_KEY_ID || env.VITE_RAZORPAY_KEY_ID || ""
+      ),
     },
 
     server: {

@@ -124,6 +124,17 @@ func (m *handlerMockPaymentRepo) MarkFailed(ctx context.Context, paymentID strin
 	return nil
 }
 
+func (m *handlerMockPaymentRepo) MarkRefundRequired(ctx context.Context, paymentID, transactionID string, paidAt time.Time) error {
+	p, ok := m.payments[paymentID]
+	if !ok {
+		return domain.ErrPaymentNotFound
+	}
+	p.Status = domain.PaymentStatusRefundRequired
+	p.TransactionID = &transactionID
+	p.PaidAt = &paidAt
+	return nil
+}
+
 type handlerMockBookingRepo struct {
 	bookings map[uuid.UUID]*domain.Booking
 }
@@ -202,7 +213,7 @@ func setupWebhookTestRouter(
 
 	provider := &handlerMockPaymentProvider{webhookSecret: secret}
 	usecase := paymentuc.NewPaymentUsecase(txManager, nil, provider, logger)
-	paymentHandler := handler.NewPaymentHandler(usecase, logger)
+	paymentHandler := handler.NewPaymentHandler(usecase, "rzp_test_key", logger)
 
 	api := router.Group("/api/v1")
 	api.POST("/payments/webhook", paymentHandler.RazorpayWebhook)

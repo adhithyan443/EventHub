@@ -317,17 +317,12 @@ func registerReservationRoutes(
 	jwtService *token.JWTService,
 ) {
 	api := router.Group("/api/v1")
-	// reservations := api.Group("/events/:eventId/reservations")
 
-	// reservations.Use(middleware.Auth(jwtService))
-
-	// reservations.POST("", reservationHandler.CreateReservation)
-
-	// api.POST(
-	// 	"/events/:eventId/reservations",
-	// 	middleware.Auth(jwtService),
-	// 	reservationHandler.CreateReservation,
-	// )
+	api.POST(
+		"/events/:eventId/reservations",
+		middleware.Auth(jwtService),
+		reservationHandler.CreateReservation,
+	)
 
 	api.POST(
 		"/bookings/reserve",

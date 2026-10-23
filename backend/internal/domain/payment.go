@@ -17,14 +17,16 @@ var (
 	ErrUnsupportedPaymentMethod   = errors.New("unsupported payment method")
 	ErrCheckoutNotPayable         = errors.New("checkout is not payable")
 	ErrPaymentInProgress          = errors.New("payment attempt is already in progress")
+	ErrReservationExpired         = errors.New("reservation has expired")
 )
 
 type PaymentStatus string
 
 const (
-	PaymentStatusPending PaymentStatus = "PENDING"
-	PaymentStatusSuccess PaymentStatus = "SUCCESS"
-	PaymentStatusFailed  PaymentStatus = "FAILED"
+	PaymentStatusPending        PaymentStatus = "PENDING"
+	PaymentStatusSuccess        PaymentStatus = "SUCCESS"
+	PaymentStatusFailed         PaymentStatus = "FAILED"
+	PaymentStatusRefundRequired PaymentStatus = "REFUND_REQUIRED"
 )
 
 type PaymentMethod string
@@ -73,5 +75,11 @@ type PaymentRepository interface {
 	MarkFailed(
 		ctx context.Context,
 		paymentID string,
+	) error
+	MarkRefundRequired(
+		ctx context.Context,
+		paymentID string,
+		transactionID string,
+		paidAt time.Time,
 	) error
 }

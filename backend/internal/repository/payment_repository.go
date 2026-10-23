@@ -223,6 +223,55 @@ func (r *paymentRepository) MarkFailed(
 	return nil
 }
 
+// MarkRefundRequired conditionally transitions a pending payment to REFUND_REQUIRED,
+// persisting the gateway transaction ID and paid timestamp for refund processing.
+func (r *paymentRepository) MarkRefundRequired(
+	ctx context.Context,
+	paymentID string,
+	transactionID string,
+	paidAt time.Time,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.PaymentModel{}).
+		Where(
+			"id = ? AND status = ?",
+			paymentID,
+			string(domain.PaymentStatusPending),
+		).
+		Updates(map[string]interface{}{
+			"transaction_id": transactionID,
+			"status":         string(domain.PaymentStatusRefundRequired),
+			"paid_at":        paidAt,
+		})
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to mark payment refund required",
+			slog.String("payment_id", paymentID),
+			slog.Any("error", result.Error),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		var count int64
+		err := r.db.WithContext(ctx).
+			Model(&models.PaymentModel{}).
+			Where("id = ?", paymentID).
+			Count(&count).Error
+		if err != nil {
+			return err
+		}
+
+		if count == 0 {
+			return domain.ErrPaymentNotFound
+		}
+
+		return domain.ErrPaymentAlreadyComplete
+	}
+
+	return nil
+}
+
 func (r *paymentRepository) FindByProviderOrderID(
 	ctx context.Context,
 	providerOrderID string,

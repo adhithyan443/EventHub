@@ -247,6 +247,38 @@ func (r *SeatRepository) ReleaseReservedSeat(
 	return nil
 }
 
+func (r *SeatRepository) BookReservedSeat(
+	ctx context.Context,
+	seatID uuid.UUID,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatModel{}).
+		Where(
+			"id = ? AND status = ?",
+			seatID,
+			domain.SeatStatusReserved,
+		).
+		Update("status", domain.SeatStatusBooked)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to book reserved seat",
+			slog.String("seat_id", seatID.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return domain.ErrSeatNotAvailable
+	}
+
+	r.logger.InfoContext(ctx, "reserved seat booked",
+		slog.String("seat_id", seatID.String()),
+	)
+
+	return nil
+}
+
 func toSeatModel(seat *domain.Seat) *models.SeatModel {
 	return &models.SeatModel{
 		ID:         seat.ID,
