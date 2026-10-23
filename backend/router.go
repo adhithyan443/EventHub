@@ -22,6 +22,7 @@ func setupRouter(
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	reservationHandler *handler.ReservationHandler,
 	checkoutHandler *handler.CheckoutHandler,
+	paymentHandler *handler.PaymentHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -73,6 +74,7 @@ func setupRouter(
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService)
 	registerCheckoutRoutes(router, checkoutHandler, jwtService)
+	registerPaymentRoutes(router, paymentHandler, jwtService)
 
 	return router
 }
@@ -315,17 +317,12 @@ func registerReservationRoutes(
 	jwtService *token.JWTService,
 ) {
 	api := router.Group("/api/v1")
-	// reservations := api.Group("/events/:eventId/reservations")
 
-	// reservations.Use(middleware.Auth(jwtService))
-
-	// reservations.POST("", reservationHandler.CreateReservation)
-
-	// api.POST(
-	// 	"/events/:eventId/reservations",
-	// 	middleware.Auth(jwtService),
-	// 	reservationHandler.CreateReservation,
-	// )
+	api.POST(
+		"/events/:eventId/reservations",
+		middleware.Auth(jwtService),
+		reservationHandler.CreateReservation,
+	)
 
 	api.POST(
 		"/bookings/reserve",
@@ -349,4 +346,22 @@ func registerCheckoutRoutes(
 	api.Use(middleware.Auth(jwtService))
 
 	api.POST("/bookings/checkout", checkoutHandler.CreateCheckout)
+}
+
+func registerPaymentRoutes(
+	router *gin.Engine,
+	paymentHandler *handler.PaymentHandler,
+	jwtService *token.JWTService,
+) {
+	api := router.Group("/api/v1")
+
+	// Public payment webhook endpoint - verified cryptographically via Razorpay HMAC signature.
+	api.POST("/payments/webhook", paymentHandler.RazorpayWebhook)
+
+	payments := api.Group("/payments")
+	payments.Use(middleware.Auth(jwtService))
+
+	payments.POST("", paymentHandler.CreatePayment)
+
+	payments.POST("/verify", paymentHandler.VerifyPayment)
 }

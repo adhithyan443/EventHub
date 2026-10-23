@@ -64,12 +64,16 @@ export default function AppRoutes() {
             <Route path="/users" element={<DiscoverEventsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
 
-            {/* Customer Event Details → Seat Selection → Checkout Flow */}
+            {/* Customer Event Details → Seat Selection */}
             <Route path="/events/:eventId" element={<CustomerEventDetailsPage />} />
             <Route path="/events/:eventId/seats" element={<SeatSelectionPage />} />
             <Route path="/events/:eventId/select-seats" element={<SeatSelectionPage />} />
-            <Route path="/events/:eventId/checkout" element={<CheckoutPage />} />
-            <Route path="/events/:eventId/payment" element={<CheckoutPage />} />
+
+            {/* Authenticated Customer Checkout & Payment */}
+            <Route element={<ProtectedRoute />}>
+                <Route path="/events/:eventId/checkout" element={<CheckoutPage />} />
+                <Route path="/events/:eventId/payment" element={<CheckoutPage />} />
+            </Route>
             <Route path="/checkout" element={<Navigate to="/events" replace />} />
 
             {/* Become an Organizer Workflow */}

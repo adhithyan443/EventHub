@@ -28,6 +28,10 @@ type Config struct {
 	AWSSecretAccessKey string
 	AWSRegion          string
 	AWSS3Bucket        string
+
+	RazorpayKeyID         string
+	RazorpayKeySecret     string
+	RazorpayWebhookSecret string
 }
 
 func Load() (Config, error) {
@@ -103,6 +107,20 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	razorpayKeyID, err := requiredEnv("RAZORPAY_KEY_ID")
+	if err != nil {
+		return Config{}, err
+	}
+
+	razorpayKeySecret, err := requiredEnv("RAZORPAY_KEY_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	razorpayWebhookSecret, err := requiredEnv("RAZORPAY_WEBHOOK_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
@@ -126,6 +144,10 @@ func Load() (Config, error) {
 		AWSSecretAccessKey: awsSecretAccessKey,
 		AWSRegion:          awsRegion,
 		AWSS3Bucket:        awsS3Bucket,
+
+		RazorpayKeyID:         razorpayKeyID,
+		RazorpayKeySecret:     razorpayKeySecret,
+		RazorpayWebhookSecret: razorpayWebhookSecret,
 	}, nil
 }
 

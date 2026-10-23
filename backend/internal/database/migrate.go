@@ -1,42 +1,63 @@
 package database
 
 import (
-	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
+	"context"
+	"errors"
+	"log/slog"
+
+	"github.com/golang-migrate/migrate/v4"
+	migratepostgres "github.com/golang-migrate/migrate/v4/database/postgres"
+	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"gorm.io/gorm"
 )
 
 func Migrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	sqlDB, err := db.DB()
+	if err != nil {
+		return err
+	}
 
-		&models.UserModel{},
-		&models.RefreshTokenModel{},
-		&models.PasswordResetTokenModel{},
-		&models.PendingRegistrationModel{},
+	ctx := context.Background()
+	conn, err := sqlDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
 
-		&models.OrganizerApplicationModel{},
-
-		&models.OrganizerModel{},
-		&models.OrganizerProfileModel{},
-		&models.OrganizerAddressModel{},
-		&models.OrganizerBankAccountModel{},
-
-		&models.CategoryModel{},
-		&models.VenueModel{},
-
-		&models.EventModel{},
-		&models.EventScheduleModel{},
-		&models.EventSettingModel{},
-		&models.EventCancellationModel{},
-		&models.EventContactModel{},
-
-		&models.SeatLayoutModel{},
-		&models.SeatSectionModel{},
-		&models.SeatRowModel{},
-		&models.SeatModel{},
-
-		&models.TicketTypeModel{},
-		&models.SeatReservationModel{},
-		&models.SeatReservationItemModel{},
-		&models.CheckoutModel{},
+	driver, err := migratepostgres.WithConnection(
+		ctx,
+		conn,
+		&migratepostgres.Config{},
 	)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+
+	m, err := migrate.NewWithDatabaseInstance(
+		"file://migrations",
+		"postgres",
+		driver,
+	)
+	if err != nil {
+		_ = driver.Close()
+		return err
+	}
+	defer func() {
+		sourceErr, databaseErr := m.Close()
+		if sourceErr != nil {
+			slog.Warn("migration_source_close_failed", "error", sourceErr)
+		}
+		if databaseErr != nil {
+			slog.Warn("migration_database_close_failed", "error", databaseErr)
+		}
+	}()
+
+	slog.Info("database_migration_started")
+
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+		return err
+	}
+
+	slog.Info("database_migration_completed")
+	return nil
 }
