@@ -21,16 +21,19 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/checkout"
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Application logging.
 	logger, closeLog, err := appLogger.New("app.log")
 	if err != nil {
 		slog.Error("failed to initialize logger", "error", err)
@@ -40,6 +43,7 @@ func main() {
 
 	slog.SetDefault(logger)
 
+	// Configuration.
 	if err := godotenv.Load("../.env"); err != nil {
 		logger.Warn(".env file not found, using environment variables")
 	}
@@ -50,6 +54,7 @@ func main() {
 		return
 	}
 
+	// Database setup.
 	db, err := database.Connect(cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("database connection failed", "error", err)
@@ -72,20 +77,37 @@ func main() {
 
 	logger.Info("category seeding completed")
 
-	s3Service, err := storage.NewS3Service(
-		cfg,
-		logger,
-	)
+	// Infrastructure services.
+	s3Service, err := storage.NewS3Service(cfg, logger)
 	if err != nil {
-		logger.Error(
-			"s3_service_initialization_failed",
-			"error", err,
-		)
+		logger.Error("s3_service_initialization_failed", "error", err)
+		return
+	}
+
+	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
+	if err != nil {
+		logger.Error("encryption_service_initialization_failed", "error", err)
 		return
 	}
 
 	jwtService := token.NewJWTService(cfg.JWTSecret)
 
+	googleOAuthService := google.NewGoogleOAuthService(
+		cfg.GoogleClientID,
+		cfg.GoogleClientSecret,
+		cfg.GoogleRedirectURL,
+	)
+
+	emailService := email.NewSMTPEmailService(
+		cfg.SMTPHost,
+		cfg.SMTPPort,
+		cfg.SMTPUsername,
+		cfg.SMTPPassword,
+		cfg.SMTPFrom,
+		cfg.FrontendURL,
+	)
+
+	// Shared repositories and transaction manager.
 	userRepo := repository.NewUserRepository(db, logger)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
@@ -93,6 +115,7 @@ func main() {
 
 	txManager := repository.NewTransactionManager(db, logger)
 
+	// Reservation dependencies.
 	reservationUsecase := reservation.NewReservationUsecase(
 		txManager,
 		logger,
@@ -103,6 +126,13 @@ func main() {
 		logger,
 	)
 
+	reservationExpiryWorker := worker.NewReservationExpiryWorker(
+		reservationUsecase,
+		logger,
+		30*time.Second,
+	)
+
+	// Checkout dependencies.
 	checkoutUsecase := checkout.NewCheckoutUsecase(
 		txManager,
 		logger,
@@ -113,11 +143,37 @@ func main() {
 		logger,
 	)
 
-	reservationExpiryWorker := worker.NewReservationExpiryWorker(
-		reservationUsecase,
+	// Booking dependencies.
+	bookingUsecase := booking.NewBookingUsecase(
+		txManager,
 		logger,
-		30*time.Second,
 	)
+
+	// Payment dependencies.
+	razorpayProvider, err := payment.NewRazorpayProvider(
+		cfg.RazorpayKeyID,
+		cfg.RazorpayKeySecret,
+		cfg.RazorpayWebhookSecret,
+		logger,
+	)
+	if err != nil {
+		logger.Error("razorpay provider initialization failed", "error", err)
+		return
+	}
+
+	paymentUsecase := payment.NewPaymentUsecase(
+		txManager,
+		bookingUsecase,
+		razorpayProvider,
+		logger,
+	)
+
+	paymentHandler := handler.NewPaymentHandler(
+		paymentUsecase,
+		logger,
+	)
+	// paymentHandler := handler.NewPaymentHandler(paymentUsecase, logger)
+
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
@@ -126,9 +182,7 @@ func main() {
 		logger,
 	)
 
-	categoryHandler := handler.NewCategoryHandler(
-		categoryUsecase,
-	)
+	categoryHandler := handler.NewCategoryHandler(categoryUsecase)
 
 	// Event dependencies.
 	eventUsecase := eventUC.NewEventUsecase(
@@ -153,30 +207,7 @@ func main() {
 		logger,
 	)
 
-	encryptionService, err := encryption.NewService(cfg.EncryptionKey)
-	if err != nil {
-		logger.Error(
-			"encryption_service_initialization_failed",
-			"error", err,
-		)
-		return
-	}
-
-	googleOAuthService := google.NewGoogleOAuthService(
-		cfg.GoogleClientID,
-		cfg.GoogleClientSecret,
-		cfg.GoogleRedirectURL,
-	)
-
-	emailService := email.NewSMTPEmailService(
-		cfg.SMTPHost,
-		cfg.SMTPPort,
-		cfg.SMTPUsername,
-		cfg.SMTPPassword,
-		cfg.SMTPFrom,
-		cfg.FrontendURL,
-	)
-
+	// Authentication dependencies.
 	authUsecase := auth.NewAuthUsecase(
 		userRepo,
 		pendingRegistrationRepo,
@@ -194,31 +225,18 @@ func main() {
 		cfg.FrontendURL,
 	)
 
+	// Organizer repositories.
 	organizerApplicationRepo := repository.NewOrganizerApplicationRepository(
 		db,
 		logger,
 	)
 
-	organizerRepo := repository.NewOrganizerRepository(
-		db,
-		logger,
-	)
+	organizerRepo := repository.NewOrganizerRepository(db, logger)
+	organizerProfileRepo := repository.NewOrganizerProfileRepository(db, logger)
+	organizerAddressRepo := repository.NewOrganizerAddressRepository(db, logger)
+	organizerBankAccountRepo := repository.NewOrganizerBankAccountRepository(db, logger)
 
-	organizerProfileRepo := repository.NewOrganizerProfileRepository(
-		db,
-		logger,
-	)
-
-	organizerAddressRepo := repository.NewOrganizerAddressRepository(
-		db,
-		logger,
-	)
-
-	organizerBankAccountRepo := repository.NewOrganizerBankAccountRepository(
-		db,
-		logger,
-	)
-
+	// Organizer profile dependencies.
 	organizerProfileUsecase := organizer.NewProfileUsecase(
 		organizerRepo,
 		organizerProfileRepo,
@@ -232,6 +250,7 @@ func main() {
 		logger,
 	)
 
+	// Organizer application dependencies.
 	organizerApplicationUsecase := organizer.NewApplicationUsecase(
 		organizerApplicationRepo,
 		encryptionService,
@@ -252,6 +271,7 @@ func main() {
 		logger,
 	)
 
+	// Router setup.
 	router := setupRouter(
 		logger,
 		authHandler,
@@ -262,6 +282,7 @@ func main() {
 		seatLayoutHandler,
 		reservationHandler,
 		checkoutHandler,
+		paymentHandler,
 		jwtService,
 	)
 
@@ -271,12 +292,12 @@ func main() {
 		"environment", cfg.AppEnv,
 	)
 
+	// Graceful shutdown.
 	ctx, stop := signal.NotifyContext(
 		context.Background(),
 		os.Interrupt,
 		syscall.SIGTERM,
 	)
-
 	defer stop()
 
 	server := &http.Server{
@@ -313,6 +334,7 @@ func main() {
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful server shutdown failed", "error", err)
+
 		if closeErr := server.Close(); closeErr != nil {
 			logger.Error("forced server close failed", "error", closeErr)
 		}
@@ -320,5 +342,6 @@ func main() {
 
 	stop()
 	workerWG.Wait()
+
 	logger.Info("EventHub backend stopped")
 }
