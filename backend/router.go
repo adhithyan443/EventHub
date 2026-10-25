@@ -23,6 +23,7 @@ func setupRouter(
 	reservationHandler *handler.ReservationHandler,
 	checkoutHandler *handler.CheckoutHandler,
 	paymentHandler *handler.PaymentHandler,
+	ticketHandler *handler.TicketHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -75,6 +76,7 @@ func setupRouter(
 	registerReservationRoutes(router, reservationHandler, jwtService)
 	registerCheckoutRoutes(router, checkoutHandler, jwtService)
 	registerPaymentRoutes(router, paymentHandler, jwtService)
+	registerTicketRoutes(router, ticketHandler, jwtService)
 
 	return router
 }
@@ -364,4 +366,18 @@ func registerPaymentRoutes(
 	payments.POST("", paymentHandler.CreatePayment)
 
 	payments.POST("/verify", paymentHandler.VerifyPayment)
+}
+
+func registerTicketRoutes(
+	router *gin.Engine,
+	ticketHandler *handler.TicketHandler,
+	jwtService *token.JWTService,
+) {
+	tickets := router.Group("/api/v1/tickets")
+	tickets.Use(middleware.Auth(jwtService))
+
+	tickets.GET("", ticketHandler.GetMyTickets)
+	tickets.GET("/:id", ticketHandler.GetMyTicket)
+
+	tickets.GET("/:id/download", ticketHandler.DownloadTicketPDF)
 }

@@ -2,76 +2,68 @@ package payment_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	bookinguc "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
-	paymentuc "github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type mockPaymentProvider struct {
-	verifyWebhookSignatureFunc func(body []byte, signature string) bool
-}
-
-func (m *mockPaymentProvider) Initiate(ctx context.Context, amount decimal.Decimal, currency string, idempotencyKey string) (string, error) {
-	return "order_test_123", nil
-}
-
-func (m *mockPaymentProvider) Verify(ctx context.Context, providerOrderID, paymentID, signature string, expectedAmount decimal.Decimal, currency string) (bool, error) {
-	return true, nil
-}
-
-func (m *mockPaymentProvider) VerifyWebhookSignature(body []byte, signature string) bool {
-	if m.verifyWebhookSignatureFunc != nil {
-		return m.verifyWebhookSignatureFunc(body, signature)
-	}
-	return true
-}
-
-type mockWebhookEventRepo struct {
-	createFunc func(ctx context.Context, eventID, eventType string) error
-	created    []string
-}
-
-func (m *mockWebhookEventRepo) Create(ctx context.Context, eventID, eventType string) error {
-	if m.createFunc != nil {
-		return m.createFunc(ctx, eventID, eventType)
-	}
-	m.created = append(m.created, eventID)
-	return nil
-}
+// --- Mock Implementations ---
 
 type mockPaymentRepo struct {
-	payments           map[string]*domain.Payment
-	markSuccessfulFunc func(ctx context.Context, paymentID string, transactionID string, paidAt time.Time) error
-	markFailedFunc     func(ctx context.Context, paymentID string) error
+	mu           sync.Mutex
+	payments     map[string]*domain.Payment
+	createCalls  int
+	failCalls    int
+	refundCalls  int
+	successCalls int
 }
 
-func (m *mockPaymentRepo) Create(ctx context.Context, payment *domain.Payment) error {
-	if payment.ID == "" {
-		payment.ID = uuid.New().String()
+func newMockPaymentRepo() *mockPaymentRepo {
+	return &mockPaymentRepo{
+		payments: make(map[string]*domain.Payment),
 	}
-	m.payments[payment.ID] = payment
+}
+
+func (m *mockPaymentRepo) Create(ctx context.Context, p *domain.Payment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createCalls++
+	if p.ID == "" {
+		p.ID = uuid.New().String()
+	}
+	now := time.Now()
+	p.CreatedAt = now
+	p.UpdatedAt = now
+	copied := *p
+	m.payments[p.ID] = &copied
 	return nil
 }
 
 func (m *mockPaymentRepo) FindByID(ctx context.Context, id string) (*domain.Payment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if p, ok := m.payments[id]; ok {
-		return p, nil
+		copied := *p
+		return &copied, nil
 	}
 	return nil, domain.ErrPaymentNotFound
 }
 
 func (m *mockPaymentRepo) FindByBookingID(ctx context.Context, bookingID string) ([]domain.Payment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var list []domain.Payment
 	for _, p := range m.payments {
 		if p.BookingID == bookingID {
@@ -81,56 +73,80 @@ func (m *mockPaymentRepo) FindByBookingID(ctx context.Context, bookingID string)
 	return list, nil
 }
 
-func (m *mockPaymentRepo) Update(ctx context.Context, payment *domain.Payment) error {
-	m.payments[payment.ID] = payment
-	return nil
+func (m *mockPaymentRepo) Update(ctx context.Context, p *domain.Payment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing, ok := m.payments[p.ID]; ok {
+		*existing = *p
+		return nil
+	}
+	return domain.ErrPaymentNotFound
 }
 
 func (m *mockPaymentRepo) FindByProviderOrderID(ctx context.Context, providerOrderID string) (*domain.Payment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, p := range m.payments {
 		if p.ProviderOrderID != nil && *p.ProviderOrderID == providerOrderID {
-			return p, nil
+			copied := *p
+			return &copied, nil
 		}
 	}
 	return nil, domain.ErrPaymentNotFound
 }
 
+func (m *mockPaymentRepo) FindByProviderOrderIDForUpdate(ctx context.Context, providerOrderID string) (*domain.Payment, error) {
+	return m.FindByProviderOrderID(ctx, providerOrderID)
+}
+
 func (m *mockPaymentRepo) MarkSuccessful(ctx context.Context, paymentID string, transactionID string, paidAt time.Time) error {
-	if m.markSuccessfulFunc != nil {
-		return m.markSuccessfulFunc(ctx, paymentID, transactionID, paidAt)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.successCalls++
+	if p, ok := m.payments[paymentID]; ok {
+		if p.Status != domain.PaymentStatusPending {
+			return domain.ErrPaymentAlreadyComplete
+		}
+		p.Status = domain.PaymentStatusSuccess
+		p.TransactionID = &transactionID
+		p.PaidAt = &paidAt
+		return nil
 	}
-	p, ok := m.payments[paymentID]
-	if !ok {
-		return domain.ErrPaymentNotFound
-	}
-	if p.Status != domain.PaymentStatusPending {
-		return domain.ErrPaymentAlreadyComplete
-	}
-	p.Status = domain.PaymentStatusSuccess
-	p.TransactionID = &transactionID
-	p.PaidAt = &paidAt
-	return nil
+	return domain.ErrPaymentNotFound
 }
 
 func (m *mockPaymentRepo) MarkFailed(ctx context.Context, paymentID string) error {
-	if m.markFailedFunc != nil {
-		return m.markFailedFunc(ctx, paymentID)
-	}
-	p, ok := m.payments[paymentID]
-	if !ok {
-		return domain.ErrPaymentNotFound
-	}
-	if p.Status == domain.PaymentStatusSuccess || p.Status == domain.PaymentStatusFailed {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failCalls++
+	if p, ok := m.payments[paymentID]; ok {
+		if p.Status == domain.PaymentStatusPending {
+			p.Status = domain.PaymentStatusFailed
+		}
 		return nil
 	}
-	p.Status = domain.PaymentStatusFailed
-	return nil
+	return domain.ErrPaymentNotFound
 }
 
-func (m *mockPaymentRepo) MarkRefundRequired(ctx context.Context, paymentID, transactionID string, paidAt time.Time) error {
+func (m *mockPaymentRepo) MarkRefundRequired(ctx context.Context, paymentID string, transactionID string, paidAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refundCalls++
 	p, ok := m.payments[paymentID]
 	if !ok {
 		return domain.ErrPaymentNotFound
+	}
+	if p.Status == domain.PaymentStatusRefundRequired {
+		if p.TransactionID != nil && *p.TransactionID == transactionID {
+			return nil
+		}
+		return domain.ErrInvalidPayment
+	}
+	if p.Status == domain.PaymentStatusSuccess {
+		return domain.ErrPaymentAlreadyComplete
+	}
+	if p.Status != domain.PaymentStatusPending {
+		return domain.ErrInvalidPayment
 	}
 	p.Status = domain.PaymentStatusRefundRequired
 	p.TransactionID = &transactionID
@@ -138,37 +154,96 @@ func (m *mockPaymentRepo) MarkRefundRequired(ctx context.Context, paymentID, tra
 	return nil
 }
 
-type mockBookingRepo struct {
-	bookings           map[uuid.UUID]*domain.Booking
-	confirmPendingFunc func(ctx context.Context, id uuid.UUID) error
+func (m *mockPaymentRepo) UpdateProviderOrderID(ctx context.Context, paymentID string, providerOrderID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.payments[paymentID]
+	if !ok {
+		return domain.ErrPaymentNotFound
+	}
+	if p.ProviderOrderID != nil && *p.ProviderOrderID == providerOrderID {
+		return nil
+	}
+	if p.Status != domain.PaymentStatusPending {
+		if p.Status == domain.PaymentStatusSuccess {
+			return domain.ErrPaymentAlreadyComplete
+		}
+		if p.Status == domain.PaymentStatusRefundRequired {
+			return domain.ErrPaymentRefundPending
+		}
+		return domain.ErrInvalidPayment
+	}
+	if p.ProviderOrderID != nil && *p.ProviderOrderID != providerOrderID {
+		return domain.ErrInvalidPayment
+	}
+	p.ProviderOrderID = &providerOrderID
+	return nil
 }
 
-func (m *mockBookingRepo) Create(ctx context.Context, booking *domain.Booking, items []domain.BookingItem) error {
-	m.bookings[booking.ID] = booking
+type mockBookingRepo struct {
+	mu           sync.Mutex
+	bookings     map[uuid.UUID]*domain.Booking
+	items        map[uuid.UUID][]domain.BookingItem
+	confirmCalls int
+}
+
+func newMockBookingRepo() *mockBookingRepo {
+	return &mockBookingRepo{
+		bookings: make(map[uuid.UUID]*domain.Booking),
+		items:    make(map[uuid.UUID][]domain.BookingItem),
+	}
+}
+
+func (m *mockBookingRepo) Create(ctx context.Context, b *domain.Booking, items []domain.BookingItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *b
+	m.bookings[b.ID] = &copied
+	m.items[b.ID] = items
 	return nil
 }
 
 func (m *mockBookingRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if b, ok := m.bookings[id]; ok {
-		return b, nil
+		copied := *b
+		return &copied, nil
 	}
 	return nil, domain.ErrBookingNotFound
 }
 
+func (m *mockBookingRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+	return m.FindByID(ctx, id)
+}
+
 func (m *mockBookingRepo) FindByBookingNumber(ctx context.Context, num string) (*domain.Booking, error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.bookings {
+		if b.BookingNumber == num {
+			copied := *b
+			return &copied, nil
+		}
+	}
+	return nil, domain.ErrBookingNotFound
 }
 
 func (m *mockBookingRepo) FindByReservationID(ctx context.Context, resID uuid.UUID) (*domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, b := range m.bookings {
 		if b.ReservationID != nil && *b.ReservationID == resID {
-			return b, nil
+			copied := *b
+			return &copied, nil
 		}
 	}
 	return nil, domain.ErrBookingNotFound
 }
 
 func (m *mockBookingRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if b, ok := m.bookings[id]; ok {
 		b.Status = status
 		return nil
@@ -177,1326 +252,900 @@ func (m *mockBookingRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 }
 
 func (m *mockBookingRepo) ConfirmPending(ctx context.Context, id uuid.UUID) error {
-	if m.confirmPendingFunc != nil {
-		return m.confirmPendingFunc(ctx, id)
-	}
-	b, ok := m.bookings[id]
-	if !ok {
-		return domain.ErrBookingNotFound
-	}
-	if b.Status != domain.BookingStatusPending {
-		return domain.ErrBookingNotFound
-	}
-	b.Status = domain.BookingStatusConfirmed
-	return nil
-}
-
-type mockSeatReservationRepo struct {
-	reservations map[uuid.UUID]*domain.SeatReservation
-	items        map[uuid.UUID][]domain.SeatReservationItem
-}
-
-func (m *mockSeatReservationRepo) Create(ctx context.Context, reservation *domain.SeatReservation) error {
-	m.reservations[reservation.ID] = reservation
-	return nil
-}
-func (m *mockSeatReservationRepo) CreateItem(ctx context.Context, item *domain.SeatReservationItem) error {
-	m.items[item.ReservationID] = append(m.items[item.ReservationID], *item)
-	return nil
-}
-func (m *mockSeatReservationRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.SeatReservation, error) {
-	if r, ok := m.reservations[id]; ok {
-		return r, nil
-	}
-	return nil, domain.ErrSeatReservationNotFound
-}
-func (m *mockSeatReservationRepo) FindItemsByReservationID(ctx context.Context, resID uuid.UUID) ([]domain.SeatReservationItem, error) {
-	return m.items[resID], nil
-}
-func (m *mockSeatReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
-	if r, ok := m.reservations[id]; ok {
-		r.Status = status
-		return nil
-	}
-	return domain.ErrSeatReservationNotFound
-}
-func (m *mockSeatReservationRepo) CompleteIfActive(ctx context.Context, id uuid.UUID) (bool, error) {
-	r, ok := m.reservations[id]
-	if !ok || r.Status != domain.ReservationStatusActive {
-		return false, nil
-	}
-	r.Status = domain.ReservationStatusCompleted
-	return true, nil
-}
-func (m *mockSeatReservationRepo) ExpireIfActive(ctx context.Context, id uuid.UUID, now time.Time) (bool, error) {
-	r, ok := m.reservations[id]
-	if !ok || r.Status != domain.ReservationStatusActive || r.ExpiresAt.After(now) {
-		return false, nil
-	}
-	r.Status = domain.ReservationStatusExpired
-	return true, nil
-}
-func (m *mockSeatReservationRepo) FindExpiredActive(ctx context.Context, now time.Time, limit int) ([]domain.SeatReservation, error) {
-	var list []domain.SeatReservation
-	for _, r := range m.reservations {
-		if r.Status == domain.ReservationStatusActive && !r.ExpiresAt.After(now) {
-			list = append(list, *r)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.confirmCalls++
+	if b, ok := m.bookings[id]; ok {
+		if b.Status == domain.BookingStatusPending {
+			b.Status = domain.BookingStatusConfirmed
+			return nil
 		}
+		return domain.ErrBookingNotFound
 	}
-	return list, nil
-}
-func (m *mockSeatReservationRepo) CancelIfActive(ctx context.Context, id uuid.UUID, userID uuid.UUID) (bool, error) {
-	r, ok := m.reservations[id]
-	if !ok || r.Status != domain.ReservationStatusActive {
-		return false, nil
-	}
-	r.Status = domain.ReservationStatusCancelled
-	return true, nil
-}
-func (m *mockSeatReservationRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.SeatReservation, error) {
-	return m.FindByID(ctx, id)
+	return domain.ErrBookingNotFound
 }
 
-type mockSeatRepo struct {
-	seats map[uuid.UUID]*domain.Seat
-}
-
-func (m *mockSeatRepo) Create(seat *domain.Seat) error                     { m.seats[seat.ID] = seat; return nil }
-func (m *mockSeatRepo) Update(seat *domain.Seat) error                     { m.seats[seat.ID] = seat; return nil }
-func (m *mockSeatRepo) Delete(id uuid.UUID) error                          { delete(m.seats, id); return nil }
-func (m *mockSeatRepo) DeleteByRowID(rowID uuid.UUID) error                { return nil }
-func (m *mockSeatRepo) FindByRowID(rowID uuid.UUID) ([]domain.Seat, error) { return nil, nil }
-func (m *mockSeatRepo) FindByID(seatID uuid.UUID) (*domain.Seat, error) {
-	if s, ok := m.seats[seatID]; ok {
-		return s, nil
-	}
-	return nil, domain.ErrSeatNotFound
-}
-func (m *mockSeatRepo) CountBookedByLayoutID(layoutID uuid.UUID) (int64, error) { return 0, nil }
-func (m *mockSeatRepo) ReserveIfAvailable(ctx context.Context, seatID uuid.UUID) error {
-	s, ok := m.seats[seatID]
-	if !ok || s.Status != domain.SeatStatusAvailable {
-		return domain.ErrSeatNotAvailable
-	}
-	s.Status = domain.SeatStatusReserved
-	return nil
-}
-func (m *mockSeatRepo) ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error {
-	s, ok := m.seats[seatID]
-	if !ok || s.Status != domain.SeatStatusReserved {
-		return domain.ErrSeatNotAvailable
-	}
-	s.Status = domain.SeatStatusAvailable
-	return nil
-}
-func (m *mockSeatRepo) BookReservedSeat(ctx context.Context, seatID uuid.UUID) error {
-	s, ok := m.seats[seatID]
-	if !ok || s.Status != domain.SeatStatusReserved {
-		return domain.ErrSeatNotAvailable
-	}
-	s.Status = domain.SeatStatusBooked
-	return nil
+func (m *mockBookingRepo) FindItemsByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.items[bookingID], nil
 }
 
 type mockCheckoutRepo struct {
-	checkouts       map[uuid.UUID]*domain.Checkout
-	updateStatusErr error
-	findByResErr    error
+	mu        sync.Mutex
+	checkouts map[uuid.UUID]*domain.Checkout
 }
 
-func (m *mockCheckoutRepo) Create(ctx context.Context, checkout *domain.Checkout) error {
-	m.checkouts[checkout.ID] = checkout
-	return nil
+func newMockCheckoutRepo() *mockCheckoutRepo {
+	return &mockCheckoutRepo{
+		checkouts: make(map[uuid.UUID]*domain.Checkout),
+	}
 }
+
 func (m *mockCheckoutRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Checkout, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if c, ok := m.checkouts[id]; ok {
-		return c, nil
+		copied := *c
+		return &copied, nil
 	}
 	return nil, domain.ErrCheckoutNotFound
 }
+
 func (m *mockCheckoutRepo) FindByReservationID(ctx context.Context, resID uuid.UUID) (*domain.Checkout, error) {
-	if m.findByResErr != nil {
-		return nil, m.findByResErr
-	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, c := range m.checkouts {
 		if c.ReservationID == resID {
-			return c, nil
+			copied := *c
+			return &copied, nil
 		}
 	}
 	return nil, domain.ErrCheckoutNotFound
 }
+
 func (m *mockCheckoutRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
-	if m.updateStatusErr != nil {
-		return m.updateStatusErr
-	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if c, ok := m.checkouts[id]; ok {
 		c.Status = status
 		return nil
 	}
 	return domain.ErrCheckoutNotFound
 }
+
+func (m *mockCheckoutRepo) Create(ctx context.Context, c *domain.Checkout) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *c
+	m.checkouts[c.ID] = &copied
+	return nil
+}
+
 func (m *mockCheckoutRepo) ExpireActiveByReservationID(ctx context.Context, resID uuid.UUID) (bool, error) {
-	for _, c := range m.checkouts {
-		if c.ReservationID == resID && c.Status == domain.CheckoutStatusActive {
-			c.Status = domain.CheckoutStatusExpired
+	return false, nil
+}
+
+type mockSeatReservationRepo struct {
+	mu           sync.Mutex
+	reservations map[uuid.UUID]*domain.SeatReservation
+	items        map[uuid.UUID][]domain.SeatReservationItem
+}
+
+func newMockSeatReservationRepo() *mockSeatReservationRepo {
+	return &mockSeatReservationRepo{
+		reservations: make(map[uuid.UUID]*domain.SeatReservation),
+		items:        make(map[uuid.UUID][]domain.SeatReservationItem),
+	}
+}
+
+func (m *mockSeatReservationRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.SeatReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.reservations[id]; ok {
+		copied := *r
+		return &copied, nil
+	}
+	return nil, domain.ErrSeatReservationNotFound
+}
+
+func (m *mockSeatReservationRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.SeatReservation, error) {
+	return m.FindByID(ctx, id)
+}
+
+func (m *mockSeatReservationRepo) CompleteIfActive(ctx context.Context, id uuid.UUID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.reservations[id]; ok {
+		if r.Status == domain.ReservationStatusActive && time.Now().Before(r.ExpiresAt) {
+			r.Status = domain.ReservationStatusCompleted
 			return true, nil
 		}
+		return false, nil
 	}
-	return false, nil
+	return false, domain.ErrSeatReservationNotFound
+}
+
+func (m *mockSeatReservationRepo) CancelIfActive(ctx context.Context, id uuid.UUID, userID uuid.UUID) (bool, error) {
+	return true, nil
+}
+
+func (m *mockSeatReservationRepo) ExpireIfActive(ctx context.Context, id uuid.UUID, now time.Time) (bool, error) {
+	return true, nil
+}
+
+func (m *mockSeatReservationRepo) FindExpiredActive(ctx context.Context, now time.Time, limit int) ([]domain.SeatReservation, error) {
+	return nil, nil
+}
+
+func (m *mockSeatReservationRepo) FindItemsByReservationID(ctx context.Context, id uuid.UUID) ([]domain.SeatReservationItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.items[id], nil
+}
+
+func (m *mockSeatReservationRepo) Create(ctx context.Context, r *domain.SeatReservation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *r
+	m.reservations[r.ID] = &copied
+	return nil
+}
+
+func (m *mockSeatReservationRepo) CreateItem(ctx context.Context, item *domain.SeatReservationItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[item.ReservationID] = append(m.items[item.ReservationID], *item)
+	return nil
+}
+
+func (m *mockSeatReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.reservations[id]; ok {
+		r.Status = status
+		return nil
+	}
+	return domain.ErrSeatReservationNotFound
+}
+
+type mockTicketRepo struct {
+	mu      sync.Mutex
+	tickets []domain.Ticket
+}
+
+func (m *mockTicketRepo) Create(ctx context.Context, ticket *domain.Ticket) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tickets = append(m.tickets, *ticket)
+	return nil
+}
+
+func (m *mockTicketRepo) CreateMany(ctx context.Context, tickets []domain.Ticket) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tickets = append(m.tickets, tickets...)
+	return nil
+}
+
+func (m *mockTicketRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Ticket, error) {
+	return nil, nil
+}
+func (m *mockTicketRepo) FindByCode(ctx context.Context, code string) (*domain.Ticket, error) {
+	return nil, nil
+}
+func (m *mockTicketRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Ticket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var list []domain.Ticket
+	for _, t := range m.tickets {
+		if t.BookingID == bookingID {
+			list = append(list, t)
+		}
+	}
+	return list, nil
+}
+func (m *mockTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Ticket, error) {
+	return nil, nil
+}
+func (m *mockTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	return nil
+}
+func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	return 0, nil
+}
+
+type mockSeatRepo struct {
+	domain.SeatRepository
+}
+
+func (m *mockSeatRepo) BookReservedSeat(ctx context.Context, seatID uuid.UUID) error {
+	return nil
+}
+
+type mockRazorpayWebhookEventRepo struct {
+	mu     sync.Mutex
+	events map[string]string
+}
+
+func (m *mockRazorpayWebhookEventRepo) Create(ctx context.Context, eventID string, eventType string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.events[eventID]; ok {
+		return domain.ErrDuplicateWebhookEvent
+	}
+	m.events[eventID] = eventType
+	return nil
 }
 
 type mockTxRepos struct {
 	domain.TransactionRepositories
 	paymentRepo         *mockPaymentRepo
 	bookingRepo         *mockBookingRepo
-	webhookRepo         *mockWebhookEventRepo
-	seatReservationRepo *mockSeatReservationRepo
-	seatRepo            *mockSeatRepo
 	checkoutRepo        *mockCheckoutRepo
+	seatReservationRepo *mockSeatReservationRepo
+	ticketRepo          *mockTicketRepo
+	seatRepo            *mockSeatRepo
+	webhookEventRepo    *mockRazorpayWebhookEventRepo
 }
 
-func (r *mockTxRepos) PaymentRepository() domain.PaymentRepository {
-	return r.paymentRepo
+func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository {
+	return m.paymentRepo
+}
+func (m *mockTxRepos) BookingRepository() domain.BookingRepository {
+	return m.bookingRepo
+}
+func (m *mockTxRepos) CheckoutRepository() domain.CheckoutRepository {
+	return m.checkoutRepo
+}
+func (m *mockTxRepos) SeatReservationRepository() domain.SeatReservationRepository {
+	return m.seatReservationRepo
+}
+func (m *mockTxRepos) TicketRepository() domain.TicketRepository {
+	return m.ticketRepo
+}
+func (m *mockTxRepos) SeatRepository() domain.SeatRepository {
+	return m.seatRepo
+}
+func (m *mockTxRepos) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {
+	return m.webhookEventRepo
 }
 
-func (r *mockTxRepos) BookingRepository() domain.BookingRepository {
-	return r.bookingRepo
-}
-
-func (r *mockTxRepos) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {
-	return r.webhookRepo
-}
-
-func (r *mockTxRepos) SeatReservationRepository() domain.SeatReservationRepository {
-	return r.seatReservationRepo
-}
-
-func (r *mockTxRepos) SeatRepository() domain.SeatRepository {
-	return r.seatRepo
-}
-
-func (r *mockTxRepos) CheckoutRepository() domain.CheckoutRepository {
-	return r.checkoutRepo
-}
-
-type mockTxManager struct {
+type mockTransactionManager struct {
 	repos *mockTxRepos
-	err   error
+	mu    sync.Mutex
 }
 
-func (m *mockTxManager) WithinTransaction(fn func(tx domain.TransactionRepositories) error) error {
-	if m.err != nil {
-		return m.err
-	}
+func (m *mockTransactionManager) WithinTransaction(fn func(tx domain.TransactionRepositories) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return fn(m.repos)
 }
 
-func setupPaymentUsecaseTest() (*paymentuc.PaymentUsecase, *mockTxRepos, *mockPaymentProvider) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	paymentRepo := &mockPaymentRepo{payments: make(map[string]*domain.Payment)}
-	bookingRepo := &mockBookingRepo{bookings: make(map[uuid.UUID]*domain.Booking)}
-	webhookRepo := &mockWebhookEventRepo{}
-	seatReservationRepo := &mockSeatReservationRepo{
-		reservations: make(map[uuid.UUID]*domain.SeatReservation),
-		items:        make(map[uuid.UUID][]domain.SeatReservationItem),
+type mockPaymentProvider struct {
+	mu              sync.Mutex
+	initiateCalls   int
+	ordersByReceipt map[string]*payment.ProviderOrder
+	orderStatusMap  map[string]*payment.ProviderOrder
+	initiateErr     error
+	verifyResult    bool
+}
+
+func newMockPaymentProvider() *mockPaymentProvider {
+	return &mockPaymentProvider{
+		ordersByReceipt: make(map[string]*payment.ProviderOrder),
+		orderStatusMap:  make(map[string]*payment.ProviderOrder),
+		verifyResult:    true,
 	}
-	seatRepo := &mockSeatRepo{seats: make(map[uuid.UUID]*domain.Seat)}
-	checkoutRepo := &mockCheckoutRepo{checkouts: make(map[uuid.UUID]*domain.Checkout)}
+}
+
+func (m *mockPaymentProvider) Initiate(ctx context.Context, amount decimal.Decimal, currency string, idempotencyKey string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.initiateCalls++
+	if m.initiateErr != nil {
+		return "", m.initiateErr
+	}
+	orderID := "order_" + uuid.NewString()[:8]
+	order := &payment.ProviderOrder{
+		ID:       orderID,
+		Status:   payment.OrderStatusUsable,
+		Amount:   amount,
+		Currency: currency,
+	}
+	m.ordersByReceipt[idempotencyKey] = order
+	m.orderStatusMap[orderID] = order
+	return orderID, nil
+}
+
+func (m *mockPaymentProvider) Verify(ctx context.Context, providerOrderID string, paymentID string, signature string, expectedAmount decimal.Decimal, currency string) (bool, error) {
+	return m.verifyResult, nil
+}
+
+func (m *mockPaymentProvider) VerifyWebhookSignature(body []byte, signature string) bool {
+	return true
+}
+
+func (m *mockPaymentProvider) FindOrderByReceipt(ctx context.Context, receipt string, expectedAmount decimal.Decimal, currency string) (*payment.ProviderOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if order, ok := m.ordersByReceipt[receipt]; ok {
+		return order, nil
+	}
+	return nil, nil // not found
+}
+
+func (m *mockPaymentProvider) CheckOrderStatus(ctx context.Context, providerOrderID string, expectedAmount decimal.Decimal, currency string) (*payment.ProviderOrder, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if order, ok := m.orderStatusMap[providerOrderID]; ok {
+		return order, nil
+	}
+	return nil, errors.New("order not found")
+}
+
+// --- Test Fixture Setup ---
+
+type testFixture struct {
+	usecase        *payment.PaymentUsecase
+	paymentRepo    *mockPaymentRepo
+	bookingRepo    *mockBookingRepo
+	checkoutRepo   *mockCheckoutRepo
+	reservationRepo *mockSeatReservationRepo
+	ticketRepo     *mockTicketRepo
+	provider       *mockPaymentProvider
+	userID         uuid.UUID
+	checkoutID     uuid.UUID
+	reservationID  uuid.UUID
+	eventID        uuid.UUID
+	totalAmount    decimal.Decimal
+}
+
+func setupFixture(t *testing.T) *testFixture {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	paymentRepo := newMockPaymentRepo()
+	bookingRepo := newMockBookingRepo()
+	checkoutRepo := newMockCheckoutRepo()
+	reservationRepo := newMockSeatReservationRepo()
+	ticketRepo := &mockTicketRepo{}
+	seatRepo := &mockSeatRepo{}
+	webhookEventRepo := &mockRazorpayWebhookEventRepo{events: make(map[string]string)}
 
 	txRepos := &mockTxRepos{
 		paymentRepo:         paymentRepo,
 		bookingRepo:         bookingRepo,
-		webhookRepo:         webhookRepo,
-		seatReservationRepo: seatReservationRepo,
-		seatRepo:            seatRepo,
 		checkoutRepo:        checkoutRepo,
+		seatReservationRepo: reservationRepo,
+		ticketRepo:          ticketRepo,
+		seatRepo:            seatRepo,
+		webhookEventRepo:    webhookEventRepo,
+	}
+	tm := &mockTransactionManager{repos: txRepos}
+
+	bookingUC := bookinguc.NewBookingUsecase(tm, logger)
+	provider := newMockPaymentProvider()
+	paymentUC := payment.NewPaymentUsecase(tm, bookingUC, provider, logger)
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	resID := uuid.New()
+	checkoutID := uuid.New()
+	amount := decimal.NewFromInt(500)
+
+	// Create valid seat reservation
+	now := time.Now()
+	res := &domain.SeatReservation{
+		ID:        resID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	require.NoError(t, reservationRepo.Create(context.Background(), res))
+	seatID := uuid.New()
+	require.NoError(t, reservationRepo.CreateItem(context.Background(), &domain.SeatReservationItem{
+		ReservationID: resID,
+		SeatID:        &seatID,
+		Quantity:      1,
+		Price:         amount,
+	}))
+
+	// Create valid checkout
+	checkout := &domain.Checkout{
+		ID:            checkoutID,
+		UserID:        userID,
+		ReservationID: resID,
+		TotalAmount:   amount,
+		Status:        domain.CheckoutStatusActive,
+		ExpiresAt:     now.Add(15 * time.Minute),
+	}
+	require.NoError(t, checkoutRepo.Create(context.Background(), checkout))
+
+	return &testFixture{
+		usecase:         paymentUC,
+		paymentRepo:     paymentRepo,
+		bookingRepo:     bookingRepo,
+		checkoutRepo:    checkoutRepo,
+		reservationRepo: reservationRepo,
+		ticketRepo:      ticketRepo,
+		provider:        provider,
+		userID:          userID,
+		checkoutID:      checkoutID,
+		reservationID:   resID,
+		eventID:         eventID,
+		totalAmount:     amount,
+	}
+}
+
+// --- Option C Business Rules Tests ---
+
+func TestCreatePayment_OptionC_Rule1_ReuseUsableOrder(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// 1st attempt creates payment and order
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, p1)
+	require.NotNil(t, p1.ProviderOrderID)
+	orderID := *p1.ProviderOrderID
+	assert.Equal(t, 1, f.provider.initiateCalls)
+
+	// 2nd attempt must reuse existing pending payment and provider order
+	p2, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, p2)
+	assert.Equal(t, p1.ID, p2.ID, "Must reuse identical payment ID")
+	assert.Equal(t, orderID, *p2.ProviderOrderID, "Must reuse identical provider order ID")
+	assert.Equal(t, 1, f.provider.initiateCalls, "Must NOT call Initiate again")
+}
+
+func TestCreatePayment_OptionC_Rule2_RetireUnusableOrder(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// 1st attempt creates payment
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+	oldOrderID := *p1.ProviderOrderID
+
+	// Simulate order becoming UNUSABLE on gateway (e.g. expired on gateway or amount mismatch)
+	f.provider.orderStatusMap[oldOrderID].Status = payment.OrderStatusUnusable
+
+	// 2nd attempt should retire p1 as FAILED and create a new attempt
+	p2, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, p1.ID, p2.ID, "Must generate a new payment ID")
+	assert.NotEqual(t, oldOrderID, *p2.ProviderOrderID, "Must generate a new provider order ID")
+	assert.Equal(t, 2, f.provider.initiateCalls, "Must call Initiate for replacement attempt")
+
+	// Verify p1 was retired as FAILED
+	retired, findErr := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, findErr)
+	assert.Equal(t, domain.PaymentStatusFailed, retired.Status)
+}
+
+func TestCreatePayment_OptionC_Rule3_RetryAfterFailedPayments(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// Create initial booking
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	require.NoError(t, err)
+
+	// Simulate payment failed via webhook or gateway rejection
+	require.NoError(t, f.paymentRepo.MarkFailed(ctx, p1.ID))
+
+	// Next attempt must be allowed (Rule 3)
+	p2, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	require.NoError(t, err)
+	assert.NotEqual(t, p1.ID, p2.ID)
+	assert.Equal(t, domain.PaymentStatusPending, p2.Status)
+}
+
+func TestCreatePayment_OptionC_Rule4_SuccessBlocksNewAttempts(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	require.NoError(t, err)
+
+	// Mark payment successful
+	now := time.Now()
+	require.NoError(t, f.paymentRepo.MarkSuccessful(ctx, p1.ID, "pay_12345", now))
+
+	// Further attempts must be rejected
+	_, err = f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	assert.ErrorIs(t, err, domain.ErrPaymentAlreadyComplete)
+}
+
+func TestCreatePayment_OptionC_Rule5_RefundRequiredBlocksNewAttempts(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	require.NoError(t, err)
+
+	// Mark payment REFUND_REQUIRED
+	now := time.Now()
+	require.NoError(t, f.paymentRepo.MarkRefundRequired(ctx, p1.ID, "pay_refund_123", now))
+
+	// Further attempts must be rejected with ErrPaymentRefundPending
+	_, err = f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodUPI,
+	})
+	assert.ErrorIs(t, err, domain.ErrPaymentRefundPending)
+}
+
+// --- Razorpay Receipt Reconciliation Tests ---
+
+func TestCreatePayment_ReceiptReconciliation_OrderRecovered(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// Initial attempt: gateway initiate fails with a timeout
+	f.provider.initiateErr = errors.New("gateway connection timeout")
+
+	_, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	assert.Error(t, err)
+
+	// Verify a pending payment exists in DB with provider_order_id == nil
+	booking, err := f.bookingRepo.FindByReservationID(ctx, f.reservationID)
+	require.NoError(t, err)
+	payments, err := f.paymentRepo.FindByBookingID(ctx, booking.ID.String())
+	require.NoError(t, err)
+	require.Len(t, payments, 1)
+	p := payments[0]
+	assert.Nil(t, p.ProviderOrderID, "Must have nil provider_order_id after timeout")
+
+	// Now simulate gateway having registered the order under payment.ID (receipt)
+	gatewayOrderID := "order_recovered_123"
+	recoveredOrder := &payment.ProviderOrder{
+		ID:       gatewayOrderID,
+		Status:   payment.OrderStatusUsable,
+		Amount:   f.totalAmount,
+		Currency: "INR",
+	}
+	f.provider.ordersByReceipt[p.ID] = recoveredOrder
+	f.provider.orderStatusMap[gatewayOrderID] = recoveredOrder
+	f.provider.initiateErr = nil // gateway recovered
+
+	// Second CreatePayment call should reconcile by receipt, recover gatewayOrderID, and succeed
+	result, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, p.ID, result.ID, "Must reconcile and reuse same payment")
+	assert.NotNil(t, result.ProviderOrderID)
+	assert.Equal(t, gatewayOrderID, *result.ProviderOrderID, "Must recover order ID from receipt lookup")
+}
+
+func TestCreatePayment_ReceiptReconciliation_OrderAbsent_RetriesWithSameReceipt(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// Initial attempt: gateway initiate fails with a timeout
+	f.provider.initiateErr = errors.New("gateway connection timeout")
+
+	_, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	assert.Error(t, err)
+
+	booking, err := f.bookingRepo.FindByReservationID(ctx, f.reservationID)
+	require.NoError(t, err)
+	payments, err := f.paymentRepo.FindByBookingID(ctx, booking.ID.String())
+	require.NoError(t, err)
+	require.Len(t, payments, 1)
+	p := payments[0]
+
+	// Receipt lookup returns 0 orders (f.provider.ordersByReceipt is empty for p.ID)
+	// Gateway is now healthy again
+	f.provider.initiateErr = nil
+
+	// Second attempt should retry with the SAME payment.ID and succeed without creating a second payment record
+	result, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, p.ID, result.ID, "Must reuse same payment ID as receipt")
+	assert.NotNil(t, result.ProviderOrderID)
+
+	// Verify only 1 payment record exists in DB for this booking
+	allPayments, err := f.paymentRepo.FindByBookingID(ctx, booking.ID.String())
+	require.NoError(t, err)
+	assert.Len(t, allPayments, 1, "Must never create a duplicate payment row")
+}
+
+func TestCreatePayment_OrderStatus_InFlightFailsClosed(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	// Set gateway status to IN_FLIGHT
+	f.provider.orderStatusMap[*p1.ProviderOrderID].Status = payment.OrderStatusInFlight
+
+	// Next call must fail closed without retiring the payment
+	_, err = f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	assert.ErrorIs(t, err, domain.ErrPaymentInProgress)
+
+	// Payment must remain PENDING
+	current, findErr := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, findErr)
+	assert.Equal(t, domain.PaymentStatusPending, current.Status)
+}
+
+func TestCreatePayment_OrderStatus_TransientErrorFailsClosed(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	// Remove from provider orderStatusMap to simulate gateway 500 / error
+	delete(f.provider.orderStatusMap, *p1.ProviderOrderID)
+
+	// Next call must fail closed with ErrPaymentProviderUnavailable
+	_, err = f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	assert.ErrorIs(t, err, domain.ErrPaymentProviderUnavailable)
+
+	// Local payment status must remain PENDING (never retired on transient failure)
+	current, findErr := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, findErr)
+	assert.Equal(t, domain.PaymentStatusPending, current.Status)
+}
+
+// --- Concurrency Tests ---
+
+func TestCreatePayment_ConcurrentCalls_SingleOrderCreated(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	const concurrency = 10
+	var wg sync.WaitGroup
+	results := make([]*domain.Payment, concurrency)
+	errorsList := make([]error, concurrency)
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			results[idx], errorsList[idx] = f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+				CheckoutID: f.checkoutID,
+				UserID:     f.userID,
+				Method:     domain.PaymentMethodUPI,
+			})
+		}(i)
 	}
 
-	txManager := &mockTxManager{repos: txRepos}
-	provider := &mockPaymentProvider{}
-	bookingUsecase := bookinguc.NewBookingUsecase(txManager, logger)
+	wg.Wait()
 
-	uc := paymentuc.NewPaymentUsecase(txManager, bookingUsecase, provider, logger)
-	return uc, txRepos, provider
-}
-
-func makeWebhookPayload(event, orderID, paymentID string, amountPaise int64, currency string) []byte {
-	m := map[string]interface{}{
-		"entity": "event",
-		"event":  event,
-		"payload": map[string]interface{}{
-			"payment": map[string]interface{}{
-				"entity": map[string]interface{}{
-					"id":       paymentID,
-					"order_id": orderID,
-					"amount":   amountPaise,
-					"currency": currency,
-					"status":   "captured",
-				},
-			},
-		},
-	}
-	b, _ := json.Marshal(m)
-	return b
-}
-
-func TestProcessRazorpayWebhook_InvalidSignature(t *testing.T) {
-	uc, _, provider := setupPaymentUsecaseTest()
-	provider.verifyWebhookSignatureFunc = func(body []byte, sig string) bool {
-		return false
+	// Exactly one order initiated, or all successful ones shared the exact same order ID
+	var successCount int
+	var sharedOrderID string
+	for i := 0; i < concurrency; i++ {
+		if errorsList[i] == nil && results[i] != nil {
+			successCount++
+			if sharedOrderID == "" {
+				sharedOrderID = *results[i].ProviderOrderID
+			} else {
+				assert.Equal(t, sharedOrderID, *results[i].ProviderOrderID, "All concurrent requests must share order ID")
+			}
+		}
 	}
 
-	err := uc.ProcessRazorpayWebhook(context.Background(), []byte(`{}`), "invalid_sig", "evt_123")
-	assert.ErrorIs(t, err, domain.ErrInvalidPayment)
+	assert.Positive(t, successCount)
+	assert.Equal(t, 1, f.provider.initiateCalls, "Only 1 external order must be initiated despite 10 concurrent requests")
 }
 
-func TestProcessRazorpayWebhook_InvalidJSON(t *testing.T) {
-	uc, _, _ := setupPaymentUsecaseTest()
-	err := uc.ProcessRazorpayWebhook(context.Background(), []byte(`{invalid-json`), "sig", "evt_123")
-	assert.ErrorIs(t, err, domain.ErrInvalidPayment)
-}
+// --- Duplicate Capture & Booking Integrity Tests ---
 
-func TestProcessRazorpayWebhook_MissingEventID(t *testing.T) {
-	uc, _, _ := setupPaymentUsecaseTest()
-	body := []byte(`{"entity":"event","event":"payment.captured"}`)
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "")
-	assert.ErrorIs(t, err, domain.ErrInvalidPayment)
-}
+func TestFinalizeBookingPayment_DuplicateCapturePreservesConfirmedBooking(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
 
-func TestProcessRazorpayWebhook_FallbackToPayloadIDWhenHeaderEmpty(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
+	// 1. Initial successful payment and verification
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
 
-	bookingID := uuid.New()
-	orderID := "order_test_999"
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusPending,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(500),
+	verifyRes, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_initial_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.BookingStatusConfirmed, verifyRes.Booking.Status)
+	assert.Equal(t, 1, len(f.ticketRepo.tickets))
+
+	// 2. Simulate a SECOND payment attempt was also captured at the gateway
+	order2ID := "order_secondary_456"
+	p2 := &domain.Payment{
+		ID:              uuid.New().String(),
+		BookingID:       verifyRes.Booking.ID.String(),
+		Provider:        domain.PaymentProviderRazorpay,
+		ProviderOrderID: &order2ID,
+		Method:          domain.PaymentMethodUPI,
+		Amount:          f.totalAmount,
 		Status:          domain.PaymentStatusPending,
 	}
+	require.NoError(t, f.paymentRepo.Create(ctx, p2))
 
-	body := []byte(`{
+	// Process webhook for second captured payment
+	body := []byte(fmt.Sprintf(`{
 		"entity": "event",
-		"id": "evt_fallback_123",
+		"id": "evt_duplicate_capture_001",
 		"event": "payment.captured",
 		"payload": {
 			"payment": {
 				"entity": {
-					"id": "pay_rzp_123",
-					"order_id": "order_test_999",
-					"amount": 50000,
-					"currency": "INR",
-					"status": "captured"
+					"id": "pay_duplicate_456",
+					"order_id": "%s",
+					"status": "captured",
+					"amount": %d,
+					"currency": "INR"
 				}
 			}
 		}
-	}`)
+	}`, order2ID, f.totalAmount.Mul(decimal.NewFromInt(100)).IntPart()))
 
-	// Pass empty header eventID to test fallback
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "")
-	require.NoError(t, err)
-	assert.Contains(t, txRepos.webhookRepo.created, "evt_fallback_123")
-}
-
-func TestProcessRazorpayWebhook_DuplicateEvent_IgnoredCleanly(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	txRepos.webhookRepo.createFunc = func(ctx context.Context, eventID, eventType string) error {
-		return domain.ErrDuplicateWebhookEvent
-	}
-
-	body := makeWebhookPayload("payment.captured", "order_123", "pay_rzp_123", 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_duplicate")
-	require.NoError(t, err) // Duplicate must return nil / HTTP 200
-}
-
-func TestProcessRazorpayWebhook_PaymentCaptured_Success(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	bookingID := uuid.New()
-	orderID := "order_captured_1"
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusPending,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(350),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	body := makeWebhookPayload("payment.captured", orderID, "pay_rzp_captured", 35000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_captured_1")
+	err = f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_duplicate_capture_001")
 	require.NoError(t, err)
 
-	payment := txRepos.paymentRepo.payments["pay_local_1"]
-	assert.Equal(t, domain.PaymentStatusSuccess, payment.Status)
-	assert.NotNil(t, payment.TransactionID)
-	assert.Equal(t, "pay_rzp_captured", *payment.TransactionID)
+	// Booking MUST remain CONFIRMED
+	booking, findErr := f.bookingRepo.FindByID(ctx, verifyRes.Booking.ID)
+	require.NoError(t, findErr)
+	assert.Equal(t, domain.BookingStatusConfirmed, booking.Status, "Confirmed booking must NEVER be cancelled by secondary capture")
 
-	booking := txRepos.bookingRepo.bookings[bookingID]
-	assert.Equal(t, domain.BookingStatusConfirmed, booking.Status)
+	// Secondary payment must be flagged REFUND_REQUIRED
+	refundedPayment, findPErr := f.paymentRepo.FindByID(ctx, p2.ID)
+	require.NoError(t, findPErr)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, refundedPayment.Status)
+	assert.Equal(t, "pay_duplicate_456", *refundedPayment.TransactionID)
+
+	// Tickets must NOT be duplicated
+	tickets, ticketErr := f.ticketRepo.FindByBookingID(ctx, verifyRes.Booking.ID)
+	require.NoError(t, ticketErr)
+	assert.Equal(t, 1, len(tickets), "Tickets must not be generated again for duplicate capture")
 }
 
-func TestProcessRazorpayWebhook_PaymentCaptured_IdempotentAlreadySuccess(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
+func TestMarkRefundRequired_IdempotentFulfillment(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
 
-	bookingID := uuid.New()
-	orderID := "order_already_success"
-	txID := "pay_rzp_same"
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
 	now := time.Now()
-
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusConfirmed,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		TransactionID:   &txID,
-		Amount:          decimal.NewFromInt(100),
-		Status:          domain.PaymentStatusSuccess,
-		PaidAt:          &now,
-	}
-
-	body := makeWebhookPayload("payment.captured", orderID, txID, 10000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_already_done")
+	// First refund transition
+	err = f.paymentRepo.MarkRefundRequired(ctx, p1.ID, "pay_tx_123", now)
 	require.NoError(t, err)
+
+	// Second refund transition with identical transaction ID must succeed idempotently
+	err = f.paymentRepo.MarkRefundRequired(ctx, p1.ID, "pay_tx_123", now)
+	require.NoError(t, err)
+
+	// Transitioning with a conflicting transaction ID when already refund-required must be rejected
+	err = f.paymentRepo.MarkRefundRequired(ctx, p1.ID, "pay_tx_conflicting", now)
+	assert.Error(t, err)
 }
 
-func TestProcessRazorpayWebhook_PaymentCaptured_AlreadySuccessDifferentTxID(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
+func TestUpdateProviderOrderID_ZeroRowReconciliation(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
 
-	bookingID := uuid.New()
-	orderID := "order_conflict"
-	existingTxID := "pay_rzp_old"
-	now := time.Now()
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
 
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusConfirmed,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		TransactionID:   &existingTxID,
-		Amount:          decimal.NewFromInt(100),
-		Status:          domain.PaymentStatusSuccess,
-		PaidAt:          &now,
-	}
+	// Calling UpdateProviderOrderID with the already-persisted order ID must succeed idempotently
+	err = f.paymentRepo.UpdateProviderOrderID(ctx, p1.ID, *p1.ProviderOrderID)
+	require.NoError(t, err)
 
-	body := makeWebhookPayload("payment.captured", orderID, "pay_rzp_new_different", 10000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_conflict")
-	assert.ErrorIs(t, err, domain.ErrPaymentAlreadyComplete)
-}
-
-func TestProcessRazorpayWebhook_PaymentCaptured_AmountMismatch(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	bookingID := uuid.New()
-	orderID := "order_mismatch"
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusPending,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(500),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	// Payload sends 40000 paise (400 INR) instead of 50000 paise (500 INR)
-	body := makeWebhookPayload("payment.captured", orderID, "pay_rzp_123", 40000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_mismatch")
-	assert.ErrorIs(t, err, domain.ErrPaymentAmountMismatch)
-}
-
-func TestProcessRazorpayWebhook_PaymentCaptured_CurrencyMismatch(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	orderID := "order_currency_bad"
-	body := makeWebhookPayload("payment.captured", orderID, "pay_rzp_123", 50000, "USD")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_currency_bad")
-	assert.ErrorIs(t, err, domain.ErrInvalidPayment)
-	_ = txRepos
-}
-
-func TestProcessRazorpayWebhook_PaymentCaptured_OrderNotFound(t *testing.T) {
-	uc, _, _ := setupPaymentUsecaseTest()
-	body := makeWebhookPayload("payment.captured", "nonexistent_order", "pay_rzp_123", 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_not_found")
+	// Calling with non-existent payment ID must return ErrPaymentNotFound
+	err = f.paymentRepo.UpdateProviderOrderID(ctx, uuid.NewString(), "order_random")
 	assert.ErrorIs(t, err, domain.ErrPaymentNotFound)
 }
 
-func TestProcessRazorpayWebhook_PaymentFailed_PendingPayment_MarkedFailed(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	bookingID := uuid.New()
-	orderID := "order_failed_1"
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusPending,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(250),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	body := makeWebhookPayload("payment.failed", orderID, "pay_rzp_failed", 25000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_failed_1")
+func TestRazorpayProvider_FindOrderByReceipt_Validation(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	provider, err := payment.NewRazorpayProvider("rzp_test_key", "rzp_test_secret", "webhook_secret", logger)
 	require.NoError(t, err)
-
-	payment := txRepos.paymentRepo.payments["pay_local_1"]
-	assert.Equal(t, domain.PaymentStatusFailed, payment.Status)
-
-	// Decision 1: Booking remains PENDING on payment failure
-	booking := txRepos.bookingRepo.bookings[bookingID]
-	assert.Equal(t, domain.BookingStatusPending, booking.Status)
-}
-
-func TestProcessRazorpayWebhook_PaymentFailed_AlreadySuccess_NeverOverwritten(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	bookingID := uuid.New()
-	orderID := "order_already_success"
-	txID := "pay_rzp_captured"
-	now := time.Now()
-
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusConfirmed,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		TransactionID:   &txID,
-		Amount:          decimal.NewFromInt(250),
-		Status:          domain.PaymentStatusSuccess,
-		PaidAt:          &now,
-	}
-
-	// Delayed payment.failed event arrives after successful capture
-	body := makeWebhookPayload("payment.failed", orderID, "pay_rzp_declined_attempt", 25000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_failed_delayed")
-	require.NoError(t, err)
-
-	// Decision 6: Never allow delayed failure events to overwrite successful payments
-	payment := txRepos.paymentRepo.payments["pay_local_1"]
-	assert.Equal(t, domain.PaymentStatusSuccess, payment.Status)
-
-	booking := txRepos.bookingRepo.bookings[bookingID]
-	assert.Equal(t, domain.BookingStatusConfirmed, booking.Status)
-}
-
-func TestProcessRazorpayWebhook_PaymentFailed_AlreadyFailed_SafeNoOp(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	bookingID := uuid.New()
-	orderID := "order_already_failed"
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		Status: domain.BookingStatusPending,
-	}
-	txRepos.paymentRepo.payments["pay_local_1"] = &domain.Payment{
-		ID:              "pay_local_1",
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(250),
-		Status:          domain.PaymentStatusFailed,
-	}
-
-	body := makeWebhookPayload("payment.failed", orderID, "pay_rzp_failed_again", 25000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_failed_retry")
-	require.NoError(t, err)
-
-	payment := txRepos.paymentRepo.payments["pay_local_1"]
-	assert.Equal(t, domain.PaymentStatusFailed, payment.Status)
-}
-
-func TestProcessRazorpayWebhook_UnhandledEvent_IgnoredCleanly(t *testing.T) {
-	uc, _, _ := setupPaymentUsecaseTest()
-	body := makeWebhookPayload("order.paid", "order_unhandled", "pay_123", 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_unhandled")
-	require.NoError(t, err)
-}
-
-func TestProcessRazorpayWebhook_DatabaseError_Propagated(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	txRepos.webhookRepo.createFunc = func(ctx context.Context, eventID, eventType string) error {
-		return errors.New("db connection failure")
-	}
-
-	body := makeWebhookPayload("payment.captured", "order_123", "pay_123", 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_dberr")
-	assert.ErrorContains(t, err, "db connection failure")
-}
-
-func TestPaymentUsecase_VerifyPayment_SeatBooking_Success(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	userID := uuid.New()
-	reservationID := uuid.New()
-	seatID := uuid.New()
-	bookingID := uuid.New()
-	orderID := "order_seat_success"
-	paymentID := "pay_local_seat_1"
-	rzpPaymentID := "pay_rzp_seat_123"
-
-	// 1. Active reservation with reserved seat
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
-		{
-			ID:            uuid.New(),
-			ReservationID: reservationID,
-			SeatID:        &seatID,
-		},
-	}
-	txRepos.seatRepo.seats[seatID] = &domain.Seat{
-		ID:     seatID,
-		Status: domain.SeatStatusReserved,
-	}
-
-	// 2. Active checkout
-	checkoutID := uuid.New()
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:            checkoutID,
-		ReservationID: reservationID,
-		Status:        domain.CheckoutStatusActive,
-	}
-
-	// 3. Pending booking and payment
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusPending,
-		Total:         decimal.NewFromInt(1000),
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(1000),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	// Execute verify payment
-	res, err := uc.VerifyPayment(context.Background(), paymentuc.VerifyPaymentRequest{
-		UserID:            userID,
-		ProviderOrderID:   orderID,
-		RazorpayPaymentID: rzpPaymentID,
-		RazorpaySignature: "valid_signature",
-	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-
-	// Verify all inventory lifecycle transitions
-	assert.Equal(t, domain.PaymentStatusSuccess, res.Payment.Status)
-	assert.Equal(t, domain.BookingStatusConfirmed, res.Booking.Status)
-	assert.Equal(t, domain.ReservationStatusCompleted, txRepos.seatReservationRepo.reservations[reservationID].Status)
-	assert.Equal(t, domain.SeatStatusBooked, txRepos.seatRepo.seats[seatID].Status)
-	assert.Equal(t, domain.CheckoutStatusCompleted, txRepos.checkoutRepo.checkouts[checkoutID].Status)
-}
-
-func TestPaymentUsecase_VerifyPayment_GeneralAdmission_Success(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	userID := uuid.New()
-	reservationID := uuid.New()
-	ticketTypeID := uuid.New()
-	bookingID := uuid.New()
-	orderID := "order_ga_success"
-	paymentID := "pay_local_ga_1"
-	rzpPaymentID := "pay_rzp_ga_123"
-
-	// 1. Active reservation with GA ticket tier
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
-		{
-			ID:            uuid.New(),
-			ReservationID: reservationID,
-			TicketTypeID:  &ticketTypeID,
-			Quantity:      2,
-		},
-	}
-
-	// 2. Pending booking and payment
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusPending,
-		Total:         decimal.NewFromInt(500),
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(500),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	res, err := uc.VerifyPayment(context.Background(), paymentuc.VerifyPaymentRequest{
-		UserID:            userID,
-		ProviderOrderID:   orderID,
-		RazorpayPaymentID: rzpPaymentID,
-		RazorpaySignature: "valid_signature",
-	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-
-	assert.Equal(t, domain.PaymentStatusSuccess, res.Payment.Status)
-	assert.Equal(t, domain.BookingStatusConfirmed, res.Booking.Status)
-	assert.Equal(t, domain.ReservationStatusCompleted, txRepos.seatReservationRepo.reservations[reservationID].Status)
-}
-
-func TestPaymentUsecase_VerifyPayment_LateCapture_ExpiredReservation_StrictRejection(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	userID := uuid.New()
-	reservationID := uuid.New()
-	seatID := uuid.New()
-	bookingID := uuid.New()
-	orderID := "order_late_verify"
-	paymentID := "pay_local_late_1"
-	rzpPaymentID := "pay_rzp_late_123"
-
-	// 1. Reservation has already expired
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		Status:    domain.ReservationStatusExpired,
-		ExpiresAt: time.Now().Add(-5 * time.Minute),
-	}
-	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
-		{
-			ID:            uuid.New(),
-			ReservationID: reservationID,
-			SeatID:        &seatID,
-		},
-	}
-	// The seat was released to AVAILABLE by the expiry worker
-	txRepos.seatRepo.seats[seatID] = &domain.Seat{
-		ID:     seatID,
-		Status: domain.SeatStatusAvailable,
-	}
-
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusPending,
-		Total:         decimal.NewFromInt(750),
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(750),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	// Verification attempt on expired reservation
-	res, err := uc.VerifyPayment(context.Background(), paymentuc.VerifyPaymentRequest{
-		UserID:            userID,
-		ProviderOrderID:   orderID,
-		RazorpayPaymentID: rzpPaymentID,
-		RazorpaySignature: "valid_signature",
-	})
-	assert.ErrorIs(t, err, domain.ErrReservationExpired)
-	assert.Nil(t, res)
-
-	// Strict rejection verification:
-	payment := txRepos.paymentRepo.payments[paymentID]
-	booking := txRepos.bookingRepo.bookings[bookingID]
-	seat := txRepos.seatRepo.seats[seatID]
-
-	// Payment must be REFUND_REQUIRED, with transaction ID recorded
-	assert.Equal(t, domain.PaymentStatusRefundRequired, payment.Status)
-	assert.NotNil(t, payment.TransactionID)
-	assert.Equal(t, rzpPaymentID, *payment.TransactionID)
-
-	// Booking must be CANCELLED (never confirmed!)
-	assert.Equal(t, domain.BookingStatusCancelled, booking.Status)
-
-	// Seat must NOT be booked
-	assert.Equal(t, domain.SeatStatusAvailable, seat.Status)
-}
-
-func TestPaymentUsecase_Webhook_Captured_LatePayment_ExpiredReservation(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	reservationID := uuid.New()
-	bookingID := uuid.New()
-	orderID := "order_wh_late"
-	paymentID := "pay_local_wh_late"
-	rzpPaymentID := "pay_rzp_wh_late_456"
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		Status:    domain.ReservationStatusExpired,
-		ExpiresAt: time.Now().Add(-2 * time.Minute),
-	}
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusPending,
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(500),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	body := makeWebhookPayload("payment.captured", orderID, rzpPaymentID, 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_wh_late_1")
-	// Webhook must acknowledge with 200 OK (nil error) so Razorpay doesn't retry
-	require.NoError(t, err)
-
-	payment := txRepos.paymentRepo.payments[paymentID]
-	booking := txRepos.bookingRepo.bookings[bookingID]
-
-	assert.Equal(t, domain.PaymentStatusRefundRequired, payment.Status)
-	assert.Equal(t, domain.BookingStatusCancelled, booking.Status)
-}
-
-func TestPaymentUsecase_Webhook_DuplicateCaptured_OnRefundRequiredPayment(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	reservationID := uuid.New()
-	bookingID := uuid.New()
-	orderID := "order_dup_refund"
-	paymentID := "pay_local_dup_refund"
-	rzpPaymentID := "pay_rzp_dup_789"
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:     reservationID,
-		Status: domain.ReservationStatusExpired,
-	}
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusCancelled,
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(500),
-		Status:          domain.PaymentStatusRefundRequired,
-		TransactionID:   &rzpPaymentID,
-	}
-
-	body := makeWebhookPayload("payment.captured", orderID, rzpPaymentID, 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_dup_refund_1")
-	require.NoError(t, err)
-
-	// Statuses remain intact
-	assert.Equal(t, domain.PaymentStatusRefundRequired, txRepos.paymentRepo.payments[paymentID].Status)
-	assert.Equal(t, domain.BookingStatusCancelled, txRepos.bookingRepo.bookings[bookingID].Status)
-}
-
-func TestPaymentUsecase_VerifyPayment_ConcurrentOnRefundRequired(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	userID := uuid.New()
-	orderID := "order_verify_concurrent_refund"
-	paymentID := "pay_local_conc_refund"
-	rzpPaymentID := "pay_rzp_conc_111"
-	bookingID := uuid.New()
-
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:     bookingID,
-		UserID: userID,
-		Status: domain.BookingStatusCancelled,
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(300),
-		Status:          domain.PaymentStatusRefundRequired,
-		TransactionID:   &rzpPaymentID,
-	}
-
-	res, err := uc.VerifyPayment(context.Background(), paymentuc.VerifyPaymentRequest{
-		UserID:            userID,
-		ProviderOrderID:   orderID,
-		RazorpayPaymentID: rzpPaymentID,
-		RazorpaySignature: "sig",
-	})
-	assert.ErrorIs(t, err, domain.ErrReservationExpired)
-	assert.Nil(t, res)
-}
-
-func TestPaymentUsecase_ExpiryWorker_CannotReleaseCompletedReservation(t *testing.T) {
-	_, txRepos, _ := setupPaymentUsecaseTest()
-
-	reservationID := uuid.New()
-	seatID := uuid.New()
-
-	// Completed reservation with BOOKED seat
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		Status:    domain.ReservationStatusCompleted,
-		ExpiresAt: time.Now().Add(-10 * time.Minute), // Past expiry time!
-	}
-	txRepos.seatRepo.seats[seatID] = &domain.Seat{
-		ID:     seatID,
-		Status: domain.SeatStatusBooked,
-	}
-
-	// ExpireIfActive called by worker
-	expired, err := txRepos.seatReservationRepo.ExpireIfActive(context.Background(), reservationID, time.Now())
-	require.NoError(t, err)
-	assert.False(t, expired, "worker must not expire a COMPLETED reservation")
-
-	// Seat remains BOOKED
-	assert.Equal(t, domain.SeatStatusBooked, txRepos.seatRepo.seats[seatID].Status)
-	assert.Equal(t, domain.ReservationStatusCompleted, txRepos.seatReservationRepo.reservations[reservationID].Status)
-}
-
-func TestPaymentUsecase_VerifyPayment_CheckoutUpdateFailure_RollsBack(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	userID := uuid.New()
-	reservationID := uuid.New()
-	seatID := uuid.New()
-	bookingID := uuid.New()
-	checkoutID := uuid.New()
-	orderID := "order_checkout_fail"
-	paymentID := "pay_checkout_fail_1"
-	rzpPaymentID := "pay_rzp_chk_123"
-
-	// 1. Active reservation with reserved seat
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
-		{
-			ID:            uuid.New(),
-			ReservationID: reservationID,
-			SeatID:        &seatID,
-		},
-	}
-	txRepos.seatRepo.seats[seatID] = &domain.Seat{
-		ID:     seatID,
-		Status: domain.SeatStatusReserved,
-	}
-
-	// 2. Active checkout
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:            checkoutID,
-		ReservationID: reservationID,
-		Status:        domain.CheckoutStatusActive,
-	}
-
-	// 3. Pending booking and payment
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusPending,
-		Total:         decimal.NewFromInt(1000),
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(1000),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	// Simulate checkout update failure
-	checkoutErr := errors.New("database failure updating checkout status")
-	txRepos.checkoutRepo.updateStatusErr = checkoutErr
-
-	res, err := uc.VerifyPayment(context.Background(), paymentuc.VerifyPaymentRequest{
-		UserID:            userID,
-		ProviderOrderID:   orderID,
-		RazorpayPaymentID: rzpPaymentID,
-		RazorpaySignature: "valid_signature",
-	})
-	assert.ErrorIs(t, err, checkoutErr)
-	assert.Nil(t, res)
-
-	// Verify that payment and booking were NOT confirmed
-	assert.Equal(t, domain.PaymentStatusPending, txRepos.paymentRepo.payments[paymentID].Status, "payment must not be marked SUCCESS")
-	assert.Equal(t, domain.BookingStatusPending, txRepos.bookingRepo.bookings[bookingID].Status, "booking must not be marked CONFIRMED")
-	assert.Equal(t, domain.CheckoutStatusActive, txRepos.checkoutRepo.checkouts[checkoutID].Status, "checkout must not be marked COMPLETED")
-}
-
-func TestPaymentUsecase_Webhook_Captured_CheckoutUpdateFailure_RollsBack(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-
-	userID := uuid.New()
-	reservationID := uuid.New()
-	bookingID := uuid.New()
-	checkoutID := uuid.New()
-	orderID := "order_wh_chk_fail"
-	paymentID := "pay_wh_chk_fail_1"
-	rzpPaymentID := "pay_rzp_wh_chk_123"
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
-	}
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:            checkoutID,
-		ReservationID: reservationID,
-		Status:        domain.CheckoutStatusActive,
-	}
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		ReservationID: &reservationID,
-		Status:        domain.BookingStatusPending,
-		Total:         decimal.NewFromInt(500),
-	}
-	txRepos.paymentRepo.payments[paymentID] = &domain.Payment{
-		ID:              paymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &orderID,
-		Amount:          decimal.NewFromInt(500),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	checkoutErr := errors.New("checkout db update error")
-	txRepos.checkoutRepo.updateStatusErr = checkoutErr
-
-	body := makeWebhookPayload("payment.captured", orderID, rzpPaymentID, 50000, "INR")
-	err := uc.ProcessRazorpayWebhook(context.Background(), body, "sig", "evt_chk_fail_1")
-	assert.ErrorIs(t, err, checkoutErr)
-
-	// Verify that payment and booking were NOT confirmed
-	assert.Equal(t, domain.PaymentStatusPending, txRepos.paymentRepo.payments[paymentID].Status, "payment must not be marked SUCCESS")
-	assert.Equal(t, domain.BookingStatusPending, txRepos.bookingRepo.bookings[bookingID].Status, "booking must not be marked CONFIRMED")
-}
-
-func TestPaymentUsecase_CreatePayment_Success(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
 	ctx := context.Background()
 
-	userID := uuid.New()
-	eventID := uuid.New()
-	reservationID := uuid.New()
-	checkoutID := uuid.New()
-	seatID := uuid.New()
-	now := time.Now()
+	// Empty receipt
+	_, err = provider.FindOrderByReceipt(ctx, "", decimal.NewFromInt(100), "INR")
+	assert.Error(t, err)
 
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		EventID:   eventID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: now.Add(15 * time.Minute),
-	}
-	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
-		{
-			ID:            uuid.New(),
-			ReservationID: reservationID,
-			SeatID:        &seatID,
-			Quantity:      1,
-			Price:         decimal.NewFromInt(500),
-		},
-	}
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:             checkoutID,
-		ReservationID:  reservationID,
-		UserID:         userID,
-		Subtotal:       decimal.NewFromInt(500),
-		PlatformFee:    decimal.NewFromInt(25),
-		TaxAmount:      decimal.NewFromInt(90),
-		DiscountAmount: decimal.Zero,
-		TotalAmount:    decimal.NewFromInt(615),
-		Status:         domain.CheckoutStatusActive,
-		ExpiresAt:      now.Add(15 * time.Minute),
-	}
+	// Receipt exceeding 40 chars
+	_, err = provider.FindOrderByReceipt(ctx, "this_receipt_is_way_too_long_and_exceeds_forty_characters_limit", decimal.NewFromInt(100), "INR")
+	assert.Error(t, err)
 
-	payment, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
-		CheckoutID: checkoutID,
-		UserID:     userID,
-		Method:     domain.PaymentMethodCard,
-	})
+	// Negative amount
+	_, err = provider.FindOrderByReceipt(ctx, "valid_receipt_123", decimal.NewFromInt(-10), "INR")
+	assert.Error(t, err)
 
-	require.NoError(t, err)
-	require.NotNil(t, payment)
-
-	assert.Equal(t, domain.PaymentStatusPending, payment.Status)
-	assert.True(t, payment.Amount.Equal(decimal.NewFromInt(615)), "Payment amount must match checkout total amount")
-	require.NotNil(t, payment.ProviderOrderID)
-	assert.Equal(t, "order_test_123", *payment.ProviderOrderID)
-
-	// Verify booking was created and holds consistent amounts
-	require.NotEmpty(t, txRepos.bookingRepo.bookings)
-	var createdBooking *domain.Booking
-	for _, b := range txRepos.bookingRepo.bookings {
-		if b.ReservationID != nil && *b.ReservationID == reservationID {
-			createdBooking = b
-			break
-		}
-	}
-	require.NotNil(t, createdBooking)
-	assert.Equal(t, domain.BookingStatusPending, createdBooking.Status)
-	assert.True(t, createdBooking.Subtotal.Equal(decimal.NewFromInt(500)))
-	assert.True(t, createdBooking.PlatformFee.Equal(decimal.NewFromInt(25)))
-	assert.True(t, createdBooking.Tax.Equal(decimal.NewFromInt(90)))
-	assert.True(t, createdBooking.Total.Equal(decimal.NewFromInt(615)))
-}
-
-func TestPaymentUsecase_CreatePayment_ReusesExistingPendingPayment(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-	ctx := context.Background()
-
-	userID := uuid.New()
-	eventID := uuid.New()
-	reservationID := uuid.New()
-	checkoutID := uuid.New()
-	bookingID := uuid.New()
-	existingOrderID := "order_existing_123"
-	now := time.Now()
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		EventID:   eventID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: now.Add(15 * time.Minute),
-	}
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:            checkoutID,
-		ReservationID: reservationID,
-		UserID:        userID,
-		Subtotal:      decimal.NewFromInt(500),
-		TotalAmount:   decimal.NewFromInt(500),
-		Status:        domain.CheckoutStatusActive,
-		ExpiresAt:     now.Add(15 * time.Minute),
-	}
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		EventID:       eventID,
-		ReservationID: &reservationID,
-		Subtotal:      decimal.NewFromInt(500),
-		Total:         decimal.NewFromInt(500),
-		Status:        domain.BookingStatusPending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-
-	existingPaymentID := "pay_existing_1"
-	txRepos.paymentRepo.payments[existingPaymentID] = &domain.Payment{
-		ID:              existingPaymentID,
-		BookingID:       bookingID.String(),
-		Provider:        domain.PaymentProviderRazorpay,
-		ProviderOrderID: &existingOrderID,
-		Amount:          decimal.NewFromInt(500),
-		Status:          domain.PaymentStatusPending,
-	}
-
-	payment, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
-		CheckoutID: checkoutID,
-		UserID:     userID,
-		Method:     domain.PaymentMethodCard,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, payment)
-	assert.Equal(t, existingPaymentID, payment.ID)
-	assert.Equal(t, existingOrderID, *payment.ProviderOrderID)
-	// No extra payment created
-	assert.Len(t, txRepos.paymentRepo.payments, 1)
-}
-
-func TestPaymentUsecase_CreatePayment_AmountMismatch_Rejected(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-	ctx := context.Background()
-
-	userID := uuid.New()
-	eventID := uuid.New()
-	reservationID := uuid.New()
-	checkoutID := uuid.New()
-	bookingID := uuid.New()
-	now := time.Now()
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		EventID:   eventID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: now.Add(15 * time.Minute),
-	}
-	// Checkout total is 500
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:            checkoutID,
-		ReservationID: reservationID,
-		UserID:        userID,
-		Subtotal:      decimal.NewFromInt(500),
-		TotalAmount:   decimal.NewFromInt(500),
-		Status:        domain.CheckoutStatusActive,
-		ExpiresAt:     now.Add(15 * time.Minute),
-	}
-	// Existing booking total is 600 (tampered or mismatched)
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		EventID:       eventID,
-		ReservationID: &reservationID,
-		Subtotal:      decimal.NewFromInt(600),
-		Total:         decimal.NewFromInt(600),
-		Status:        domain.BookingStatusPending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-
-	_, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
-		CheckoutID: checkoutID,
-		UserID:     userID,
-		Method:     domain.PaymentMethodCard,
-	})
-
-	assert.ErrorIs(t, err, domain.ErrPaymentAmountMismatch)
-}
-
-func TestPaymentUsecase_CreatePayment_AlreadyCompleted_Rejected(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-	ctx := context.Background()
-
-	userID := uuid.New()
-	eventID := uuid.New()
-	reservationID := uuid.New()
-	checkoutID := uuid.New()
-	bookingID := uuid.New()
-	now := time.Now()
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		EventID:   eventID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: now.Add(15 * time.Minute),
-	}
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:            checkoutID,
-		ReservationID: reservationID,
-		UserID:        userID,
-		Subtotal:      decimal.NewFromInt(500),
-		TotalAmount:   decimal.NewFromInt(500),
-		Status:        domain.CheckoutStatusActive,
-		ExpiresAt:     now.Add(15 * time.Minute),
-	}
-	// Booking already confirmed
-	txRepos.bookingRepo.bookings[bookingID] = &domain.Booking{
-		ID:            bookingID,
-		UserID:        userID,
-		EventID:       eventID,
-		ReservationID: &reservationID,
-		Total:         decimal.NewFromInt(500),
-		Status:        domain.BookingStatusConfirmed,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-
-	_, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
-		CheckoutID: checkoutID,
-		UserID:     userID,
-		Method:     domain.PaymentMethodCard,
-	})
-
-	assert.ErrorIs(t, err, domain.ErrPaymentAlreadyComplete)
-}
-
-func TestPaymentUsecase_CreatePayment_SupportedMethods_UPI(t *testing.T) {
-	uc, txRepos, _ := setupPaymentUsecaseTest()
-	ctx := context.Background()
-
-	userID := uuid.New()
-	eventID := uuid.New()
-	reservationID := uuid.New()
-	checkoutID := uuid.New()
-	seatID := uuid.New()
-	now := time.Now()
-
-	txRepos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
-		ID:        reservationID,
-		UserID:    userID,
-		EventID:   eventID,
-		Status:    domain.ReservationStatusActive,
-		ExpiresAt: now.Add(15 * time.Minute),
-	}
-	txRepos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
-		{
-			ID:            uuid.New(),
-			ReservationID: reservationID,
-			SeatID:        &seatID,
-			Quantity:      1,
-			Price:         decimal.NewFromInt(500),
-		},
-	}
-	txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
-		ID:             checkoutID,
-		ReservationID:  reservationID,
-		UserID:         userID,
-		Subtotal:       decimal.NewFromInt(500),
-		PlatformFee:    decimal.NewFromInt(25),
-		TaxAmount:      decimal.NewFromInt(90),
-		DiscountAmount: decimal.Zero,
-		TotalAmount:    decimal.NewFromInt(615),
-		Status:         domain.CheckoutStatusActive,
-		ExpiresAt:      now.Add(15 * time.Minute),
-	}
-
-	payment, err := uc.CreatePayment(ctx, paymentuc.CreatePaymentRequest{
-		CheckoutID: checkoutID,
-		UserID:     userID,
-		Method:     domain.PaymentMethodUPI,
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, payment)
-	assert.Equal(t, domain.PaymentMethodUPI, payment.Method)
-	assert.Equal(t, domain.PaymentStatusPending, payment.Status)
-	assert.True(t, payment.Amount.Equal(decimal.NewFromInt(615)))
-	require.NotNil(t, payment.ProviderOrderID)
-	assert.Equal(t, "order_test_123", *payment.ProviderOrderID)
+	// Unsupported currency
+	_, err = provider.FindOrderByReceipt(ctx, "valid_receipt_123", decimal.NewFromInt(100), "USD")
+	assert.Error(t, err)
 }

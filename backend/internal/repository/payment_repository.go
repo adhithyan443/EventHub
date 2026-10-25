@@ -9,6 +9,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type paymentRepository struct {
@@ -159,20 +160,27 @@ func (r *paymentRepository) MarkSuccessful(
 	}
 
 	if result.RowsAffected == 0 {
-		var count int64
+		var current models.PaymentModel
 		err := r.db.WithContext(ctx).
-			Model(&models.PaymentModel{}).
-			Where("id = ?", paymentID).
-			Count(&count).Error
+			First(&current, "id = ?", paymentID).Error
 		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.ErrPaymentNotFound
+			}
 			return err
 		}
 
-		if count == 0 {
-			return domain.ErrPaymentNotFound
+		if current.Status == string(domain.PaymentStatusRefundRequired) {
+			if current.TransactionID != nil && *current.TransactionID == transactionID {
+				return nil
+			}
 		}
 
-		return domain.ErrPaymentAlreadyComplete
+		if current.Status == string(domain.PaymentStatusSuccess) {
+			return domain.ErrPaymentAlreadyComplete
+		}
+
+		return domain.ErrInvalidPayment
 	}
 
 	return nil
@@ -253,20 +261,27 @@ func (r *paymentRepository) MarkRefundRequired(
 	}
 
 	if result.RowsAffected == 0 {
-		var count int64
+		var current models.PaymentModel
 		err := r.db.WithContext(ctx).
-			Model(&models.PaymentModel{}).
-			Where("id = ?", paymentID).
-			Count(&count).Error
+			First(&current, "id = ?", paymentID).Error
 		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.ErrPaymentNotFound
+			}
 			return err
 		}
 
-		if count == 0 {
-			return domain.ErrPaymentNotFound
+		if current.Status == string(domain.PaymentStatusRefundRequired) {
+			if current.TransactionID != nil && *current.TransactionID == transactionID {
+				return nil
+			}
 		}
 
-		return domain.ErrPaymentAlreadyComplete
+		if current.Status == string(domain.PaymentStatusSuccess) {
+			return domain.ErrPaymentAlreadyComplete
+		}
+
+		return domain.ErrInvalidPayment
 	}
 
 	return nil
@@ -294,6 +309,91 @@ func (r *paymentRepository) FindByProviderOrderID(
 	}
 
 	return toPaymentDomain(&model), nil
+}
+
+func (r *paymentRepository) FindByProviderOrderIDForUpdate(
+	ctx context.Context,
+	providerOrderID string,
+) (*domain.Payment, error) {
+	var model models.PaymentModel
+
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("provider_order_id = ?", providerOrderID).
+		First(&model).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrPaymentNotFound
+		}
+
+		r.logger.ErrorContext(ctx, "failed to lock payment by provider order ID",
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	return toPaymentDomain(&model), nil
+}
+
+func (r *paymentRepository) UpdateProviderOrderID(
+	ctx context.Context,
+	paymentID string,
+	providerOrderID string,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.PaymentModel{}).
+		Where(
+			"id = ? AND status = ?",
+			paymentID,
+			string(domain.PaymentStatusPending),
+		).
+		Update("provider_order_id", providerOrderID)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to update provider order ID",
+			slog.String("payment_id", paymentID),
+			slog.Any("error", result.Error),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		var current models.PaymentModel
+		err := r.db.WithContext(ctx).
+			First(&current, "id = ?", paymentID).Error
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return domain.ErrPaymentNotFound
+			}
+			return err
+		}
+
+		if current.ProviderOrderID != nil && *current.ProviderOrderID == providerOrderID {
+			return nil
+		}
+
+		if current.Status == string(domain.PaymentStatusSuccess) {
+			return domain.ErrPaymentAlreadyComplete
+		}
+
+		if current.Status == string(domain.PaymentStatusRefundRequired) {
+			return domain.ErrPaymentRefundPending
+		}
+
+		if current.ProviderOrderID != nil && *current.ProviderOrderID != providerOrderID {
+			r.logger.WarnContext(ctx, "conflict: payment already assigned a different provider order ID",
+				slog.String("payment_id", paymentID),
+				slog.String("persisted_order_id", *current.ProviderOrderID),
+				slog.String("attempted_order_id", providerOrderID),
+			)
+			return domain.ErrInvalidPayment
+		}
+
+		return domain.ErrInvalidPayment
+	}
+
+	return nil
 }
 
 func toPaymentModel(payment *domain.Payment) *models.PaymentModel {

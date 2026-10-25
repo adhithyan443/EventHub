@@ -18,6 +18,8 @@ var (
 	ErrCheckoutNotPayable         = errors.New("checkout is not payable")
 	ErrPaymentInProgress          = errors.New("payment attempt is already in progress")
 	ErrReservationExpired         = errors.New("reservation has expired")
+	ErrPaymentRefundPending       = errors.New("previous payment requires refund resolution before retrying")
+	ErrPaymentProviderUnavailable = errors.New("payment provider is temporarily unavailable")
 )
 
 type PaymentStatus string
@@ -81,5 +83,16 @@ type PaymentRepository interface {
 		paymentID string,
 		transactionID string,
 		paidAt time.Time,
+	) error
+
+	FindByProviderOrderIDForUpdate(
+		ctx context.Context,
+		providerOrderID string,
+	) (*Payment, error)
+
+	UpdateProviderOrderID(
+		ctx context.Context,
+		paymentID string,
+		providerOrderID string,
 	) error
 }

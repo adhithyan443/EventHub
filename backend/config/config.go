@@ -29,6 +29,8 @@ type Config struct {
 	AWSRegion          string
 	AWSS3Bucket        string
 
+	QRSecret string
+
 	RazorpayKeyID         string
 	RazorpayKeySecret     string
 	RazorpayWebhookSecret string
@@ -121,6 +123,11 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	qrSecret, err := requiredEnv("QR_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
 		ServerPort:  getEnv("SERVER_PORT", "8080"),
 		AppEnv:      getEnv("APP_ENV", "development"),
@@ -144,6 +151,8 @@ func Load() (Config, error) {
 		AWSSecretAccessKey: awsSecretAccessKey,
 		AWSRegion:          awsRegion,
 		AWSS3Bucket:        awsS3Bucket,
+
+		QRSecret: qrSecret,
 
 		RazorpayKeyID:         razorpayKeyID,
 		RazorpayKeySecret:     razorpayKeySecret,

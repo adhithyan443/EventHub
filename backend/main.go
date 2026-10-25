@@ -28,6 +28,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/joho/godotenv"
 )
@@ -76,6 +77,15 @@ func main() {
 	}
 
 	logger.Info("category seeding completed")
+
+	qrService, err := ticket.NewQRService(cfg.QRSecret)
+	if err != nil {
+		logger.Error(
+			"ticket QR service initialization failed",
+			"error", err,
+		)
+		return
+	}
 
 	// Infrastructure services.
 	s3Service, err := storage.NewS3Service(cfg, logger)
@@ -175,6 +185,25 @@ func main() {
 	)
 	// paymentHandler := handler.NewPaymentHandler(paymentUsecase, logger)
 
+	// ticket
+	ticketRepository := repository.NewTicketRepository(db, logger)
+	eventRepository := repository.NewEventRepository(db, logger)
+	eventScheduleRepository := repository.NewEventScheduleRepository(db, logger)
+	venueRepository := repository.NewVenueRepository(db, logger)
+	ticketTypeRepository := repository.NewTicketTypeRepository(db, logger)
+
+	// Ticket dependencies.
+	ticketUsecase := ticket.NewTicketUsecase(
+		ticketRepository,
+		eventRepository,
+		eventScheduleRepository,
+		userRepo,
+		venueRepository,
+		ticketTypeRepository,
+		logger,
+	)
+
+	ticketHandler := handler.NewTicketHandler(ticketUsecase, qrService)
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
@@ -284,6 +313,7 @@ func main() {
 		reservationHandler,
 		checkoutHandler,
 		paymentHandler,
+		ticketHandler,
 		jwtService,
 	)
 

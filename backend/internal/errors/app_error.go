@@ -49,3 +49,11 @@ func NewNotFoundError(message string) *AppError {
 		HTTPStatus: 404,
 	}
 }
+
+func NewBadGatewayError(message string) *AppError {
+	return &AppError{
+		Code:       "BAD_GATEWAY",
+		Message:    message,
+		HTTPStatus: 502,
+	}
+}

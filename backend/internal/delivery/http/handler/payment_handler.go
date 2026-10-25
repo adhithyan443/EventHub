@@ -105,6 +105,12 @@ func (h *PaymentHandler) CreatePayment(c *gin.Context) {
 			errors.Is(err, domain.ErrInvalidReservationRequest):
 			c.Error(appErrors.NewValidationError("invalid payment request"))
 
+		case errors.Is(err, domain.ErrPaymentRefundPending):
+			c.Error(appErrors.NewConflictError(err.Error()))
+
+		case errors.Is(err, domain.ErrPaymentProviderUnavailable):
+			c.Error(appErrors.NewBadGatewayError("payment provider is temporarily unavailable"))
+
 		case errors.Is(err, domain.ErrCheckoutNotPayable),
 			errors.Is(err, domain.ErrPaymentAlreadyComplete),
 			errors.Is(err, domain.ErrPaymentInProgress),
