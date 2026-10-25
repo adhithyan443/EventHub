@@ -78,6 +78,15 @@ func main() {
 
 	logger.Info("category seeding completed")
 
+	qrService, err := ticket.NewQRService(cfg.QRSecret)
+	if err != nil {
+		logger.Error(
+			"ticket QR service initialization failed",
+			"error", err,
+		)
+		return
+	}
+
 	// Infrastructure services.
 	s3Service, err := storage.NewS3Service(cfg, logger)
 	if err != nil {
@@ -185,7 +194,7 @@ func main() {
 		logger,
 	)
 
-	ticketHandler := handler.NewTicketHandler(ticketUsecase)
+	ticketHandler := handler.NewTicketHandler(ticketUsecase,qrService)
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 

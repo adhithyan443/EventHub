@@ -378,4 +378,6 @@ func registerTicketRoutes(
 
 	tickets.GET("", ticketHandler.GetMyTickets)
 	tickets.GET("/:id", ticketHandler.GetMyTicket)
+
+	tickets.GET("/:id/download", ticketHandler.DownloadTicketPDF)
 }
