@@ -59,6 +59,8 @@ type BookingRepository interface {
 
 	FindByID(ctx context.Context, id uuid.UUID) (*Booking, error)
 
+	FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*Booking, error)
+
 	FindByBookingNumber(
 		ctx context.Context,
 		bookingNumber string,

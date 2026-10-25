@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -89,6 +90,18 @@ func (p *RazorpayProvider) Initiate(
 
 	response, err := p.client.Order.Create(data, nil)
 	if err != nil {
+		// If Razorpay rejected duplicate receipt, attempt immediate recovery by receipt.
+		if isDuplicateReceiptError(err) {
+			existingOrder, findErr := p.FindOrderByReceipt(ctx, idempotencyKey, amount, currency)
+			if findErr == nil && existingOrder != nil && existingOrder.ID != "" {
+				p.logger.InfoContext(ctx, "recovered existing razorpay order after duplicate receipt conflict",
+					slog.String("provider_order_id", existingOrder.ID),
+					slog.String("receipt", idempotencyKey),
+				)
+				return existingOrder.ID, nil
+			}
+		}
+
 		p.logger.ErrorContext(ctx, "razorpay order creation failed",
 			slog.Any("error", err),
 		)
@@ -213,6 +226,289 @@ func razorpayAmount(value interface{}) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func (p *RazorpayProvider) FindOrderByReceipt(
+	ctx context.Context,
+	receipt string,
+	expectedAmount decimal.Decimal,
+	currency string,
+) (*ProviderOrder, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	trimmedReceipt := strings.TrimSpace(receipt)
+	if trimmedReceipt == "" {
+		return nil, errors.New("receipt is required")
+	}
+	if len(trimmedReceipt) > 40 {
+		return nil, errors.New("receipt exceeds maximum supported length")
+	}
+	if !expectedAmount.IsPositive() {
+		return nil, errors.New("expected amount must be positive")
+	}
+	if currency != "INR" {
+		return nil, errors.New("unsupported currency")
+	}
+
+	params := map[string]interface{}{
+		"receipt": trimmedReceipt,
+	}
+
+	response, err := p.client.Order.All(params, nil)
+	if err != nil {
+		p.logger.ErrorContext(ctx, "failed to query razorpay orders by receipt",
+			slog.String("receipt", trimmedReceipt),
+			slog.Any("error", err),
+		)
+		return nil, errors.New("failed to query orders from gateway")
+	}
+
+	items, ok := response["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		return nil, nil // Zero orders found (absent)
+	}
+
+	if len(items) > 1 {
+		p.logger.ErrorContext(ctx, "ambiguous gateway state: multiple orders found for receipt",
+			slog.String("receipt", trimmedReceipt),
+			slog.Int("order_count", len(items)),
+		)
+		return nil, errors.New("ambiguous gateway response: multiple orders returned for receipt")
+	}
+
+	orderMap, ok := items[0].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid order item response from gateway")
+	}
+
+	orderID, _ := orderMap["id"].(string)
+	if strings.TrimSpace(orderID) == "" {
+		return nil, errors.New("gateway returned order with missing ID")
+	}
+
+	orderReceipt, _ := orderMap["receipt"].(string)
+	if orderReceipt != trimmedReceipt {
+		p.logger.ErrorContext(ctx, "receipt mismatch on gateway order",
+			slog.String("expected_receipt", trimmedReceipt),
+			slog.String("actual_receipt", orderReceipt),
+		)
+		return nil, errors.New("gateway returned order with mismatched receipt")
+	}
+
+	orderCurrency, _ := orderMap["currency"].(string)
+	if orderCurrency != currency {
+		p.logger.ErrorContext(ctx, "currency mismatch on gateway order",
+			slog.String("expected_currency", currency),
+			slog.String("actual_currency", orderCurrency),
+		)
+		return nil, errors.New("gateway returned order with mismatched currency")
+	}
+
+	amountPaise, ok := razorpayAmount(orderMap["amount"])
+	if !ok {
+		return nil, errors.New("invalid order amount from gateway")
+	}
+
+	actualAmount := decimal.NewFromInt(amountPaise).Div(decimal.NewFromInt(100))
+	if actualAmount.Cmp(expectedAmount) != 0 {
+		p.logger.ErrorContext(ctx, "amount mismatch on gateway order",
+			slog.String("expected_amount", expectedAmount.String()),
+			slog.String("actual_amount", actualAmount.String()),
+		)
+		return nil, errors.New("gateway returned order with mismatched amount")
+	}
+
+	statusStr, _ := orderMap["status"].(string)
+	orderStatus := OrderStatusUsable
+	if statusStr == "paid" {
+		orderStatus = OrderStatusPaid
+	} else if statusStr == "cancelled" || statusStr == "expired" {
+		orderStatus = OrderStatusUnusable
+	}
+
+	return &ProviderOrder{
+		ID:       orderID,
+		Status:   orderStatus,
+		Amount:   actualAmount,
+		Currency: orderCurrency,
+	}, nil
+}
+
+func (p *RazorpayProvider) CheckOrderStatus(
+	ctx context.Context,
+	providerOrderID string,
+	expectedAmount decimal.Decimal,
+	currency string,
+) (*ProviderOrder, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if strings.TrimSpace(providerOrderID) == "" {
+		return nil, errors.New("provider order ID is required")
+	}
+
+	response, err := p.client.Order.Fetch(providerOrderID, nil, nil)
+	if err != nil {
+		if isOrderNotFoundError(err) {
+			p.logger.WarnContext(ctx, "razorpay order not found on gateway",
+				slog.String("provider_order_id", providerOrderID),
+			)
+			return &ProviderOrder{
+				ID:     providerOrderID,
+				Status: OrderStatusUnusable,
+			}, nil
+		}
+
+		p.logger.ErrorContext(ctx, "failed to fetch razorpay order",
+			slog.String("provider_order_id", providerOrderID),
+			slog.Any("error", err),
+		)
+		return nil, errors.New("failed to fetch order from gateway")
+	}
+
+	orderStatus, _ := response["status"].(string)
+	orderCurrency, _ := response["currency"].(string)
+	amountPaise, ok := razorpayAmount(response["amount"])
+	if !ok {
+		return nil, errors.New("invalid order amount from gateway")
+	}
+
+	actualAmount := decimal.NewFromInt(amountPaise).Div(decimal.NewFromInt(100))
+
+	// Currency or amount mismatch means this order cannot be reused
+	if orderCurrency != currency || actualAmount.Cmp(expectedAmount) != 0 {
+		return &ProviderOrder{
+			ID:       providerOrderID,
+			Status:   OrderStatusUnusable,
+			Amount:   actualAmount,
+			Currency: orderCurrency,
+		}, nil
+	}
+
+	if orderStatus == "paid" {
+		return &ProviderOrder{
+			ID:       providerOrderID,
+			Status:   OrderStatusPaid,
+			Amount:   actualAmount,
+			Currency: orderCurrency,
+		}, nil
+	}
+
+	if orderStatus == "cancelled" || orderStatus == "expired" {
+		return &ProviderOrder{
+			ID:       providerOrderID,
+			Status:   OrderStatusUnusable,
+			Amount:   actualAmount,
+			Currency: orderCurrency,
+		}, nil
+	}
+
+	// For attempted orders: inspect payment attempts and PROPAGATE lookup failures
+	if orderStatus == "attempted" {
+		paymentsResp, paymentsErr := p.client.Order.Payments(providerOrderID, nil, nil)
+		if paymentsErr != nil {
+			p.logger.ErrorContext(ctx, "failed to fetch payments for attempted order",
+				slog.String("provider_order_id", providerOrderID),
+				slog.Any("error", paymentsErr),
+			)
+			return nil, fmt.Errorf("failed to verify payments for attempted order: %w", paymentsErr)
+		}
+
+		if paymentsResp == nil {
+			return nil, errors.New("nil payments response received from gateway")
+		}
+
+		items, ok := paymentsResp["items"].([]interface{})
+		if !ok {
+			return nil, errors.New("invalid payments collection response from gateway")
+		}
+
+		hasCaptured := false
+		hasInFlight := false
+		allFailed := true
+
+		for _, item := range items {
+			itemMap, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, errors.New("invalid payment item response from gateway")
+			}
+			paymentStatus, _ := itemMap["status"].(string)
+			switch paymentStatus {
+			case "captured":
+				hasCaptured = true
+				allFailed = false
+			case "authorized", "created":
+				hasInFlight = true
+				allFailed = false
+			case "failed":
+				// definitively failed
+			default:
+				p.logger.WarnContext(ctx, "unrecognized payment attempt status on order",
+					slog.String("provider_order_id", providerOrderID),
+					slog.String("payment_status", paymentStatus),
+				)
+				allFailed = false
+				hasInFlight = true
+			}
+		}
+
+		if hasCaptured {
+			return &ProviderOrder{
+				ID:       providerOrderID,
+				Status:   OrderStatusPaid,
+				Amount:   actualAmount,
+				Currency: orderCurrency,
+			}, nil
+		}
+
+		if hasInFlight {
+			return &ProviderOrder{
+				ID:       providerOrderID,
+				Status:   OrderStatusInFlight,
+				Amount:   actualAmount,
+				Currency: orderCurrency,
+			}, nil
+		}
+
+		if !allFailed && len(items) > 0 {
+			return nil, errors.New("ambiguous payment attempts state for order")
+		}
+	} else if orderStatus != "created" {
+		// Never classify an unknown order status as usable
+		p.logger.WarnContext(ctx, "unrecognized gateway order status",
+			slog.String("provider_order_id", providerOrderID),
+			slog.String("status", orderStatus),
+		)
+		return nil, fmt.Errorf("unrecognized gateway order status: %s", orderStatus)
+	}
+
+	return &ProviderOrder{
+		ID:       providerOrderID,
+		Status:   OrderStatusUsable,
+		Amount:   actualAmount,
+		Currency: orderCurrency,
+	}, nil
+}
+func isOrderNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "does not exist") ||
+		strings.Contains(errStr, "not found") ||
+		strings.Contains(errStr, "404")
+}
+
+func isDuplicateReceiptError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "receipt") &&
+		(strings.Contains(errStr, "already") || strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "exist"))
 }
 
 var _ PaymentProvider = (*RazorpayProvider)(nil)

@@ -107,6 +107,17 @@ func TestPaymentModel_NoDeletedAtInGeneratedSQL(t *testing.T) {
 	require.NotEmpty(t, stmtUpdate.SQL.String())
 	assert.False(t, strings.Contains(strings.ToLower(stmtUpdate.SQL.String()), "deleted_at"),
 		"Update query must not contain deleted_at clause, got: %s", stmtUpdate.SQL.String())
+
+	// 5. UpdateProviderOrderID conditional query
+	stmtUpdateOrderID := db.Session(&gorm.Session{DryRun: true}).
+		Model(&models.PaymentModel{}).
+		Where("id = ? AND status = ?", uuid.New().String(), string(domain.PaymentStatusPending)).
+		Update("provider_order_id", "order_12345").
+		Statement
+	require.NotEmpty(t, stmtUpdateOrderID.SQL.String())
+	sqlStr := strings.ToLower(stmtUpdateOrderID.SQL.String())
+	assert.Contains(t, sqlStr, "provider_order_id", "Must update provider_order_id column")
+	assert.Contains(t, sqlStr, "status", "Must check status = PENDING")
 }
 
 func TestPaymentModel_MappingRoundtrip(t *testing.T) {
@@ -157,4 +168,49 @@ func TestPaymentModel_MappingRoundtrip(t *testing.T) {
 	assert.Equal(t, domainPayment.PaidAt, restored.PaidAt)
 	assert.Equal(t, domainPayment.CreatedAt, restored.CreatedAt)
 	assert.Equal(t, domainPayment.UpdatedAt, restored.UpdatedAt)
+}
+
+func TestPaymentRepository_MarkRefundRequired_DryRun(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		WithoutReturning: true,
+	}), &gorm.Config{
+		DryRun:                 true,
+		SkipDefaultTransaction: true,
+		DisableAutomaticPing:   true,
+	})
+	require.NoError(t, err)
+
+	now := time.Now()
+	stmt := db.Session(&gorm.Session{DryRun: true}).
+		Model(&models.PaymentModel{}).
+		Where(
+			"id = ? AND status = ?",
+			uuid.New().String(),
+			string(domain.PaymentStatusPending),
+		).
+		Updates(map[string]interface{}{
+			"transaction_id": "pay_tx_999",
+			"status":         string(domain.PaymentStatusRefundRequired),
+			"paid_at":        now,
+		}).
+		Statement
+
+	require.NotEmpty(t, stmt.SQL.String())
+	sqlStr := strings.ToLower(stmt.SQL.String())
+	assert.Contains(t, sqlStr, "status", "Must include status in query")
+	assert.Contains(t, sqlStr, "transaction_id", "Must set transaction_id")
+	assert.Contains(t, sqlStr, "paid_at", "Must set paid_at")
+
+	// Verify parameterized variables include the REFUND_REQUIRED status and transaction ID
+	var foundStatus, foundTxID bool
+	for _, v := range stmt.Vars {
+		if v == string(domain.PaymentStatusRefundRequired) {
+			foundStatus = true
+		}
+		if v == "pay_tx_999" {
+			foundTxID = true
+		}
+	}
+	assert.True(t, foundStatus, "Vars must include REFUND_REQUIRED status")
+	assert.True(t, foundTxID, "Vars must include transaction_id")
 }

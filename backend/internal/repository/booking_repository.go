@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type bookingRepository struct {
@@ -101,6 +102,32 @@ func (r *bookingRepository) FindByID(
 		}
 
 		r.logger.ErrorContext(ctx, "failed to find booking by ID",
+			slog.String("booking_id", id.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	return bookingFromModel(&bookingModel), nil
+}
+
+func (r *bookingRepository) FindByIDForUpdate(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.Booking, error) {
+	var bookingModel models.BookingModel
+
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", id).
+		First(&bookingModel).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrBookingNotFound
+		}
+
+		r.logger.ErrorContext(ctx, "failed to lock booking by ID",
 			slog.String("booking_id", id.String()),
 			slog.String("error", err.Error()),
 		)

@@ -12,6 +12,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	bookingusecase "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type PaymentUsecase struct {
@@ -71,20 +72,37 @@ func (u *PaymentUsecase) CreatePayment(
 		return nil, err
 	}
 
-	if booking.Status != domain.BookingStatusPending {
+	if booking.Status == domain.BookingStatusConfirmed {
 		return nil, domain.ErrPaymentAlreadyComplete
 	}
 
+	if booking.Status != domain.BookingStatusPending {
+		return nil, domain.ErrReservationExpired
+	}
+
 	var (
-		checkout *domain.Checkout
-		payment  *domain.Payment
+		checkout         *domain.Checkout
+		candidatePending *domain.Payment
 	)
 
-	// Validate checkout and create or reuse the pending payment.
+	// Phase 1 DB Transaction: Lock booking row, inspect attempts, reserve PENDING slot.
+	// Never hold database transactions or locks across external gateway calls.
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
-			var validationErr error
+			currentBooking, findBookingErr := tx.BookingRepository().
+				FindByIDForUpdate(ctx, booking.ID)
+			if findBookingErr != nil {
+				return findBookingErr
+			}
 
+			if currentBooking.Status == domain.BookingStatusConfirmed {
+				return domain.ErrPaymentAlreadyComplete
+			}
+			if currentBooking.Status != domain.BookingStatusPending {
+				return domain.ErrReservationExpired
+			}
+
+			var validationErr error
 			checkout, _, validationErr = u.validateCheckout(
 				ctx,
 				tx,
@@ -105,33 +123,23 @@ func (u *PaymentUsecase) CreatePayment(
 				return findErr
 			}
 
-			var activePending *domain.Payment
-
 			for i := range existingPayments {
 				existing := &existingPayments[i]
-
 				switch existing.Status {
 				case domain.PaymentStatusSuccess:
 					return domain.ErrPaymentAlreadyComplete
-
+				case domain.PaymentStatusRefundRequired:
+					return domain.ErrPaymentRefundPending
 				case domain.PaymentStatusPending:
-					if existing.ProviderOrderID != nil &&
-						*existing.ProviderOrderID != "" {
-						activePending = existing
-					} else {
-						// The gateway may have created an order even if
-						// the original request timed out.
-						return domain.ErrPaymentInProgress
-					}
+					candidatePending = existing
 				}
 			}
 
-			if activePending != nil {
-				payment = activePending
+			if candidatePending != nil {
 				return nil
 			}
 
-			payment = &domain.Payment{
+			newPayment := &domain.Payment{
 				BookingID: booking.ID.String(),
 				Provider:  domain.PaymentProviderRazorpay,
 				Method:    req.Method,
@@ -139,13 +147,18 @@ func (u *PaymentUsecase) CreatePayment(
 				Status:    domain.PaymentStatusPending,
 			}
 
-			return tx.PaymentRepository().Create(ctx, payment)
+			if err := tx.PaymentRepository().Create(ctx, newPayment); err != nil {
+				return err
+			}
+
+			candidatePending = newPayment
+			return nil
 		},
 	)
 	if err != nil {
 		u.logger.ErrorContext(
 			ctx,
-			"failed to prepare payment",
+			"failed to prepare payment attempt",
 			slog.String("checkout_id", req.CheckoutID.String()),
 			slog.String("booking_id", booking.ID.String()),
 			slog.Any("error", err),
@@ -153,62 +166,266 @@ func (u *PaymentUsecase) CreatePayment(
 		return nil, err
 	}
 
-	// Reuse an existing gateway order when possible.
-	if payment.ProviderOrderID != nil &&
-		*payment.ProviderOrderID != "" {
+	// Phase 2: Gateway Interrogation & Order Creation (Outside DB Transaction)
+	// Case A: Candidate payment has no provider_order_id. Reconcile by receipt!
+	if candidatePending.ProviderOrderID == nil || *candidatePending.ProviderOrderID == "" {
+		existingOrder, reconcileErr := u.provider.FindOrderByReceipt(
+			ctx,
+			candidatePending.ID,
+			candidatePending.Amount,
+			"INR",
+		)
+		if reconcileErr != nil {
+			u.logger.WarnContext(
+				ctx,
+				"order reconciliation by receipt failed; failing closed to avoid duplicate orders",
+				slog.String("payment_id", candidatePending.ID),
+				slog.Any("error", reconcileErr),
+			)
+			return nil, domain.ErrPaymentInProgress
+		}
+
+		if existingOrder != nil && existingOrder.ID != "" {
+			// Recovered order from gateway!
+			candidatePending.ProviderOrderID = &existingOrder.ID
+			if err := u.persistProviderOrderID(ctx, candidatePending.ID, existingOrder.ID); err != nil {
+				u.logger.ErrorContext(
+					ctx,
+					"failed to persist recovered provider order ID",
+					slog.String("payment_id", candidatePending.ID),
+					slog.String("provider_order_id", existingOrder.ID),
+					slog.Any("error", err),
+				)
+				return nil, err
+			}
+		} else {
+			// Never create a new payment attempt solely because receipt lookup returned zero results.
+			// Retry Order.Create with the SAME payment.ID as receipt to guarantee idempotency.
+			orderID, initErr := u.provider.Initiate(
+				ctx,
+				candidatePending.Amount,
+				"INR",
+				candidatePending.ID,
+			)
+			if initErr != nil {
+				u.logger.ErrorContext(
+					ctx,
+					"payment gateway order creation failed; keeping pending record for future reconciliation",
+					slog.String("payment_id", candidatePending.ID),
+					slog.String("booking_id", candidatePending.BookingID),
+					slog.Any("error", initErr),
+				)
+				return nil, domain.ErrPaymentInProgress
+			}
+
+			candidatePending.ProviderOrderID = &orderID
+			if err := u.persistProviderOrderID(ctx, candidatePending.ID, orderID); err != nil {
+				u.logger.ErrorContext(
+					ctx,
+					"failed to persist provider order ID",
+					slog.String("payment_id", candidatePending.ID),
+					slog.String("provider_order_id", orderID),
+					slog.Any("error", err),
+				)
+				return nil, err
+			}
+
+			u.logger.InfoContext(
+				ctx,
+				"payment order created",
+				slog.String("payment_id", candidatePending.ID),
+				slog.String("booking_id", candidatePending.BookingID),
+				slog.String("provider_order_id", orderID),
+			)
+			return candidatePending, nil
+		}
+	}
+
+	// Case B: Candidate payment has a provider_order_id. Inspect order status with gateway.
+	orderStatus, checkErr := u.provider.CheckOrderStatus(
+		ctx,
+		*candidatePending.ProviderOrderID,
+		candidatePending.Amount,
+		"INR",
+	)
+	if checkErr != nil {
+		u.logger.WarnContext(
+			ctx,
+			"gateway order status check failed; failing closed without altering state",
+			slog.String("payment_id", candidatePending.ID),
+			slog.String("provider_order_id", *candidatePending.ProviderOrderID),
+			slog.Any("error", checkErr),
+		)
+		return nil, domain.ErrPaymentProviderUnavailable
+	}
+
+	switch orderStatus.Status {
+	case OrderStatusUsable:
+		// Option C Rule 1: Reuse existing pending payment and usable order.
 		u.logger.InfoContext(
 			ctx,
 			"reusing existing pending payment order",
-			slog.String("payment_id", payment.ID),
-			slog.String("provider_order_id", *payment.ProviderOrderID),
+			slog.String("payment_id", candidatePending.ID),
+			slog.String("provider_order_id", *candidatePending.ProviderOrderID),
 		)
-		return payment, nil
-	}
+		return candidatePending, nil
 
-	// Never hold database locks during external gateway requests.
-	orderID, err := u.provider.Initiate(
-		ctx,
-		payment.Amount,
-		"INR",
-		payment.ID,
+	case OrderStatusInFlight:
+		// Payment attempt is currently in processing (authorized / awaiting capture).
+		u.logger.InfoContext(
+			ctx,
+			"payment attempt actively in-flight at gateway",
+			slog.String("payment_id", candidatePending.ID),
+			slog.String("provider_order_id", *candidatePending.ProviderOrderID),
+		)
+		return nil, domain.ErrPaymentInProgress
+
+	case OrderStatusPaid:
+		// Order was already paid at gateway.
+		u.logger.WarnContext(
+			ctx,
+			"payment order already paid at gateway; blocking duplicate attempt",
+			slog.String("payment_id", candidatePending.ID),
+			slog.String("provider_order_id", *candidatePending.ProviderOrderID),
+		)
+		return nil, domain.ErrPaymentAlreadyComplete
+
+	case OrderStatusUnusable:
+		// Option C Rule 2: Order is definitively unusable (404, expired, cancelled, amount mismatch).
+		// Safely retire previous attempt and create a new attempt.
+		u.logger.InfoContext(
+			ctx,
+			"retiring unusable payment order and creating fresh attempt",
+			slog.String("old_payment_id", candidatePending.ID),
+			slog.String("provider_order_id", *candidatePending.ProviderOrderID),
+		)
+
+		var newPayment *domain.Payment
+		newPayment, err = u.retireAndCreatePayment(
+			ctx,
+			candidatePending.ID,
+			booking.ID,
+			req.Method,
+			checkout.TotalAmount,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		newOrderID, initErr := u.provider.Initiate(
+			ctx,
+			newPayment.Amount,
+			"INR",
+			newPayment.ID,
+		)
+		if initErr != nil {
+			u.logger.ErrorContext(
+				ctx,
+				"failed to initiate gateway order for replacement payment attempt",
+				slog.String("payment_id", newPayment.ID),
+				slog.Any("error", initErr),
+			)
+			return nil, domain.ErrPaymentInProgress
+		}
+
+		newPayment.ProviderOrderID = &newOrderID
+		if err := u.persistProviderOrderID(ctx, newPayment.ID, newOrderID); err != nil {
+			u.logger.ErrorContext(
+				ctx,
+				"failed to persist replacement provider order ID",
+				slog.String("payment_id", newPayment.ID),
+				slog.String("provider_order_id", newOrderID),
+				slog.Any("error", err),
+			)
+			return nil, err
+		}
+
+		u.logger.InfoContext(
+			ctx,
+			"replacement payment order created",
+			slog.String("payment_id", newPayment.ID),
+			slog.String("provider_order_id", newOrderID),
+		)
+		return newPayment, nil
+
+	default:
+		return nil, domain.ErrPaymentProviderUnavailable
+	}
+}
+
+func (u *PaymentUsecase) persistProviderOrderID(
+	ctx context.Context,
+	paymentID string,
+	providerOrderID string,
+) error {
+	return u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			if err := tx.PaymentRepository().UpdateProviderOrderID(
+				ctx,
+				paymentID,
+				providerOrderID,
+			); err != nil {
+				return err
+			}
+
+			// Reload and reconcile the persisted payment to confirm state
+			reloaded, err := tx.PaymentRepository().FindByID(ctx, paymentID)
+			if err != nil {
+				return err
+			}
+
+			if reloaded.ProviderOrderID == nil || *reloaded.ProviderOrderID != providerOrderID {
+				return fmt.Errorf("provider order ID reconciliation mismatch: expected %s, got %v", providerOrderID, reloaded.ProviderOrderID)
+			}
+
+			return nil
+		},
+	)
+}
+
+func (u *PaymentUsecase) retireAndCreatePayment(
+	ctx context.Context,
+	oldPaymentID string,
+	bookingID uuid.UUID,
+	method domain.PaymentMethod,
+	amount decimal.Decimal,
+) (*domain.Payment, error) {
+	var newPayment *domain.Payment
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			currentBooking, findErr := tx.BookingRepository().FindByIDForUpdate(ctx, bookingID)
+			if findErr != nil {
+				return findErr
+			}
+
+			if currentBooking.Status == domain.BookingStatusConfirmed {
+				return domain.ErrPaymentAlreadyComplete
+			}
+			if currentBooking.Status != domain.BookingStatusPending {
+				return domain.ErrReservationExpired
+			}
+
+			if err := tx.PaymentRepository().MarkFailed(ctx, oldPaymentID); err != nil {
+				return err
+			}
+
+			newPayment = &domain.Payment{
+				BookingID: bookingID.String(),
+				Provider:  domain.PaymentProviderRazorpay,
+				Method:    method,
+				Amount:    amount,
+				Status:    domain.PaymentStatusPending,
+			}
+
+			return tx.PaymentRepository().Create(ctx, newPayment)
+		},
 	)
 	if err != nil {
-		u.logger.ErrorContext(
-			ctx,
-			"payment gateway order creation failed",
-			slog.String("payment_id", payment.ID),
-			slog.String("booking_id", payment.BookingID),
-			slog.Any("error", err),
-		)
-
-		// A timeout is inconclusive: the gateway may have created
-		// the order. Keep the payment pending for reconciliation.
 		return nil, err
 	}
 
-	payment.ProviderOrderID = &orderID
-
-	if err := u.updatePayment(ctx, payment); err != nil {
-		u.logger.ErrorContext(
-			ctx,
-			"failed to persist provider order ID",
-			slog.String("payment_id", payment.ID),
-			slog.Any("error", err),
-		)
-
-		// Reconcile with the gateway before allowing another attempt.
-		return nil, err
-	}
-
-	u.logger.InfoContext(
-		ctx,
-		"payment order created",
-		slog.String("payment_id", payment.ID),
-		slog.String("booking_id", payment.BookingID),
-		slog.String("provider", string(payment.Provider)),
-	)
-
-	return payment, nil
+	return newPayment, nil
 }
 
 type VerifyPaymentRequest struct {
@@ -404,6 +621,25 @@ func (u *PaymentUsecase) VerifyPayment(
 				return domain.ErrInvalidPayment
 			}
 
+			if booking.Status == domain.BookingStatusConfirmed {
+				// Secondary payment verified for an already confirmed booking.
+				if err := tx.PaymentRepository().MarkRefundRequired(
+					ctx,
+					current.ID,
+					req.RazorpayPaymentID,
+					now,
+				); err != nil {
+					return err
+				}
+				current.Status = domain.PaymentStatusRefundRequired
+				current.TransactionID = &req.RazorpayPaymentID
+				current.PaidAt = &now
+				payment = current
+				confirmedBooking = booking
+				isRefundRequired = true
+				return nil
+			}
+
 			if booking.Status != domain.BookingStatusPending {
 				return domain.ErrInvalidPayment
 			}
@@ -508,6 +744,35 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 	transactionID string,
 	now time.Time,
 ) (bool, error) {
+	// Re-lock and inspect the current booking status to handle duplicate captures safely.
+	currentBooking, err := tx.BookingRepository().FindByIDForUpdate(ctx, booking.ID)
+	if err != nil {
+		return false, err
+	}
+
+	// If the booking is already confirmed, this is a duplicate captured payment!
+	// Preserve the confirmed booking, preserve transaction audit information, and route to refund.
+	if currentBooking.Status == domain.BookingStatusConfirmed {
+		if err := tx.PaymentRepository().MarkRefundRequired(
+			ctx,
+			payment.ID,
+			transactionID,
+			now,
+		); err != nil {
+			return false, err
+		}
+
+		u.logger.WarnContext(
+			ctx,
+			"duplicate payment captured for already confirmed booking; preserving confirmed booking and flagging refund",
+			slog.String("payment_id", payment.ID),
+			slog.String("booking_id", booking.ID.String()),
+			slog.String("transaction_id", transactionID),
+		)
+
+		return true, nil
+	}
+
 	// Step 1: Validate and complete the reservation.
 	if booking.ReservationID != nil &&
 		*booking.ReservationID != uuid.Nil {
@@ -532,12 +797,15 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				return false, err
 			}
 
-			if err := tx.BookingRepository().UpdateStatus(
-				ctx,
-				booking.ID,
-				domain.BookingStatusCancelled,
-			); err != nil {
-				return false, err
+			// Only cancel booking if it is currently pending!
+			if currentBooking.Status == domain.BookingStatusPending {
+				if err := tx.BookingRepository().UpdateStatus(
+					ctx,
+					booking.ID,
+					domain.BookingStatusCancelled,
+				); err != nil {
+					return false, err
+				}
 			}
 
 			u.logger.WarnContext(
@@ -567,12 +835,15 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				return false, err
 			}
 
-			if err := tx.BookingRepository().UpdateStatus(
-				ctx,
-				booking.ID,
-				domain.BookingStatusCancelled,
-			); err != nil {
-				return false, err
+			// Only cancel booking if it is currently pending!
+			if currentBooking.Status == domain.BookingStatusPending {
+				if err := tx.BookingRepository().UpdateStatus(
+					ctx,
+					booking.ID,
+					domain.BookingStatusCancelled,
+				); err != nil {
+					return false, err
+				}
 			}
 
 			u.logger.WarnContext(
@@ -965,10 +1236,34 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return err
 					}
 
+					if booking.Status == domain.BookingStatusConfirmed {
+						// Secondary captured payment for an already confirmed booking.
+						// Safely flag refund without canceling the confirmed booking or issuing duplicate tickets.
+						now := time.Now()
+						if err := tx.PaymentRepository().MarkRefundRequired(
+							ctx,
+							payment.ID,
+							entity.ID,
+							now,
+						); err != nil {
+							return err
+						}
+
+						u.logger.WarnContext(
+							ctx,
+							"payment captured via webhook for already confirmed booking; refund required",
+							slog.String("payment_id", payment.ID),
+							slog.String("booking_id", booking.ID.String()),
+							slog.String("provider_order_id", entity.OrderID),
+							slog.String("transaction_id", entity.ID),
+						)
+						return nil
+					}
+
 					if booking.Status != domain.BookingStatusPending {
 						u.logger.WarnContext(
 							ctx,
-							"payment captured for booking that is not pending",
+							"payment captured for booking that is neither pending nor confirmed",
 							slog.String("payment_id", payment.ID),
 							slog.String("booking_id", booking.ID.String()),
 							slog.String("booking_status", string(booking.Status)),
