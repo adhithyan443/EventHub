@@ -53,8 +53,7 @@ func (u *PaymentUsecase) CreatePayment(
 		return nil, domain.ErrUnsupportedPaymentMethod
 	}
 
-	// CreateBooking validates the checkout and reservation and returns
-	// the existing booking when one already exists.
+	// Prepare the booking before initiating payment.
 	booking, err := u.bookingUsecase.CreateBooking(
 		ctx,
 		bookingusecase.CreateBookingRequest{
@@ -63,7 +62,9 @@ func (u *PaymentUsecase) CreatePayment(
 		},
 	)
 	if err != nil {
-		u.logger.ErrorContext(ctx, "failed to prepare booking for payment",
+		u.logger.ErrorContext(
+			ctx,
+			"failed to prepare booking for payment",
 			slog.String("checkout_id", req.CheckoutID.String()),
 			slog.Any("error", err),
 		)
@@ -79,7 +80,7 @@ func (u *PaymentUsecase) CreatePayment(
 		payment  *domain.Payment
 	)
 
-	// Validate checkout and create the pending payment in a transaction.
+	// Validate checkout and create or reuse the pending payment.
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
 			var validationErr error
@@ -105,16 +106,21 @@ func (u *PaymentUsecase) CreatePayment(
 			}
 
 			var activePending *domain.Payment
+
 			for i := range existingPayments {
 				existing := &existingPayments[i]
 
 				switch existing.Status {
 				case domain.PaymentStatusSuccess:
 					return domain.ErrPaymentAlreadyComplete
+
 				case domain.PaymentStatusPending:
-					if existing.ProviderOrderID != nil && *existing.ProviderOrderID != "" {
+					if existing.ProviderOrderID != nil &&
+						*existing.ProviderOrderID != "" {
 						activePending = existing
 					} else {
+						// The gateway may have created an order even if
+						// the original request timed out.
 						return domain.ErrPaymentInProgress
 					}
 				}
@@ -137,7 +143,9 @@ func (u *PaymentUsecase) CreatePayment(
 		},
 	)
 	if err != nil {
-		u.logger.ErrorContext(ctx, "failed to prepare payment",
+		u.logger.ErrorContext(
+			ctx,
+			"failed to prepare payment",
 			slog.String("checkout_id", req.CheckoutID.String()),
 			slog.String("booking_id", booking.ID.String()),
 			slog.Any("error", err),
@@ -145,17 +153,19 @@ func (u *PaymentUsecase) CreatePayment(
 		return nil, err
 	}
 
-	// If an existing pending order was already initiated, reuse it directly.
-	if payment.ProviderOrderID != nil && *payment.ProviderOrderID != "" {
-		u.logger.InfoContext(ctx, "reusing existing pending payment order",
+	// Reuse an existing gateway order when possible.
+	if payment.ProviderOrderID != nil &&
+		*payment.ProviderOrderID != "" {
+		u.logger.InfoContext(
+			ctx,
+			"reusing existing pending payment order",
 			slog.String("payment_id", payment.ID),
 			slog.String("provider_order_id", *payment.ProviderOrderID),
 		)
 		return payment, nil
 	}
 
-	// Call the gateway only after the database transaction commits.
-	// Do not hold database locks during external HTTP requests.
+	// Never hold database locks during external gateway requests.
 	orderID, err := u.provider.Initiate(
 		ctx,
 		payment.Amount,
@@ -163,32 +173,36 @@ func (u *PaymentUsecase) CreatePayment(
 		payment.ID,
 	)
 	if err != nil {
-		u.logger.ErrorContext(ctx, "payment gateway order creation failed",
+		u.logger.ErrorContext(
+			ctx,
+			"payment gateway order creation failed",
 			slog.String("payment_id", payment.ID),
 			slog.String("booking_id", payment.BookingID),
 			slog.Any("error", err),
 		)
 
-		// A timeout may mean the gateway created the order.
-		// Keep the payment pending until the outcome is reconciled.
-		// Do not blindly retry or mark an inconclusive attempt failed.
+		// A timeout is inconclusive: the gateway may have created
+		// the order. Keep the payment pending for reconciliation.
 		return nil, err
 	}
 
 	payment.ProviderOrderID = &orderID
 
 	if err := u.updatePayment(ctx, payment); err != nil {
-		u.logger.ErrorContext(ctx, "failed to persist provider order ID",
+		u.logger.ErrorContext(
+			ctx,
+			"failed to persist provider order ID",
 			slog.String("payment_id", payment.ID),
 			slog.Any("error", err),
 		)
 
-		// Reconcile this payment with the gateway before allowing
-		// another attempt. The gateway order may already exist.
+		// Reconcile with the gateway before allowing another attempt.
 		return nil, err
 	}
 
-	u.logger.InfoContext(ctx, "payment order created",
+	u.logger.InfoContext(
+		ctx,
+		"payment order created",
 		slog.String("payment_id", payment.ID),
 		slog.String("booking_id", payment.BookingID),
 		slog.String("provider", string(payment.Provider)),
@@ -214,9 +228,9 @@ func (u *PaymentUsecase) VerifyPayment(
 	req VerifyPaymentRequest,
 ) (*VerifyPaymentResult, error) {
 	if req.UserID == uuid.Nil ||
-		req.ProviderOrderID == "" ||
-		req.RazorpayPaymentID == "" ||
-		req.RazorpaySignature == "" {
+		strings.TrimSpace(req.ProviderOrderID) == "" ||
+		strings.TrimSpace(req.RazorpayPaymentID) == "" ||
+		strings.TrimSpace(req.RazorpaySignature) == "" {
 		return nil, domain.ErrInvalidPayment
 	}
 
@@ -225,7 +239,7 @@ func (u *PaymentUsecase) VerifyPayment(
 		confirmedBooking *domain.Booking
 	)
 
-	// Find the local payment and validate booking ownership.
+	// Step 1: Load payment and verify booking ownership.
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
 			var findErr error
@@ -267,7 +281,7 @@ func (u *PaymentUsecase) VerifyPayment(
 		return nil, err
 	}
 
-	// Allow an identical successful callback to be retried safely.
+	// Step 2: Make identical successful verification requests idempotent.
 	if payment.Status == domain.PaymentStatusSuccess {
 		if payment.TransactionID != nil &&
 			*payment.TransactionID == req.RazorpayPaymentID {
@@ -288,7 +302,7 @@ func (u *PaymentUsecase) VerifyPayment(
 		return nil, domain.ErrInvalidPayment
 	}
 
-	// Verify the signature and confirm payment details with Razorpay.
+	// Step 3: Verify the payment with Razorpay outside the DB transaction.
 	verified, err := u.provider.Verify(
 		ctx,
 		req.ProviderOrderID,
@@ -298,9 +312,9 @@ func (u *PaymentUsecase) VerifyPayment(
 		"INR",
 	)
 	if err != nil {
-		// Network or gateway errors are inconclusive. Keep the payment
-		// pending so its actual status can be reconciled.
-		u.logger.ErrorContext(ctx, "payment verification could not be completed",
+		u.logger.ErrorContext(
+			ctx,
+			"payment verification could not be completed",
 			slog.String("payment_id", payment.ID),
 			slog.Any("error", err),
 		)
@@ -308,41 +322,60 @@ func (u *PaymentUsecase) VerifyPayment(
 	}
 
 	if !verified {
-		u.logger.WarnContext(ctx, "payment verification rejected",
+		u.logger.WarnContext(
+			ctx,
+			"payment verification rejected",
 			slog.String("payment_id", payment.ID),
 		)
 		return nil, domain.ErrInvalidPayment
 	}
 
-	// Atomically mark the payment successful and confirm its booking.
-	// Both conditional repository operations must use transaction-scoped
-	// repositories so either both changes commit or neither does.
+	// Step 4: Lock the payment row and atomically finalize the booking.
 	now := time.Now()
 	var isRefundRequired bool
 
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
 			current, findErr := tx.PaymentRepository().
-				FindByProviderOrderID(ctx, req.ProviderOrderID)
+				FindByProviderOrderIDForUpdate(
+					ctx,
+					req.ProviderOrderID,
+				)
 			if findErr != nil {
 				return findErr
 			}
 
-			// Handle a concurrent duplicate callback.
+			// Another request may have completed payment while Razorpay
+			// verification was in progress.
 			if current.Status == domain.PaymentStatusSuccess {
-				if current.TransactionID != nil &&
-					*current.TransactionID == req.RazorpayPaymentID {
-					payment = current
-					return nil
+				if current.TransactionID == nil ||
+					*current.TransactionID != req.RazorpayPaymentID {
+					return domain.ErrPaymentAlreadyComplete
 				}
 
-				return domain.ErrPaymentAlreadyComplete
+				bookingID, parseErr := uuid.Parse(current.BookingID)
+				if parseErr != nil {
+					return domain.ErrInvalidPayment
+				}
+
+				booking, bookingErr := tx.BookingRepository().FindByID(
+					ctx,
+					bookingID,
+				)
+				if bookingErr != nil {
+					return bookingErr
+				}
+
+				payment = current
+				confirmedBooking = booking
+				return nil
 			}
 
 			if current.Status == domain.PaymentStatusRefundRequired {
 				if current.TransactionID != nil &&
 					*current.TransactionID == req.RazorpayPaymentID {
 					isRefundRequired = true
+					payment = current
 					return nil
 				}
 
@@ -376,6 +409,7 @@ func (u *PaymentUsecase) VerifyPayment(
 			}
 
 			var finalizeErr error
+
 			isRefundRequired, finalizeErr = u.finalizeBookingPayment(
 				ctx,
 				tx,
@@ -392,13 +426,17 @@ func (u *PaymentUsecase) VerifyPayment(
 				current.Status = domain.PaymentStatusRefundRequired
 				current.TransactionID = &req.RazorpayPaymentID
 				current.PaidAt = &now
+
 				booking.Status = domain.BookingStatusCancelled
+				booking.UpdatedAt = now
+
 				payment = current
 				confirmedBooking = booking
+
 				return nil
 			}
 
-			// Keep the returned domain object consistent with the database.
+			// Update returned objects to reflect the committed state.
 			current.Status = domain.PaymentStatusSuccess
 			current.TransactionID = &req.RazorpayPaymentID
 			current.PaidAt = &now
@@ -408,11 +446,14 @@ func (u *PaymentUsecase) VerifyPayment(
 
 			payment = current
 			confirmedBooking = booking
+
 			return nil
 		},
 	)
 	if err != nil {
-		u.logger.ErrorContext(ctx, "failed to finalize verified payment",
+		u.logger.ErrorContext(
+			ctx,
+			"failed to finalize verified payment",
 			slog.String("payment_id", payment.ID),
 			slog.Any("error", err),
 		)
@@ -420,10 +461,18 @@ func (u *PaymentUsecase) VerifyPayment(
 	}
 
 	if isRefundRequired {
+		u.logger.WarnContext(
+			ctx,
+			"verified payment requires refund",
+			slog.String("payment_id", payment.ID),
+			slog.String("booking_id", payment.BookingID),
+		)
 		return nil, domain.ErrReservationExpired
 	}
 
-	u.logger.InfoContext(ctx, "payment verified and booking confirmed",
+	u.logger.InfoContext(
+		ctx,
+		"payment verified and booking confirmed",
 		slog.String("payment_id", payment.ID),
 		slog.String("booking_id", payment.BookingID),
 	)
@@ -434,10 +483,23 @@ func (u *PaymentUsecase) VerifyPayment(
 	}, nil
 }
 
-// finalizeBookingPayment processes reservation and inventory locking, marking either:
-// 1. Success path: reservation COMPLETED, seats BOOKED, checkout COMPLETED, booking CONFIRMED, payment SUCCESS.
-// 2. Expired path (strict rejection): payment REFUND_REQUIRED, booking CANCELLED.
-// Returns (isRefundRequired bool, err error).
+// finalizeBookingPayment atomically finalizes the reservation, payment,
+// booking, and ticket issuance.
+//
+// Success path:
+//   - Reservation completed.
+//   - Reserved seats booked.
+//   - Checkout completed.
+//   - Payment successful.
+//   - Booking confirmed.
+//   - Tickets issued.
+//
+// Expired path:
+//   - Payment marked REFUND_REQUIRED.
+//   - Booking cancelled.
+//   - No tickets issued.
+//
+// The caller must invoke this function inside a database transaction.
 func (u *PaymentUsecase) finalizeBookingPayment(
 	ctx context.Context,
 	tx domain.TransactionRepositories,
@@ -447,7 +509,8 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 	now time.Time,
 ) (bool, error) {
 	// Step 1: Validate and complete the reservation.
-	if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
+	if booking.ReservationID != nil &&
+		*booking.ReservationID != uuid.Nil {
 		reservationID := *booking.ReservationID
 
 		reservation, err := tx.SeatReservationRepository().
@@ -485,7 +548,6 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				slog.String("reservation_id", reservationID.String()),
 			)
 
-			// Never issue tickets for an expired reservation.
 			return true, nil
 		}
 
@@ -524,7 +586,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			return true, nil
 		}
 
-		// Mark reserved seats as booked.
+		// Mark all seats belonging to the reservation as booked.
 		reservationItems, err := tx.SeatReservationRepository().
 			FindItemsByReservationID(ctx, reservationID)
 		if err != nil {
@@ -542,7 +604,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			}
 		}
 
-		// Complete the checkout snapshot if one exists.
+		// Complete the checkout if one exists.
 		checkout, err := tx.CheckoutRepository().
 			FindByReservationID(ctx, reservationID)
 
@@ -556,7 +618,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			return false, err
 		}
 
-		if checkout != nil && !errors.Is(err, domain.ErrCheckoutNotFound) {
+		if err == nil && checkout != nil {
 			if err := tx.CheckoutRepository().UpdateStatus(
 				ctx,
 				checkout.ID,
@@ -573,7 +635,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		}
 	}
 
-	// Step 2: Mark the payment successful.
+	// Step 2: Mark payment successful.
 	if err := tx.PaymentRepository().MarkSuccessful(
 		ctx,
 		payment.ID,
@@ -583,7 +645,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		return false, err
 	}
 
-	// Step 3: Confirm the booking.
+	// Step 3: Confirm the pending booking.
 	if err := tx.BookingRepository().ConfirmPending(
 		ctx,
 		booking.ID,
@@ -591,7 +653,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		return false, err
 	}
 
-	// Step 4: Retrieve the booking items.
+	// Step 4: Retrieve booking items.
 	items, err := tx.BookingRepository().
 		FindItemsByBookingID(ctx, booking.ID)
 	if err != nil {
@@ -604,28 +666,43 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		return false, err
 	}
 
-	// Step 5: Build one ticket per admission.
+	// Step 5: Generate one ticket for each admission.
 	var tickets []domain.Ticket
 
 	for _, item := range items {
 		if item.Quantity <= 0 {
-			return false, fmt.Errorf(
+			err := fmt.Errorf(
 				"invalid booking item quantity for item %s",
 				item.ID,
 			)
+			u.logger.ErrorContext(
+				ctx,
+				"invalid booking item quantity",
+				slog.String("booking_id", booking.ID.String()),
+				slog.Any("error", err),
+			)
+			return false, err
 		}
 
-		// Reserved seating must represent exactly one seat per item.
-		if item.SeatID != nil && *item.SeatID != uuid.Nil &&
+		// Reserved seating represents exactly one seat per item.
+		if item.SeatID != nil &&
+			*item.SeatID != uuid.Nil &&
 			item.Quantity != 1 {
-			return false, fmt.Errorf(
+			err := fmt.Errorf(
 				"reserved-seat booking item %s must have quantity 1",
 				item.ID,
 			)
+			u.logger.ErrorContext(
+				ctx,
+				"invalid reserved-seat booking item",
+				slog.String("booking_id", booking.ID.String()),
+				slog.Any("error", err),
+			)
+			return false, err
 		}
 
 		for admissionNumber := 1; admissionNumber <= item.Quantity; admissionNumber++ {
-			ticket := domain.Ticket{
+			tickets = append(tickets, domain.Ticket{
 				TicketCode:      "EH-" + uuid.NewString(),
 				BookingID:       booking.ID,
 				BookingItemID:   item.ID,
@@ -637,13 +714,11 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				Status:          domain.TicketStatusValid,
 				AdmissionNumber: admissionNumber,
 				IssuedAt:        now,
-			}
-
-			tickets = append(tickets, ticket)
+			})
 		}
 	}
 
-	// Step 6: Persist the tickets inside the current transaction.
+	// Step 6: Reject bookings that have no ticketable items.
 	if len(tickets) == 0 {
 		err := fmt.Errorf(
 			"booking %s has no items; cannot issue tickets",
@@ -660,6 +735,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		return false, err
 	}
 
+	// Step 7: Persist tickets in the same transaction.
 	if err := tx.TicketRepository().CreateMany(ctx, tickets); err != nil {
 		u.logger.ErrorContext(
 			ctx,
@@ -694,7 +770,10 @@ func (u *PaymentUsecase) validateCheckout(
 	checkoutID uuid.UUID,
 	userID uuid.UUID,
 ) (*domain.Checkout, *domain.SeatReservation, error) {
-	checkout, err := tx.CheckoutRepository().FindByID(ctx, checkoutID)
+	checkout, err := tx.CheckoutRepository().FindByID(
+		ctx,
+		checkoutID,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -732,9 +811,10 @@ func (u *PaymentUsecase) updatePayment(
 }
 
 type razorpayWebhookPayload struct {
-	Entity  string `json:"entity"`
-	ID      string `json:"id"`
-	Event   string `json:"event"`
+	Entity string `json:"entity"`
+	ID     string `json:"id"`
+	Event  string `json:"event"`
+
 	Payload struct {
 		Payment struct {
 			Entity struct {
@@ -755,20 +835,32 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 	eventID string,
 ) error {
 	if !u.provider.VerifyWebhookSignature(body, signature) {
+		u.logger.WarnContext(
+			ctx,
+			"Razorpay webhook signature verification failed",
+		)
 		return domain.ErrInvalidPayment
 	}
 
 	var payload razorpayWebhookPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
+		u.logger.WarnContext(
+			ctx,
+			"invalid Razorpay webhook payload",
+			slog.Any("error", err),
+		)
 		return domain.ErrInvalidPayment
 	}
 
 	resolvedEventID := strings.TrimSpace(eventID)
-	if resolvedEventID == "" && payload.Entity == "event" && strings.TrimSpace(payload.ID) != "" {
+	if resolvedEventID == "" &&
+		payload.Entity == "event" &&
+		strings.TrimSpace(payload.ID) != "" {
 		resolvedEventID = strings.TrimSpace(payload.ID)
 	}
 
-	if resolvedEventID == "" || strings.TrimSpace(payload.Event) == "" {
+	if resolvedEventID == "" ||
+		strings.TrimSpace(payload.Event) == "" {
 		return domain.ErrInvalidPayment
 	}
 
@@ -778,6 +870,8 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 
 		err := u.transactionManager.WithinTransaction(
 			func(tx domain.TransactionRepositories) error {
+				// Unique event IDs must be enforced by the database.
+				// A duplicate insert should return ErrDuplicateWebhookEvent.
 				if err := tx.RazorpayWebhookEventRepository().Create(
 					ctx,
 					resolvedEventID,
@@ -788,36 +882,54 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 
 				switch payload.Event {
 				case "payment.captured":
-					if strings.TrimSpace(entity.OrderID) == "" || strings.TrimSpace(entity.ID) == "" {
+					if strings.TrimSpace(entity.OrderID) == "" ||
+						strings.TrimSpace(entity.ID) == "" {
 						return domain.ErrInvalidPayment
 					}
 
 					if entity.Currency != "INR" {
-						u.logger.WarnContext(ctx, "webhook payment currency mismatch",
+						u.logger.WarnContext(
+							ctx,
+							"webhook payment currency mismatch",
 							slog.String("currency", entity.Currency),
 						)
 						return domain.ErrInvalidPayment
 					}
 
-					payment, err := tx.PaymentRepository().FindByProviderOrderID(ctx, entity.OrderID)
+					// Lock the payment to serialize concurrent capture
+					// and failure webhook processing.
+					payment, err := tx.PaymentRepository().
+						FindByProviderOrderIDForUpdate(
+							ctx,
+							entity.OrderID,
+						)
 					if err != nil {
 						return err
 					}
 
+					if payment.Provider != domain.PaymentProviderRazorpay {
+						return domain.ErrInvalidPayment
+					}
+
 					if payment.Status == domain.PaymentStatusSuccess {
-						if payment.TransactionID != nil && *payment.TransactionID == entity.ID {
+						if payment.TransactionID != nil &&
+							*payment.TransactionID == entity.ID {
 							return nil
 						}
+
 						return domain.ErrPaymentAlreadyComplete
 					}
 
 					if payment.Status == domain.PaymentStatusRefundRequired {
-						// Webhook delivery for an already refund-flagged payment is acknowledged safely
+						// The payment was captured after expiry.
+						// Acknowledge repeated delivery without issuing tickets.
 						return nil
 					}
 
 					if payment.Status != domain.PaymentStatusPending {
-						u.logger.WarnContext(ctx, "payment.captured received for non-pending payment",
+						u.logger.WarnContext(
+							ctx,
+							"payment.captured received for non-pending payment",
 							slog.String("payment_id", payment.ID),
 							slog.String("status", string(payment.Status)),
 						)
@@ -825,8 +937,14 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 					}
 
 					expectedPaise, err := domain.ToPaise(payment.Amount)
-					if err != nil || expectedPaise != entity.Amount {
-						u.logger.WarnContext(ctx, "payment amount mismatch in webhook",
+					if err != nil {
+						return err
+					}
+
+					if expectedPaise != entity.Amount {
+						u.logger.WarnContext(
+							ctx,
+							"payment amount mismatch in webhook",
 							slog.String("payment_id", payment.ID),
 							slog.Int64("expected_paise", expectedPaise),
 							slog.Int64("received_paise", entity.Amount),
@@ -839,12 +957,27 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return domain.ErrInvalidPayment
 					}
 
-					booking, err := tx.BookingRepository().FindByID(ctx, bookingID)
+					booking, err := tx.BookingRepository().FindByID(
+						ctx,
+						bookingID,
+					)
 					if err != nil {
 						return err
 					}
 
+					if booking.Status != domain.BookingStatusPending {
+						u.logger.WarnContext(
+							ctx,
+							"payment captured for booking that is not pending",
+							slog.String("payment_id", payment.ID),
+							slog.String("booking_id", booking.ID.String()),
+							slog.String("booking_status", string(booking.Status)),
+						)
+						return domain.ErrInvalidPayment
+					}
+
 					now := time.Now()
+
 					isRefundRequired, err := u.finalizeBookingPayment(
 						ctx,
 						tx,
@@ -858,7 +991,9 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 					}
 
 					if isRefundRequired {
-						u.logger.WarnContext(ctx, "payment captured via webhook after reservation expiry; refund required",
+						u.logger.WarnContext(
+							ctx,
+							"payment captured via webhook after reservation expiry; refund required",
 							slog.String("payment_id", payment.ID),
 							slog.String("booking_id", payment.BookingID),
 							slog.String("provider_order_id", entity.OrderID),
@@ -867,11 +1002,14 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return nil
 					}
 
-					u.logger.InfoContext(ctx, "payment captured and booking confirmed via webhook",
+					u.logger.InfoContext(
+						ctx,
+						"payment captured and booking confirmed via webhook",
 						slog.String("payment_id", payment.ID),
 						slog.String("booking_id", payment.BookingID),
 						slog.String("provider_order_id", entity.OrderID),
 					)
+
 					return nil
 
 				case "payment.failed":
@@ -879,13 +1017,20 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return domain.ErrInvalidPayment
 					}
 
-					payment, err := tx.PaymentRepository().FindByProviderOrderID(ctx, entity.OrderID)
+					payment, err := tx.PaymentRepository().
+						FindByProviderOrderIDForUpdate(
+							ctx,
+							entity.OrderID,
+						)
 					if err != nil {
 						return err
 					}
 
-					if payment.Status == domain.PaymentStatusSuccess || payment.Status == domain.PaymentStatusRefundRequired {
-						u.logger.InfoContext(ctx, "ignoring payment.failed for already successful or refund-flagged payment",
+					if payment.Status == domain.PaymentStatusSuccess ||
+						payment.Status == domain.PaymentStatusRefundRequired {
+						u.logger.InfoContext(
+							ctx,
+							"ignoring payment.failed for already successful or refund-flagged payment",
 							slog.String("payment_id", payment.ID),
 							slog.String("provider_order_id", entity.OrderID),
 						)
@@ -896,14 +1041,20 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return nil
 					}
 
-					if err := tx.PaymentRepository().MarkFailed(ctx, payment.ID); err != nil {
+					if err := tx.PaymentRepository().MarkFailed(
+						ctx,
+						payment.ID,
+					); err != nil {
 						return err
 					}
 
-					u.logger.InfoContext(ctx, "payment marked as failed via webhook",
+					u.logger.InfoContext(
+						ctx,
+						"payment marked as failed via webhook",
 						slog.String("payment_id", payment.ID),
 						slog.String("provider_order_id", entity.OrderID),
 					)
+
 					return nil
 				}
 
@@ -912,7 +1063,9 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 		)
 
 		if errors.Is(err, domain.ErrDuplicateWebhookEvent) {
-			u.logger.InfoContext(ctx, "duplicate Razorpay webhook event received, skipping processing",
+			u.logger.InfoContext(
+				ctx,
+				"duplicate Razorpay webhook event received; skipping processing",
 				slog.String("event_id", resolvedEventID),
 				slog.String("event_type", payload.Event),
 			)
@@ -920,13 +1073,22 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 		}
 
 		if err != nil {
+			u.logger.ErrorContext(
+				ctx,
+				"failed to process Razorpay webhook",
+				slog.String("event_id", resolvedEventID),
+				slog.String("event_type", payload.Event),
+				slog.Any("error", err),
+			)
 			return err
 		}
 
 		return nil
 
 	default:
-		u.logger.InfoContext(ctx, "unhandled Razorpay webhook event ignored",
+		u.logger.InfoContext(
+			ctx,
+			"unhandled Razorpay webhook event ignored",
 			slog.String("event_id", resolvedEventID),
 			slog.String("event_type", payload.Event),
 		)

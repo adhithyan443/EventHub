@@ -82,4 +82,9 @@ type PaymentRepository interface {
 		transactionID string,
 		paidAt time.Time,
 	) error
+
+	FindByProviderOrderIDForUpdate(
+		ctx context.Context,
+		providerOrderID string,
+	) (*Payment, error)
 }

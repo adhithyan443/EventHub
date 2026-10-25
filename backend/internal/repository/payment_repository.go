@@ -9,6 +9,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type paymentRepository struct {
@@ -288,6 +289,31 @@ func (r *paymentRepository) FindByProviderOrderID(
 		}
 
 		r.logger.ErrorContext(ctx, "failed to find payment by provider order ID",
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	return toPaymentDomain(&model), nil
+}
+
+func (r *paymentRepository) FindByProviderOrderIDForUpdate(
+	ctx context.Context,
+	providerOrderID string,
+) (*domain.Payment, error) {
+	var model models.PaymentModel
+
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("provider_order_id = ?", providerOrderID).
+		First(&model).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrPaymentNotFound
+		}
+
+		r.logger.ErrorContext(ctx, "failed to lock payment by provider order ID",
 			slog.Any("error", err),
 		)
 		return nil, err
