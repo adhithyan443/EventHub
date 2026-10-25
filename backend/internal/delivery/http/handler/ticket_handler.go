@@ -2,8 +2,12 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -89,10 +93,13 @@ func (h *TicketHandler) GetMyTicket(c *gin.Context) {
 	})
 }
 
-// authenticatedUserID must match the value stored by your existing
-// authentication middleware. Update the context key if necessary.
+// authenticatedUserID retrieves the authenticated user's ID from context,
+// checking both "user_id" (used by auth middleware) and "userID".
 func authenticatedUserID(c *gin.Context) (uuid.UUID, bool) {
-	value, exists := c.Get("userID")
+	value, exists := c.Get("user_id")
+	if !exists {
+		value, exists = c.Get("userID")
+	}
 	if !exists {
 		return uuid.Nil, false
 	}
@@ -159,53 +166,100 @@ func (h *TicketHandler) GetMyTicketQR(c *gin.Context) {
 	c.Data(http.StatusOK, "image/png", png)
 }
 
+// DownloadTicketPDF handles GET /api/v1/tickets/:id/download.
 func (h *TicketHandler) DownloadTicketPDF(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	// Get the authenticated user's ID.
+	// 1. Authenticate customer
 	userID, ok := authenticatedUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{
-			"error": "Authentication required",
+			"error": "unauthorized",
 		})
 		return
 	}
 
-	// Parse the ticket ID.
+	// 2. Validate ticket UUID
 	ticketID, err := uuid.Parse(c.Param("id"))
-	if err != nil {
+	if err != nil || ticketID == uuid.Nil {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid ticket ID",
+			"error": "invalid ticket ID",
 		})
 		return
 	}
 
-	// Retrieve the ticket and verify ownership.
-	ticket, err := h.ticketUsecase.GetMyTicket(ctx, userID, ticketID)
+	// 3. Retrieve ticket details and verify ownership via use case
+	pdfData, err := h.ticketUsecase.GetTicketPDFData(ctx, userID, ticketID)
 	if err != nil {
 		if errors.Is(err, domain.ErrTicketNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
-				"error": "Ticket not found",
+				"error": "ticket not found",
+			})
+			return
+		}
+		if errors.Is(err, domain.ErrEventNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "event not found",
 			})
 			return
 		}
 
-		slog.ErrorContext(ctx, "failed to retrieve ticket for PDF download",
+		slog.ErrorContext(ctx, "failed to retrieve ticket PDF data",
 			slog.String("ticket_id", ticketID.String()),
+			slog.String("user_id", userID.String()),
 			slog.Any("error", err),
 		)
 
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to generate ticket",
+			"error": "failed to retrieve ticket details",
 		})
 		return
 	}
 
-	// TODO: Map ticket and event details into the PDF data structure.
-	// TODO: Generate the PDF and return it as a downloadable file.
-	_ = ticket
+	// 4. Generate PDF via QRService
+	pdfBytes, err := h.qrService.GeneratePDF(*pdfData)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to generate ticket PDF",
+			slog.String("ticket_id", ticketID.String()),
+			slog.String("user_id", userID.String()),
+			slog.Any("error", err),
+		)
 
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"message": "PDF generation is not implemented yet",
-	})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to generate ticket PDF",
+		})
+		return
+	}
+
+	// 5. Generate safe filename
+	filename := sanitizeTicketFilename(pdfData.EventName, ticketID)
+
+	// 6. Return response with download headers
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Content-Length", strconv.Itoa(len(pdfBytes)))
+	c.Header("Cache-Control", "private, no-store")
+
+	c.Data(http.StatusOK, "application/pdf", pdfBytes)
+}
+
+func sanitizeTicketFilename(eventName string, ticketID uuid.UUID) string {
+	var clean strings.Builder
+	clean.WriteString("ticket-")
+	hasValidChar := false
+	for _, r := range eventName {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			clean.WriteRune(unicode.ToLower(r))
+			hasValidChar = true
+		} else if r == '-' || r == '_' || r == ' ' {
+			if hasValidChar && clean.Len() < 50 {
+				clean.WriteByte('-')
+			}
+		}
+	}
+	cleanedStr := strings.Trim(clean.String(), "-")
+	if cleanedStr == "ticket" || cleanedStr == "" {
+		return fmt.Sprintf("ticket-%s.pdf", ticketID.String())
+	}
+	return fmt.Sprintf("%s-%s.pdf", cleanedStr, ticketID.String())
 }

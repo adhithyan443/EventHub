@@ -13,6 +13,9 @@ import CheckoutPage from "../pages/events/CheckoutPage";
 import ProfilePage from "../pages/profile/ProfilePage";
 import BecomeOrganizerPage from "../pages/organizer/BecomeOrganizerPage";
 import OrganizerStatusPage from "../pages/organizer/OrganizerStatusPage";
+import MyBookingsPage from "../pages/bookings/MyBookingsPage";
+import BookingDetailsPage from "../pages/bookings/BookingDetailsPage";
+import TicketPage from "../pages/bookings/TicketPage";
 
 // Admin UI Components
 import ProtectedRoute from "../components/auth/ProtectedRoute";
@@ -63,6 +66,15 @@ export default function AppRoutes() {
             <Route path="/events" element={<DiscoverEventsPage />} />
             <Route path="/users" element={<DiscoverEventsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
+
+            {/* Customer Bookings & Tickets (Responsive UI Flow) */}
+            <Route path="/my-bookings" element={<MyBookingsPage />} />
+            <Route path="/my-tickets" element={<MyBookingsPage />} />
+            <Route path="/bookings" element={<Navigate to="/my-bookings" replace />} />
+            <Route path="/tickets" element={<Navigate to="/my-tickets" replace />} />
+            <Route path="/bookings/:bookingId" element={<BookingDetailsPage />} />
+            <Route path="/bookings/:bookingId/ticket" element={<TicketPage />} />
+            <Route path="/my-tickets/:ticketId" element={<TicketPage />} />
 
             {/* Customer Event Details → Seat Selection */}
             <Route path="/events/:eventId" element={<CustomerEventDetailsPage />} />

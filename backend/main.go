@@ -187,14 +187,23 @@ func main() {
 
 	// ticket
 	ticketRepository := repository.NewTicketRepository(db, logger)
+	eventRepository := repository.NewEventRepository(db, logger)
+	eventScheduleRepository := repository.NewEventScheduleRepository(db, logger)
+	venueRepository := repository.NewVenueRepository(db, logger)
+	ticketTypeRepository := repository.NewTicketTypeRepository(db, logger)
 
 	// Ticket dependencies.
 	ticketUsecase := ticket.NewTicketUsecase(
 		ticketRepository,
+		eventRepository,
+		eventScheduleRepository,
+		userRepo,
+		venueRepository,
+		ticketTypeRepository,
 		logger,
 	)
 
-	ticketHandler := handler.NewTicketHandler(ticketUsecase,qrService)
+	ticketHandler := handler.NewTicketHandler(ticketUsecase, qrService)
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
