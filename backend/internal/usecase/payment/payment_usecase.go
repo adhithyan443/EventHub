@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -445,21 +446,20 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 	transactionID string,
 	now time.Time,
 ) (bool, error) {
-	// If the booking is linked to a temporary hold reservation:
+	// Step 1: Validate and complete the reservation.
 	if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
 		reservationID := *booking.ReservationID
 
-		reservation, err := tx.SeatReservationRepository().FindByID(ctx, reservationID)
+		reservation, err := tx.SeatReservationRepository().
+			FindByID(ctx, reservationID)
 		if err != nil {
 			return false, err
 		}
 
-		// Check if the reservation is expired or not active.
-		isExpired := reservation.Status != domain.ReservationStatusActive || now.After(reservation.ExpiresAt)
+		isExpired := reservation.Status != domain.ReservationStatusActive ||
+			!now.Before(reservation.ExpiresAt)
 
 		if isExpired {
-			// Option B: Strict rejection with reliable refund tracking.
-			// Mark payment REFUND_REQUIRED and cancel the pending booking.
 			if err := tx.PaymentRepository().MarkRefundRequired(
 				ctx,
 				payment.ID,
@@ -477,25 +477,25 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				return false, err
 			}
 
-			u.logger.WarnContext(ctx, "payment captured after reservation expiry; marked REFUND_REQUIRED",
+			u.logger.WarnContext(
+				ctx,
+				"payment captured after reservation expiry; refund required",
 				slog.String("payment_id", payment.ID),
 				slog.String("booking_id", booking.ID.String()),
 				slog.String("reservation_id", reservationID.String()),
-				slog.String("transaction_id", transactionID),
 			)
 
+			// Never issue tickets for an expired reservation.
 			return true, nil
 		}
 
-		// Reservation is still active. Atomically complete the reservation hold
-		// so the background expiry worker cannot release it.
-		completed, err := tx.SeatReservationRepository().CompleteIfActive(ctx, reservationID)
+		completed, err := tx.SeatReservationRepository().
+			CompleteIfActive(ctx, reservationID)
 		if err != nil {
 			return false, err
 		}
 
 		if !completed {
-			// Concurrently expired by the worker right at this millisecond!
 			if err := tx.PaymentRepository().MarkRefundRequired(
 				ctx,
 				payment.ID,
@@ -513,7 +513,9 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				return false, err
 			}
 
-			u.logger.WarnContext(ctx, "reservation expired concurrently during payment capture; marked REFUND_REQUIRED",
+			u.logger.WarnContext(
+				ctx,
+				"reservation expired during payment finalization; refund required",
 				slog.String("payment_id", payment.ID),
 				slog.String("booking_id", booking.ID.String()),
 				slog.String("reservation_id", reservationID.String()),
@@ -522,39 +524,48 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			return true, nil
 		}
 
-		// Transition any reserved seats to BOOKED.
-		items, err := tx.SeatReservationRepository().FindItemsByReservationID(ctx, reservationID)
+		// Mark reserved seats as booked.
+		reservationItems, err := tx.SeatReservationRepository().
+			FindItemsByReservationID(ctx, reservationID)
 		if err != nil {
 			return false, err
 		}
 
-		for _, item := range items {
-			if item.SeatID != nil && *item.SeatID != uuid.Nil {
-				if err := tx.SeatRepository().BookReservedSeat(ctx, *item.SeatID); err != nil {
-					return false, err
-				}
+		for _, item := range reservationItems {
+			if item.SeatID == nil || *item.SeatID == uuid.Nil {
+				continue
+			}
+
+			if err := tx.SeatRepository().
+				BookReservedSeat(ctx, *item.SeatID); err != nil {
+				return false, err
 			}
 		}
 
-		// Complete the persistent checkout snapshot if it exists.
-		checkout, err := tx.CheckoutRepository().FindByReservationID(ctx, reservationID)
+		// Complete the checkout snapshot if one exists.
+		checkout, err := tx.CheckoutRepository().
+			FindByReservationID(ctx, reservationID)
+
 		if err != nil && !errors.Is(err, domain.ErrCheckoutNotFound) {
-			u.logger.ErrorContext(ctx, "failed to find checkout by reservation ID",
+			u.logger.ErrorContext(
+				ctx,
+				"failed to find checkout for reservation",
 				slog.String("reservation_id", reservationID.String()),
 				slog.Any("error", err),
 			)
 			return false, err
 		}
 
-		if errors.Is(err, domain.ErrCheckoutNotFound) || checkout == nil {
-			u.logger.DebugContext(ctx, "no checkout snapshot associated with reservation, skipping checkout completion",
-				slog.String("reservation_id", reservationID.String()),
-			)
-		} else {
-			if err := tx.CheckoutRepository().UpdateStatus(ctx, checkout.ID, domain.CheckoutStatusCompleted); err != nil {
-				u.logger.ErrorContext(ctx, "failed to update checkout status to completed",
+		if checkout != nil && !errors.Is(err, domain.ErrCheckoutNotFound) {
+			if err := tx.CheckoutRepository().UpdateStatus(
+				ctx,
+				checkout.ID,
+				domain.CheckoutStatusCompleted,
+			); err != nil {
+				u.logger.ErrorContext(
+					ctx,
+					"failed to complete checkout",
 					slog.String("checkout_id", checkout.ID.String()),
-					slog.String("reservation_id", reservationID.String()),
 					slog.Any("error", err),
 				)
 				return false, err
@@ -562,7 +573,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		}
 	}
 
-	// Conditional update: succeeds only while payment is pending.
+	// Step 2: Mark the payment successful.
 	if err := tx.PaymentRepository().MarkSuccessful(
 		ctx,
 		payment.ID,
@@ -572,14 +583,100 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		return false, err
 	}
 
-	// Conditional update: succeeds only while booking is pending.
-	// Failure causes the entire transaction to roll back.
+	// Step 3: Confirm the booking.
 	if err := tx.BookingRepository().ConfirmPending(
 		ctx,
 		booking.ID,
 	); err != nil {
 		return false, err
 	}
+
+	// Step 4: Retrieve the booking items.
+	items, err := tx.BookingRepository().
+		FindItemsByBookingID(ctx, booking.ID)
+	if err != nil {
+		u.logger.ErrorContext(
+			ctx,
+			"failed to retrieve booking items for ticket issuance",
+			slog.String("booking_id", booking.ID.String()),
+			slog.Any("error", err),
+		)
+		return false, err
+	}
+
+	// Step 5: Build one ticket per admission.
+	var tickets []domain.Ticket
+
+	for _, item := range items {
+		if item.Quantity <= 0 {
+			return false, fmt.Errorf(
+				"invalid booking item quantity for item %s",
+				item.ID,
+			)
+		}
+
+		// Reserved seating must represent exactly one seat per item.
+		if item.SeatID != nil && *item.SeatID != uuid.Nil &&
+			item.Quantity != 1 {
+			return false, fmt.Errorf(
+				"reserved-seat booking item %s must have quantity 1",
+				item.ID,
+			)
+		}
+
+		for admissionNumber := 1; admissionNumber <= item.Quantity; admissionNumber++ {
+			ticket := domain.Ticket{
+				TicketCode:      "EH-" + uuid.NewString(),
+				BookingID:       booking.ID,
+				BookingItemID:   item.ID,
+				UserID:          booking.UserID,
+				EventID:         booking.EventID,
+				TicketTypeID:    item.TicketTypeID,
+				SeatID:          item.SeatID,
+				Price:           item.UnitPrice,
+				Status:          domain.TicketStatusValid,
+				AdmissionNumber: admissionNumber,
+				IssuedAt:        now,
+			}
+
+			tickets = append(tickets, ticket)
+		}
+	}
+
+	// Step 6: Persist the tickets inside the current transaction.
+	if len(tickets) == 0 {
+		err := fmt.Errorf(
+			"booking %s has no items; cannot issue tickets",
+			booking.ID,
+		)
+
+		u.logger.ErrorContext(
+			ctx,
+			"ticket issuance rejected",
+			slog.String("booking_id", booking.ID.String()),
+			slog.Any("error", err),
+		)
+
+		return false, err
+	}
+
+	if err := tx.TicketRepository().CreateMany(ctx, tickets); err != nil {
+		u.logger.ErrorContext(
+			ctx,
+			"failed to issue tickets",
+			slog.String("booking_id", booking.ID.String()),
+			slog.Any("error", err),
+		)
+		return false, err
+	}
+
+	u.logger.InfoContext(
+		ctx,
+		"tickets issued",
+		slog.String("booking_id", booking.ID.String()),
+		slog.String("event_id", booking.EventID.String()),
+		slog.Int("ticket_count", len(tickets)),
+	)
 
 	return false, nil
 }

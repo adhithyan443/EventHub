@@ -23,20 +23,21 @@ const (
 )
 
 type Ticket struct {
-	ID            uuid.UUID
-	TicketCode    string
-	BookingID     uuid.UUID
-	BookingItemID uuid.UUID
-	UserID        uuid.UUID
-	EventID       uuid.UUID
-	TicketTypeID  *uuid.UUID
-	SeatID        *uuid.UUID
-	Price         decimal.Decimal
-	Status        string
-	IssuedAt      time.Time
-	UsedAt        *time.Time
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID              uuid.UUID
+	TicketCode      string
+	BookingID       uuid.UUID
+	BookingItemID   uuid.UUID
+	UserID          uuid.UUID
+	EventID         uuid.UUID
+	TicketTypeID    *uuid.UUID
+	AdmissionNumber int
+	SeatID          *uuid.UUID
+	Price           decimal.Decimal
+	Status          string
+	IssuedAt        time.Time
+	UsedAt          *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type TicketRepository interface {

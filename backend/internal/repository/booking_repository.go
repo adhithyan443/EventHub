@@ -222,6 +222,40 @@ func (r *bookingRepository) ConfirmPending(
 	return nil
 }
 
+func (r *bookingRepository) FindItemsByBookingID(
+	ctx context.Context,
+	bookingID uuid.UUID,
+) ([]domain.BookingItem, error) {
+	var itemModels []models.BookingItemModel
+
+	if err := r.db.WithContext(ctx).
+		Where("booking_id = ?", bookingID).
+		Find(&itemModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find booking items",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	items := make([]domain.BookingItem, 0, len(itemModels))
+	for _, item := range itemModels {
+		items = append(items, domain.BookingItem{
+			ID:           item.ID,
+			BookingID:    item.BookingID,
+			SeatID:       item.SeatID,
+			TicketTypeID: item.TicketTypeID,
+			Quantity:     item.Quantity,
+			UnitPrice:    item.UnitPrice,
+			TotalPrice:   item.TotalPrice,
+			CreatedAt:    item.CreatedAt,
+			UpdatedAt:    item.UpdatedAt,
+		})
+	}
+
+	return items, nil
+}
+
 func bookingToModel(booking *domain.Booking) *models.BookingModel {
 	return &models.BookingModel{
 		ID:            booking.ID,

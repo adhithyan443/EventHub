@@ -37,13 +37,14 @@ type transactionRepositories struct {
 	seatRowRepository     domain.SeatRowRepository
 	seatRepository        domain.SeatRepository
 
-	ticketTypeRepo           domain.TicketTypeRepository
+	ticketTypeRepo domain.TicketTypeRepository
+	ticketRepo     domain.TicketRepository
+
 	seatReservationRepo      domain.SeatReservationRepository
 	checkoutRepo             domain.CheckoutRepository
 	bookingRepo              domain.BookingRepository
 	paymentRepo              domain.PaymentRepository
 	razorpayWebhookEventRepo domain.RazorpayWebhookEventRepository
-	ticketRepo               domain.TicketRepository
 }
 
 func NewTransactionManager(
@@ -128,14 +129,15 @@ func (m *TransactionManager) WithinTransaction(
 			seatSectionRepository: NewSeatSectionRepository(txDB, m.logger),
 			seatRowRepository:     NewSeatRowRepository(txDB, m.logger),
 			seatRepository:        NewSeatRepository(txDB, m.logger),
-			ticketTypeRepo:        NewTicketTypeRepository(txDB, m.logger),
+
+			ticketTypeRepo: NewTicketTypeRepository(txDB, m.logger),
+			ticketRepo:     NewTicketRepository(txDB, m.logger),
 
 			seatReservationRepo:      NewSeatReservationRepository(txDB, m.logger),
 			checkoutRepo:             NewCheckoutRepository(txDB, m.logger),
 			bookingRepo:              NewBookingRepository(txDB, m.logger),
 			paymentRepo:              NewPaymentRepository(txDB, m.logger),
 			razorpayWebhookEventRepo: NewRazorpayWebhookEventRepository(txDB, m.logger),
-			ticketRepo: NewTicketRepository(txDB,m.logger),
 		}
 
 		return fn(txRepos)

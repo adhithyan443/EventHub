@@ -30,10 +30,11 @@ type TransactionRepositories interface {
 	SeatRepository() SeatRepository
 
 	TicketTypeRepository() TicketTypeRepository
+	TicketRepository() TicketRepository
+
 	SeatReservationRepository() SeatReservationRepository
 	CheckoutRepository() CheckoutRepository
 	BookingRepository() BookingRepository
 	PaymentRepository() PaymentRepository
 	RazorpayWebhookEventRepository() RazorpayWebhookEventRepository
-	TicketRepository() TicketRepository
 }

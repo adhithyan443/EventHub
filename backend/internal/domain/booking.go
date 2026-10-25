@@ -79,4 +79,9 @@ type BookingRepository interface {
 		ctx context.Context,
 		id uuid.UUID,
 	) error
+
+	FindItemsByBookingID(
+		ctx context.Context,
+		bookingID uuid.UUID,
+	) ([]BookingItem, error)
 }
