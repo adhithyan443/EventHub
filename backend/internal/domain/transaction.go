@@ -35,4 +35,5 @@ type TransactionRepositories interface {
 	BookingRepository() BookingRepository
 	PaymentRepository() PaymentRepository
 	RazorpayWebhookEventRepository() RazorpayWebhookEventRepository
+	TicketRepository() TicketRepository
 }

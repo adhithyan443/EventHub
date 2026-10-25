@@ -43,6 +43,7 @@ type transactionRepositories struct {
 	bookingRepo              domain.BookingRepository
 	paymentRepo              domain.PaymentRepository
 	razorpayWebhookEventRepo domain.RazorpayWebhookEventRepository
+	ticketRepo               domain.TicketRepository
 }
 
 func NewTransactionManager(
@@ -134,6 +135,7 @@ func (m *TransactionManager) WithinTransaction(
 			bookingRepo:              NewBookingRepository(txDB, m.logger),
 			paymentRepo:              NewPaymentRepository(txDB, m.logger),
 			razorpayWebhookEventRepo: NewRazorpayWebhookEventRepository(txDB, m.logger),
+			ticketRepo: NewTicketRepository(txDB,m.logger),
 		}
 
 		return fn(txRepos)
@@ -238,4 +240,8 @@ func (r *transactionRepositories) PaymentRepository() domain.PaymentRepository {
 
 func (r *transactionRepositories) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {
 	return r.razorpayWebhookEventRepo
+}
+
+func (r *transactionRepositories) TicketRepository() domain.TicketRepository {
+	return r.ticketRepo
 }
