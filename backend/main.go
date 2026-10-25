@@ -28,6 +28,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/joho/godotenv"
 )
@@ -175,6 +176,16 @@ func main() {
 	)
 	// paymentHandler := handler.NewPaymentHandler(paymentUsecase, logger)
 
+	// ticket
+	ticketRepository := repository.NewTicketRepository(db, logger)
+
+	// Ticket dependencies.
+	ticketUsecase := ticket.NewTicketUsecase(
+		ticketRepository,
+		logger,
+	)
+
+	ticketHandler := handler.NewTicketHandler(ticketUsecase)
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
@@ -284,6 +295,7 @@ func main() {
 		reservationHandler,
 		checkoutHandler,
 		paymentHandler,
+		ticketHandler,
 		jwtService,
 	)
 
