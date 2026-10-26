@@ -26,6 +26,14 @@ type Seat struct {
 	CreatedAt  time.Time
 }
 
+type SeatDetail struct {
+	SeatID      uuid.UUID `json:"seat_id"`
+	SeatNumber  int       `json:"seat_number"`
+	RowName     string    `json:"row_name"`
+	SectionName string    `json:"section_name"`
+	Label       string    `json:"label"`
+}
+
 type SeatRepository interface {
 	Create(seat *Seat) error
 	Update(seat *Seat) error
@@ -33,6 +41,7 @@ type SeatRepository interface {
 	DeleteByRowID(rowID uuid.UUID) error
 	FindByRowID(rowID uuid.UUID) ([]Seat, error)
 	FindByID(seatID uuid.UUID) (*Seat, error)
+	FindDetailsBySeatIDs(ctx context.Context, seatIDs []uuid.UUID) (map[uuid.UUID]SeatDetail, error)
 	CountBookedByLayoutID(layoutID uuid.UUID) (int64, error)
 	ReserveIfAvailable(ctx context.Context, seatID uuid.UUID) error
 	ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error

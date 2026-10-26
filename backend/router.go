@@ -22,6 +22,7 @@ func setupRouter(
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	reservationHandler *handler.ReservationHandler,
 	checkoutHandler *handler.CheckoutHandler,
+	bookingHandler *handler.BookingHandler,
 	paymentHandler *handler.PaymentHandler,
 	ticketHandler *handler.TicketHandler,
 	jwtService *token.JWTService,
@@ -75,6 +76,7 @@ func setupRouter(
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService)
 	registerCheckoutRoutes(router, checkoutHandler, jwtService)
+	registerBookingRoutes(router, bookingHandler, jwtService)
 	registerPaymentRoutes(router, paymentHandler, jwtService)
 	registerTicketRoutes(router, ticketHandler, jwtService)
 
@@ -378,6 +380,20 @@ func registerTicketRoutes(
 
 	tickets.GET("", ticketHandler.GetMyTickets)
 	tickets.GET("/:id", ticketHandler.GetMyTicket)
-
+	tickets.GET("/:id/qr", ticketHandler.GetMyTicketQR)
 	tickets.GET("/:id/download", ticketHandler.DownloadTicketPDF)
+}
+
+func registerBookingRoutes(
+	router *gin.Engine,
+	bookingHandler *handler.BookingHandler,
+	jwtService *token.JWTService,
+) {
+	bookings := router.Group("/api/v1/bookings")
+	bookings.Use(middleware.Auth(jwtService))
+
+	bookings.GET("", bookingHandler.GetMyBookings)
+	bookings.GET("/:id", bookingHandler.GetBookingByID)
+	bookings.GET("/:id/qr", bookingHandler.GetBookingQR)
+	bookings.GET("/:id/download", bookingHandler.DownloadBookingPDF)
 }

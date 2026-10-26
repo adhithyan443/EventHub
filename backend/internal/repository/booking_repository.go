@@ -249,6 +249,54 @@ func (r *bookingRepository) ConfirmPending(
 	return nil
 }
 
+func (r *bookingRepository) FindByUserID(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]domain.Booking, error) {
+	var bookingModels []models.BookingModel
+
+	err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Find(&bookingModels).Error
+
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to find bookings by user ID",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	bookings := make([]domain.Booking, 0, len(bookingModels))
+	for _, m := range bookingModels {
+		bookings = append(bookings, *bookingFromModel(&m))
+	}
+
+	return bookings, nil
+}
+
+func (r *bookingRepository) FindWithItemsByID(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.Booking, []domain.BookingItem, error) {
+	booking, err := r.FindByID(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	items, err := r.FindItemsByBookingID(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if items == nil {
+		items = []domain.BookingItem{}
+	}
+
+	return booking, items, nil
+}
+
 func (r *bookingRepository) FindItemsByBookingID(
 	ctx context.Context,
 	bookingID uuid.UUID,
@@ -281,6 +329,43 @@ func (r *bookingRepository) FindItemsByBookingID(
 	}
 
 	return items, nil
+}
+
+func (r *bookingRepository) FindItemsByBookingIDs(
+	ctx context.Context,
+	bookingIDs []uuid.UUID,
+) (map[uuid.UUID][]domain.BookingItem, error) {
+	result := make(map[uuid.UUID][]domain.BookingItem)
+	if len(bookingIDs) == 0 {
+		return result, nil
+	}
+
+	var itemModels []models.BookingItemModel
+	if err := r.db.WithContext(ctx).
+		Where("booking_id IN ?", bookingIDs).
+		Find(&itemModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find booking items by booking IDs",
+			slog.Int("booking_count", len(bookingIDs)),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	for _, item := range itemModels {
+		result[item.BookingID] = append(result[item.BookingID], domain.BookingItem{
+			ID:           item.ID,
+			BookingID:    item.BookingID,
+			SeatID:       item.SeatID,
+			TicketTypeID: item.TicketTypeID,
+			Quantity:     item.Quantity,
+			UnitPrice:    item.UnitPrice,
+			TotalPrice:   item.TotalPrice,
+			CreatedAt:    item.CreatedAt,
+			UpdatedAt:    item.UpdatedAt,
+		})
+	}
+
+	return result, nil
 }
 
 func bookingToModel(booking *domain.Booking) *models.BookingModel {

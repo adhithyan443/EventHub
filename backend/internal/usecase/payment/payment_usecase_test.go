@@ -271,6 +271,42 @@ func (m *mockBookingRepo) FindItemsByBookingID(ctx context.Context, bookingID uu
 	return m.items[bookingID], nil
 }
 
+func (m *mockBookingRepo) FindItemsByBookingIDs(ctx context.Context, bookingIDs []uuid.UUID) (map[uuid.UUID][]domain.BookingItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make(map[uuid.UUID][]domain.BookingItem)
+	for _, id := range bookingIDs {
+		if items, ok := m.items[id]; ok {
+			res[id] = items
+		}
+	}
+	return res, nil
+}
+
+func (m *mockBookingRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.Booking
+	for _, b := range m.bookings {
+		if b.UserID == userID {
+			res = append(res, *b)
+		}
+	}
+	return res, nil
+}
+
+func (m *mockBookingRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.bookings[id]
+	if !ok {
+		return nil, nil, domain.ErrBookingNotFound
+	}
+	items := m.items[id]
+	copied := *b
+	return &copied, items, nil
+}
+
 type mockCheckoutRepo struct {
 	mu        sync.Mutex
 	checkouts map[uuid.UUID]*domain.Checkout
@@ -587,18 +623,18 @@ func (m *mockPaymentProvider) CheckOrderStatus(ctx context.Context, providerOrde
 // --- Test Fixture Setup ---
 
 type testFixture struct {
-	usecase        *payment.PaymentUsecase
-	paymentRepo    *mockPaymentRepo
-	bookingRepo    *mockBookingRepo
-	checkoutRepo   *mockCheckoutRepo
+	usecase         *payment.PaymentUsecase
+	paymentRepo     *mockPaymentRepo
+	bookingRepo     *mockBookingRepo
+	checkoutRepo    *mockCheckoutRepo
 	reservationRepo *mockSeatReservationRepo
-	ticketRepo     *mockTicketRepo
-	provider       *mockPaymentProvider
-	userID         uuid.UUID
-	checkoutID     uuid.UUID
-	reservationID  uuid.UUID
-	eventID        uuid.UUID
-	totalAmount    decimal.Decimal
+	ticketRepo      *mockTicketRepo
+	provider        *mockPaymentProvider
+	userID          uuid.UUID
+	checkoutID      uuid.UUID
+	reservationID   uuid.UUID
+	eventID         uuid.UUID
+	totalAmount     decimal.Decimal
 }
 
 func setupFixture(t *testing.T) *testFixture {

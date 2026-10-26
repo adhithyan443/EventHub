@@ -36,6 +36,8 @@ type Booking struct {
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	Seats []SeatDetail `json:"seats,omitempty"`
 }
 
 type BookingItem struct {
@@ -48,6 +50,14 @@ type BookingItem struct {
 	TotalPrice   decimal.Decimal
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+
+	Seat *SeatDetail `json:"seat,omitempty"`
+}
+
+type BookingWithItems struct {
+	Booking
+	Items     []BookingItem `json:"items"`
+	QRPayload string        `json:"qr_payload,omitempty"`
 }
 
 type BookingRepository interface {
@@ -71,6 +81,16 @@ type BookingRepository interface {
 		reservationID uuid.UUID,
 	) (*Booking, error)
 
+	FindByUserID(
+		ctx context.Context,
+		userID uuid.UUID,
+	) ([]Booking, error)
+
+	FindWithItemsByID(
+		ctx context.Context,
+		id uuid.UUID,
+	) (*Booking, []BookingItem, error)
+
 	UpdateStatus(
 		ctx context.Context,
 		id uuid.UUID,
@@ -86,4 +106,9 @@ type BookingRepository interface {
 		ctx context.Context,
 		bookingID uuid.UUID,
 	) ([]BookingItem, error)
+
+	FindItemsByBookingIDs(
+		ctx context.Context,
+		bookingIDs []uuid.UUID,
+	) (map[uuid.UUID][]BookingItem, error)
 }

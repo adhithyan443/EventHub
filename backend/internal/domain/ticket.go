@@ -38,6 +38,8 @@ type Ticket struct {
 	UsedAt          *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+
+	Seat *SeatDetail `json:"seat,omitempty"`
 }
 
 type TicketRepository interface {

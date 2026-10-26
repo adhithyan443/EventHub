@@ -67,14 +67,16 @@ export default function AppRoutes() {
             <Route path="/users" element={<DiscoverEventsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
 
-            {/* Customer Bookings & Tickets (Responsive UI Flow) */}
-            <Route path="/my-bookings" element={<MyBookingsPage />} />
-            <Route path="/my-tickets" element={<MyBookingsPage />} />
-            <Route path="/bookings" element={<Navigate to="/my-bookings" replace />} />
-            <Route path="/tickets" element={<Navigate to="/my-tickets" replace />} />
-            <Route path="/bookings/:bookingId" element={<BookingDetailsPage />} />
-            <Route path="/bookings/:bookingId/ticket" element={<TicketPage />} />
-            <Route path="/my-tickets/:ticketId" element={<TicketPage />} />
+            {/* Customer Bookings & Tickets (Protected Customer Flow) */}
+            <Route element={<ProtectedRoute />}>
+                <Route path="/my-bookings" element={<MyBookingsPage />} />
+                <Route path="/my-tickets" element={<MyBookingsPage />} />
+                <Route path="/bookings" element={<Navigate to="/my-bookings" replace />} />
+                <Route path="/tickets" element={<Navigate to="/my-tickets" replace />} />
+                <Route path="/bookings/:bookingId" element={<BookingDetailsPage />} />
+                <Route path="/bookings/:bookingId/ticket" element={<TicketPage />} />
+                <Route path="/my-tickets/:ticketId" element={<TicketPage />} />
+            </Route>
 
             {/* Customer Event Details → Seat Selection */}
             <Route path="/events/:eventId" element={<CustomerEventDetailsPage />} />

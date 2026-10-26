@@ -1111,10 +1111,33 @@ export default function CheckoutPage() {
               </div>
 
               {/* Action Buttons */}
-              <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 flex-wrap">
+                {confirmedBooking?.ID || confirmedBooking?.id ? (
+                  <>
+                    <Link
+                      to={`/bookings/${confirmedBooking.ID || confirmedBooking.id}/ticket`}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-[#00796d] px-6 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+                    >
+                      View Tickets
+                    </Link>
+                    <Link
+                      to={`/bookings/${confirmedBooking.ID || confirmedBooking.id}`}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#00796d] bg-white px-6 py-3 text-sm font-bold text-[#00796d] hover:bg-[#e6f4f2] transition-colors"
+                    >
+                      Booking Details
+                    </Link>
+                  </>
+                ) : (
+                  <Link
+                    to="/my-bookings"
+                    className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-[#00796d] px-6 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+                  >
+                    My Bookings
+                  </Link>
+                )}
                 <Link
                   to="/events"
-                  className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-[#00796d] px-6 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+                  className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#bcc9c6] bg-white px-6 py-3 text-sm font-bold text-ink hover:bg-slate-50 transition-colors"
                 >
                   Browse More Events
                 </Link>

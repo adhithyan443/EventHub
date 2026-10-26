@@ -159,6 +159,12 @@ func main() {
 		logger,
 	)
 
+	bookingHandler := handler.NewBookingHandler(
+		bookingUsecase,
+		qrService,
+		logger,
+	)
+
 	// Payment dependencies.
 	razorpayProvider, err := payment.NewRazorpayProvider(
 		cfg.RazorpayKeyID,
@@ -312,6 +318,7 @@ func main() {
 		seatLayoutHandler,
 		reservationHandler,
 		checkoutHandler,
+		bookingHandler,
 		paymentHandler,
 		ticketHandler,
 		jwtService,
