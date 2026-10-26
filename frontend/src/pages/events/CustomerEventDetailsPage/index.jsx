@@ -23,6 +23,32 @@ const formatDate = (dateStr) => {
   });
 };
 
+const parseLocalDateOnly = (dateStr) => {
+  if (!dateStr) return null;
+  const datePart = typeof dateStr === "string" ? dateStr.split("T")[0] : "";
+  const parts = datePart.split("-");
+  if (parts.length === 3) {
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    const d = new Date(year, month, day);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  const fallback = new Date(dateStr);
+  return Number.isNaN(fallback.getTime()) ? null : fallback;
+};
+
+const formatDateOnly = (dateStr) => {
+  if (!dateStr) return "Date TBA";
+  const localDate = parseLocalDateOnly(dateStr);
+  if (!localDate) return formatDate(dateStr);
+  return localDate.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
+
 const formatFullDate = (dateStr) => {
   if (!dateStr) return "Date TBA";
   const d = new Date(dateStr);
@@ -361,8 +387,54 @@ export default function CustomerEventDetailsPage() {
     );
   }
 
-  // Derive status badge display
-  let statusBadgeText = "Tickets Available";
+  // Derive sales dates & event timing flags
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+
+  const salesStartObj = parseLocalDateOnly(event.setting?.sales_start_date);
+  const salesEndObj = parseLocalDateOnly(event.setting?.sales_end_date);
+
+  const isSalesUpcoming = Boolean(salesStartObj && todayStart < salesStartObj);
+
+  let isSalesClosed = false;
+  if (salesEndObj) {
+    const salesEndDeadline = new Date(salesEndObj);
+    salesEndDeadline.setHours(23, 59, 59, 999);
+    isSalesClosed = now > salesEndDeadline;
+  }
+
+  let isEventPast = false;
+  if (event.schedule?.event_date) {
+    const schedDate = parseLocalDateOnly(event.schedule.event_date);
+    if (schedDate) {
+      if (event.schedule.is_all_day || !event.schedule.end_time) {
+        const endOfDay = new Date(schedDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        isEventPast = now > endOfDay;
+      } else {
+        const endParts = event.schedule.end_time.split(":");
+        const endHour = parseInt(endParts[0], 10) || 0;
+        const endMinute = parseInt(endParts[1] || "0", 10) || 0;
+        const endSecond = parseInt(endParts[2] || "0", 10) || 0;
+
+        let startHour = 0;
+        let startMinute = 0;
+        if (event.schedule.start_time) {
+          const startParts = event.schedule.start_time.split(":");
+          startHour = parseInt(startParts[0], 10) || 0;
+          startMinute = parseInt(startParts[1] || "0", 10) || 0;
+        }
+
+        const effectiveEnd = new Date(schedDate);
+        if (endHour < startHour || (endHour === startHour && endMinute < startMinute)) {
+          effectiveEnd.setDate(effectiveEnd.getDate() + 1);
+        }
+        effectiveEnd.setHours(endHour, endMinute, endSecond, 0);
+        isEventPast = now > effectiveEnd;
+      }
+    }
+  }
+
   const allSoldOut =
     event.ticket_types &&
     event.ticket_types.length > 0 &&
@@ -371,7 +443,24 @@ export default function CustomerEventDetailsPage() {
     event.ticket_types &&
     event.ticket_types.some((t) => t.status === "SELLING_FAST");
 
-  if (allSoldOut) {
+  const totalSeatedAvailable = (event.ticket_types || []).reduce(
+    (sum, s) => sum + (s.available_quantity || 0),
+    0
+  );
+  const totalSeatedCapacity = (event.ticket_types || []).reduce(
+    (sum, s) => sum + (s.total_quantity || 0),
+    0
+  );
+
+  // Derive status badge display
+  let statusBadgeText = "Tickets Available";
+  if (isEventPast) {
+    statusBadgeText = "Event Concluded";
+  } else if (isSalesUpcoming) {
+    statusBadgeText = "Sales Upcoming";
+  } else if (isSalesClosed) {
+    statusBadgeText = "Sales Closed";
+  } else if (allSoldOut) {
     statusBadgeText = "Sold Out";
   } else if (anySellingFast) {
     statusBadgeText = "Selling Fast";
@@ -444,7 +533,11 @@ export default function CustomerEventDetailsPage() {
                 </div>
                 <span
                   className={`inline-flex items-center self-start sm:self-center rounded-full border border-[#bcc9c6] px-4 py-2 text-xs sm:text-sm font-semibold whitespace-nowrap ${
-                    allSoldOut
+                    isEventPast || isSalesClosed
+                      ? "bg-slate-100 text-slate-700"
+                      : isSalesUpcoming
+                      ? "bg-amber-100 text-amber-800"
+                      : allSoldOut
                       ? "bg-red-100 text-red-700"
                       : anySellingFast
                       ? "bg-amber-100 text-amber-800"
@@ -583,6 +676,76 @@ export default function CustomerEventDetailsPage() {
           <aside className="space-y-6">
             {/* Booking Card: Conditional for General Admission vs Reserved Seating */}
             <section className="top-20 rounded-xl border border-[#bcc9c6] bg-white p-5 sm:p-6 shadow-xs">
+              {/* Ticket Sales Information & Schedule */}
+              <div className="mb-5 rounded-lg border border-[#d8dfdd] bg-[#f9f9ff] p-3 text-xs">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold uppercase tracking-wider text-[#565e74] flex items-center gap-1.5">
+                    <span className="text-[#00796d]">🎟</span> Ticket Sales
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${
+                      isEventPast
+                        ? "bg-slate-200 text-slate-700"
+                        : isSalesUpcoming
+                        ? "bg-amber-100 text-amber-800"
+                        : isSalesClosed
+                        ? "bg-red-100 text-red-700"
+                        : allSoldOut
+                        ? "bg-red-100 text-red-700"
+                        : "bg-[#dff2ee] text-[#00796d]"
+                    }`}
+                  >
+                    {isEventPast
+                      ? "Event Concluded"
+                      : isSalesUpcoming
+                      ? "Upcoming"
+                      : isSalesClosed
+                      ? "Closed"
+                      : allSoldOut
+                      ? "Sold Out"
+                      : "Open"}
+                  </span>
+                </div>
+
+                <div className="space-y-1 text-[#565e74]">
+                  {event.setting?.sales_start_date && (
+                    <div className="flex items-center justify-between">
+                      <span>Sales Start:</span>
+                      <strong className="text-ink font-medium">
+                        {formatDateOnly(event.setting.sales_start_date)}
+                      </strong>
+                    </div>
+                  )}
+                  {event.setting?.sales_end_date && (
+                    <div className="flex items-center justify-between">
+                      <span>Sales End:</span>
+                      <strong className="text-ink font-medium">
+                        {formatDateOnly(event.setting.sales_end_date)}
+                      </strong>
+                    </div>
+                  )}
+                  {!event.setting?.sales_start_date && !event.setting?.sales_end_date && (
+                    <p className="text-[11px] text-[#565e74]">
+                      Ticket sales are open until the event concludes.
+                    </p>
+                  )}
+                </div>
+
+                {isEventPast ? (
+                  <p className="mt-2 border-t border-[#e2e8f0] pt-2 text-[11px] text-red-600 font-medium">
+                    This event has concluded. Ticket bookings are closed.
+                  </p>
+                ) : isSalesUpcoming ? (
+                  <p className="mt-2 border-t border-[#e2e8f0] pt-2 text-[11px] text-amber-700 font-medium">
+                    Booking opens on {formatDateOnly(event.setting.sales_start_date)}.
+                  </p>
+                ) : isSalesClosed ? (
+                  <p className="mt-2 border-t border-[#e2e8f0] pt-2 text-[11px] text-red-600 font-medium">
+                    Ticket sales closed on {formatDateOnly(event.setting.sales_end_date)}.
+                  </p>
+                ) : null}
+              </div>
+
               {isSeated ? (
                 /* RESERVED SEATING CARD */
                 <div>
@@ -596,6 +759,14 @@ export default function CustomerEventDetailsPage() {
                     <p className="mt-1 text-xs text-[#565e74] leading-relaxed">
                       This event uses reserved seating. Pick your exact seats directly on the interactive venue layout.
                     </p>
+                    {totalSeatedCapacity > 0 && (
+                      <div className="mt-2.5 flex items-center justify-between rounded-lg bg-[#f0f4f8] px-3 py-2 text-xs text-[#334155]">
+                        <span className="font-medium">Total Availability:</span>
+                        <span className="font-bold text-[#00796d]">
+                          {totalSeatedAvailable} of {totalSeatedCapacity} seats remaining
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Section Pricing Breakdown */}
@@ -616,8 +787,10 @@ export default function CustomerEventDetailsPage() {
                                 <span className="font-semibold text-ink block">{section.name}</span>
                                 <span className="text-[11px] text-[#565e74]">
                                   {section.available_quantity > 0
-                                    ? `${section.available_quantity} seats available`
-                                    : "Sold Out"}
+                                    ? section.total_quantity > 0
+                                      ? `${section.available_quantity} of ${section.total_quantity} seats available`
+                                      : `${section.available_quantity} seats available`
+                                    : "0 seats available (Sold Out)"}
                                 </span>
                               </div>
                               <div className="text-right">
@@ -668,10 +841,18 @@ export default function CustomerEventDetailsPage() {
                   <button
                     type="button"
                     onClick={() => navigate(`/events/${eventId}/seats`)}
-                    disabled={allSoldOut}
+                    disabled={allSoldOut || isSalesUpcoming || isSalesClosed || isEventPast}
                     className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
                   >
-                    Select Seats on Map →
+                    {isEventPast
+                      ? "Event Completed"
+                      : isSalesUpcoming
+                      ? "Sales Not Started"
+                      : isSalesClosed
+                      ? "Sales Closed"
+                      : allSoldOut
+                      ? "All Seats Sold Out"
+                      : "Select Seats on Map →"}
                   </button>
 
                   <p className="mt-3 text-center text-xs text-[#565e74]">
@@ -704,6 +885,8 @@ export default function CustomerEventDetailsPage() {
                         const qty = quantities[tier.id] || 0;
                         const isSoldOut =
                           tier.status === "SOLD_OUT" || tier.available_quantity === 0;
+                        const isUnavailable =
+                          isSoldOut || isSalesUpcoming || isSalesClosed || isEventPast;
                         const maxBooking = event.setting?.booking_limit_per_user || 9;
                         const maxQty = Math.min(
                           maxBooking,
@@ -714,7 +897,7 @@ export default function CustomerEventDetailsPage() {
                           <div
                             key={tier.id}
                             onClick={() => {
-                              if (!isSoldOut) {
+                              if (!isUnavailable) {
                                 setSelectedTicketId(tier.id);
                                 if (!quantities[tier.id]) {
                                   setQuantities((prev) => ({ ...prev, [tier.id]: 1 }));
@@ -722,7 +905,7 @@ export default function CustomerEventDetailsPage() {
                               }
                             }}
                             className={`rounded-lg border p-4 transition-all ${
-                              isSoldOut
+                              isUnavailable
                                 ? "border-slate-200 bg-slate-50 opacity-60 cursor-not-allowed"
                                 : isSelected
                                 ? "border-[#00796d] bg-[#f8fffe] shadow-xs cursor-pointer"
@@ -743,21 +926,30 @@ export default function CustomerEventDetailsPage() {
                             </p>
 
                             <div className="mt-4 flex items-center justify-between border-t border-[#d8dfdd] pt-3">
-                              <span
-                                className={`rounded px-2 py-0.5 text-xs font-semibold ${
-                                  isSoldOut
-                                    ? "bg-red-100 text-red-700"
+                              <div className="flex flex-col gap-0.5">
+                                <span
+                                  className={`rounded px-2 py-0.5 text-xs font-semibold self-start ${
+                                    isSoldOut
+                                      ? "bg-red-100 text-red-700"
+                                      : tier.status === "SELLING_FAST"
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-[#dff2ee] text-[#00796d]"
+                                  }`}
+                                >
+                                  {isSoldOut
+                                    ? "Sold Out"
                                     : tier.status === "SELLING_FAST"
-                                    ? "bg-amber-100 text-amber-800"
-                                    : "bg-[#dff2ee] text-[#00796d]"
-                                }`}
-                              >
-                                {isSoldOut
-                                  ? "Sold Out"
-                                  : tier.status === "SELLING_FAST"
-                                  ? "Selling Fast"
-                                  : "Available"}
-                              </span>
+                                    ? "Selling Fast"
+                                    : "Available"}
+                                </span>
+                                <span className="text-[11px] text-[#565e74]">
+                                  {isSoldOut
+                                    ? "0 tickets available"
+                                    : tier.total_quantity > 0
+                                    ? `${tier.available_quantity} of ${tier.total_quantity} tickets available`
+                                    : `${tier.available_quantity} tickets available`}
+                                </span>
+                              </div>
 
                               <div
                                 className="flex items-center gap-3"
@@ -766,7 +958,7 @@ export default function CustomerEventDetailsPage() {
                                 <button
                                   type="button"
                                   onClick={() => handleQuantityChange(tier.id, -1, maxQty)}
-                                  disabled={qty <= 0 || isSoldOut}
+                                  disabled={qty <= 0 || isUnavailable}
                                   className="counter-btn disabled:opacity-30 disabled:cursor-not-allowed"
                                   aria-label={`Decrease ${tier.name} ticket quantity`}
                                 >
@@ -778,7 +970,7 @@ export default function CustomerEventDetailsPage() {
                                 <button
                                   type="button"
                                   onClick={() => handleQuantityChange(tier.id, 1, maxQty)}
-                                  disabled={qty >= maxQty || isSoldOut}
+                                  disabled={qty >= maxQty || isUnavailable}
                                   className="counter-btn disabled:opacity-30 disabled:cursor-not-allowed"
                                   aria-label={`Increase ${tier.name} ticket quantity`}
                                 >
@@ -837,7 +1029,11 @@ export default function CustomerEventDetailsPage() {
                     disabled={
                       !selectedTicketId ||
                       (quantities[selectedTicketId] || 0) <= 0 ||
-                      isReserving
+                      isReserving ||
+                      allSoldOut ||
+                      isSalesUpcoming ||
+                      isSalesClosed ||
+                      isEventPast
                     }
                     className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-2"
                   >
@@ -846,6 +1042,14 @@ export default function CustomerEventDetailsPage() {
                         <span className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                         <span>Reserving Tickets...</span>
                       </>
+                    ) : isEventPast ? (
+                      "Event Completed"
+                    ) : isSalesUpcoming ? (
+                      "Sales Not Started"
+                    ) : isSalesClosed ? (
+                      "Sales Closed"
+                    ) : allSoldOut ? (
+                      "Sold Out"
                     ) : (
                       "Book Tickets"
                     )}

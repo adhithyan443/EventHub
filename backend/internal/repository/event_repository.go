@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -389,6 +390,8 @@ func (r *EventRepository) FindPublicEvents(
 
 	offset := (filter.Page - 1) * filter.Limit
 
+	now := time.Now()
+
 	baseQuery := r.db.
 		Table("events AS e").
 		Joins("INNER JOIN categories AS c ON c.id = e.category_id").
@@ -396,7 +399,17 @@ func (r *EventRepository) FindPublicEvents(
 		Joins("INNER JOIN event_schedules AS es ON es.event_id = e.id").
 		Joins("LEFT JOIN event_settings AS eset ON eset.event_id = e.id").
 		Where("e.status = ?", domain.EventStatusPublished).
-		Where("e.visibility = ?", "PUBLIC")
+		Where("e.visibility = ?", "PUBLIC").
+		Where(`(
+			CASE
+				WHEN es.is_all_day = true THEN (es.event_date + TIME '23:59:59')
+				WHEN es.end_time IS NOT NULL AND es.start_time IS NOT NULL AND es.end_time < es.start_time
+					THEN (es.event_date + INTERVAL '1 day' + es.end_time)
+				WHEN es.end_time IS NOT NULL
+					THEN (es.event_date + es.end_time)
+				ELSE (es.event_date + TIME '23:59:59')
+			END
+		) >= ?`, now)
 
 	if filter.Keyword != "" {
 		keyword := "%" + strings.ToLower(filter.Keyword) + "%"
