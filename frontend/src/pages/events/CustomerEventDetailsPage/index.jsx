@@ -1,9 +1,15 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
+import { useParams, useNavigate, useLocation, useNavigationType, Link } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import { getPublicEventById } from "../../../api/eventApi";
-import { createReservation } from "../../../api/reservationApi";
+import {
+  createReservation,
+  cancelReservation,
+  getStoredReservation,
+  clearStoredReservation,
+  cancelStoredReservation,
+} from "../../../api/reservationApi";
 import useAuthStore from "../../../store/authStore";
 
 const formatDate = (dateStr) => {
@@ -83,6 +89,7 @@ const formatFullVenue = (event) => {
 export default function CustomerEventDetailsPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
+  const navigationType = useNavigationType();
 
   const [event, setEvent] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -110,6 +117,22 @@ export default function CustomerEventDetailsPage() {
       setError(null);
       setIsNotFound(false);
       setBannerFallback(false);
+
+      // If returning via browser Back or landing on event details with an existing active reservation:
+      // Cancel previous reservation to restore ticket availability before querying event details.
+      const stored = getStoredReservation(eventId);
+      if (stored?.reservationId && !stored.isExpired) {
+        console.info("[CustomerEventDetails] Active reservation found on event details load/back; releasing before details fetch", {
+          event_id: eventId,
+          reservation_id: stored.reservationId,
+          navigation_type: navigationType,
+        });
+        try {
+          await cancelStoredReservation(eventId);
+        } catch (cancelErr) {
+          console.warn("[CustomerEventDetails] Could not cancel stored reservation on mount:", cancelErr?.message);
+        }
+      }
 
       try {
         const response = await getPublicEventById(eventId);
@@ -150,7 +173,7 @@ export default function CustomerEventDetailsPage() {
     return () => {
       cancelled = true;
     };
-  }, [eventId, retryCount]);
+  }, [eventId, retryCount, navigationType]);
 
   const handleQuantityChange = (tierId, delta, maxLimit) => {
     setSelectedTicketId(tierId);
@@ -205,34 +228,35 @@ export default function CustomerEventDetailsPage() {
     const cacheKey = `eventhub_reservation_${eventId}`;
 
     try {
-      // Check client-side cache as an optimization, never as proof of active inventory
-      const cachedRaw = sessionStorage.getItem(cacheKey);
-      if (cachedRaw) {
-        try {
-          const cached = JSON.parse(cachedRaw);
-          const expiresAtRaw = cached.reservation?.ExpiresAt || cached.reservation?.expires_at;
-          const expiresAtTime = expiresAtRaw ? new Date(expiresAtRaw).getTime() : 0;
-          // Only reuse if matching same ticket tier and quantity, and strictly not expired (> 30s remaining)
-          if (
-            cached.selectedTicketId === selectedTicketId &&
-            cached.quantity === qty &&
-            expiresAtTime - Date.now() > 30000
-          ) {
-            navigate(`/events/${eventId}/checkout`, {
-              state: {
-                reservation: cached.reservation,
-                selectedTicket: selectedTier?.name || "General",
-                selectedTicketId,
-                ticketPrice: selectedTier?.price ?? event?.starting_price,
-                quantity: qty,
-              },
+      // Check stored reservation
+      const stored = getStoredReservation(eventId);
+      if (stored?.reservationId) {
+        const tierMatch =
+          stored.selectedTicketId === selectedTicketId &&
+          stored.quantity === qty;
+
+        // Only reuse if matching same ticket tier and quantity, and strictly not expired (> 30s remaining)
+        if (tierMatch && !stored.isExpired && (stored.expiresAt - Date.now() > 30000)) {
+          navigate(`/events/${eventId}/checkout`, {
+            state: {
+              reservation: stored.reservation,
+              selectedTicket: selectedTier?.name || "General",
+              selectedTicketId,
+              ticketPrice: selectedTier?.price ?? event?.starting_price,
+              quantity: qty,
+            },
+          });
+          return;
+        } else {
+          // Changed tier or quantity: cancel previous active reservation before creating the replacement!
+          if (!stored.isExpired) {
+            console.info("[CustomerEventDetails] Selection changed; cancelling previous reservation before new reservation", {
+              event_id: eventId,
+              previous_reservation_id: stored.reservationId,
             });
-            return;
-          } else {
-            sessionStorage.removeItem(cacheKey);
+            await cancelReservation(stored.reservationId);
           }
-        } catch {
-          sessionStorage.removeItem(cacheKey);
+          clearStoredReservation(eventId);
         }
       }
 

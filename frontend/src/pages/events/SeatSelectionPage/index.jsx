@@ -1,10 +1,16 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
+import { useParams, useNavigate, useLocation, useNavigationType } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import OrderPriceSummary from "../components/OrderPriceSummary";
 import { getPublicEventById, getPublicEventSeatLayout } from "../../../api/eventApi";
-import { createReservation } from "../../../api/reservationApi";
+import {
+  createReservation,
+  cancelReservation,
+  getStoredReservation,
+  clearStoredReservation,
+  cancelStoredReservation,
+} from "../../../api/reservationApi";
 import useAuthStore from "../../../store/authStore";
 
 const formatDate = (dateStr) => {
@@ -33,6 +39,7 @@ export default function SeatSelectionPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const navigationType = useNavigationType();
 
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
 
@@ -65,6 +72,22 @@ export default function SeatSelectionPage() {
       setLoading(true);
       setError(null);
       setIsNotFound(false);
+
+      // If returning via browser Back or landing on seat selection with an existing active reservation:
+      // Cancel previous reservation so previously held seats unlock on the map before layout query.
+      const stored = getStoredReservation(eventId);
+      if (stored?.reservationId && !stored.isExpired) {
+        console.info("[SeatSelection] Active reservation found on seat page load/back; releasing seats before layout fetch", {
+          event_id: eventId,
+          reservation_id: stored.reservationId,
+          navigation_type: navigationType,
+        });
+        try {
+          await cancelStoredReservation(eventId);
+        } catch (cancelErr) {
+          console.warn("[SeatSelection] Could not cancel stored reservation on mount:", cancelErr?.message);
+        }
+      }
 
       try {
         const [eventRes, layoutRes] = await Promise.all([
@@ -106,7 +129,7 @@ export default function SeatSelectionPage() {
     return () => {
       cancelled = true;
     };
-  }, [eventId, retryCount]);
+  }, [eventId, retryCount, navigationType]);
 
   const bookingLimit = event?.setting?.booking_limit_per_user || 9;
 
@@ -158,6 +181,18 @@ export default function SeatSelectionPage() {
     rawTotal: totalNum,
   };
 
+  const handleBackToDetails = async (e) => {
+    if (e?.preventDefault) e.preventDefault();
+    if (eventId) {
+      try {
+        await cancelStoredReservation(eventId);
+      } catch (err) {
+        console.warn("[SeatSelection] Could not cancel stored reservation on back to details:", err?.message);
+      }
+    }
+    navigate(eventId ? `/events/${eventId}` : "/events");
+  };
+
   const handleContinueToCheckout = async () => {
     if (selectedSeats.length === 0) return;
 
@@ -177,38 +212,37 @@ export default function SeatSelectionPage() {
     const selectedSeatIds = selectedSeats.map((s) => s.id);
 
     try {
-      // Client-side cache check as an optimization, never as proof of inventory
-      const cachedRaw = sessionStorage.getItem(cacheKey);
-      if (cachedRaw) {
-        try {
-          const cached = JSON.parse(cachedRaw);
-          const expiresAtRaw =
-            cached.reservation?.ExpiresAt || cached.reservation?.expires_at;
-          const expiresAtTime = expiresAtRaw ? new Date(expiresAtRaw).getTime() : 0;
+      // Check if there is an existing active reservation for this event
+      const stored = getStoredReservation(eventId);
+      if (stored?.reservationId) {
+        const cachedSeatIds = (stored.selectedSeatObjects || []).map((s) => s.id);
+        const seatsMatch =
+          cachedSeatIds.length === selectedSeatIds.length &&
+          selectedSeatIds.every((id) => cachedSeatIds.includes(id));
 
-          // Check if cached reservation matches the exact same seats and has > 30s left
-          const cachedSeatIds = (cached.selectedSeatObjects || []).map((s) => s.id);
-          const seatsMatch =
-            cachedSeatIds.length === selectedSeatIds.length &&
-            selectedSeatIds.every((id) => cachedSeatIds.includes(id));
-
-          if (seatsMatch && expiresAtTime - Date.now() > 30000) {
-            navigate(`/events/${eventId}/checkout`, {
-              state: {
-                reservation: cached.reservation,
-                selectedSeats: selectedSeats.map((s) => `${s.rowName}${s.seatNumber}`),
-                selectedSeatObjects: selectedSeats,
-                pricing,
-                quantity: selectedSeats.length,
-                ticketPrice: selectedSeats[0]?.price,
-              },
+        // Only reuse if matching the exact same seats and strictly not expired (> 30s remaining)
+        if (seatsMatch && !stored.isExpired && (stored.expiresAt - Date.now() > 30000)) {
+          navigate(`/events/${eventId}/checkout`, {
+            state: {
+              reservation: stored.reservation,
+              selectedSeats: selectedSeats.map((s) => `${s.rowName}${s.seatNumber}`),
+              selectedSeatObjects: selectedSeats,
+              pricing,
+              quantity: selectedSeats.length,
+              ticketPrice: selectedSeats[0]?.price,
+            },
+          });
+          return;
+        } else {
+          // Changed seats or expired: cancel previous active reservation before creating the replacement!
+          if (!stored.isExpired) {
+            console.info("[SeatSelection] Seats changed; cancelling previous reservation before new reservation", {
+              event_id: eventId,
+              previous_reservation_id: stored.reservationId,
             });
-            return;
-          } else {
-            sessionStorage.removeItem(cacheKey);
+            await cancelReservation(stored.reservationId);
           }
-        } catch {
-          sessionStorage.removeItem(cacheKey);
+          clearStoredReservation(eventId);
         }
       }
 
@@ -309,12 +343,13 @@ export default function SeatSelectionPage() {
                   Try Again
                 </button>
               )}
-              <Link
-                to={eventId ? `/events/${eventId}` : "/events"}
-                className="rounded-lg border border-[#bcc9c6] bg-white px-5 py-2.5 text-sm font-semibold text-[#141b2b] hover:bg-slate-50 transition-colors"
+              <button
+                type="button"
+                onClick={handleBackToDetails}
+                className="rounded-lg border border-[#bcc9c6] bg-white px-5 py-2.5 text-sm font-semibold text-[#141b2b] hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 Back to Event Details
-              </Link>
+              </button>
             </div>
           </div>
         </main>
@@ -332,12 +367,13 @@ export default function SeatSelectionPage() {
       <main className="mx-auto w-full max-w-[1440px] flex-1 px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {/* Navigation back link */}
         <div className="mb-4 sm:mb-6">
-          <Link
-            to={`/events/${eventId}`}
-            className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-[#00685f] hover:text-[#00796d] transition-colors"
+          <button
+            type="button"
+            onClick={handleBackToDetails}
+            className="inline-flex items-center gap-2 text-xs sm:text-sm font-semibold text-[#00685f] hover:text-[#00796d] transition-colors cursor-pointer"
           >
             <span>←</span> Back to Event Details
-          </Link>
+          </button>
         </div>
 
         <div className="grid gap-8 lg:grid-cols-[minmax(0,2fr)_minmax(330px,1fr)] items-start">
