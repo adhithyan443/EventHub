@@ -27,6 +27,7 @@ import (
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
@@ -307,6 +308,17 @@ func main() {
 		logger,
 	)
 
+	// Pricing and Tax configuration dependencies.
+	pricingTaxUsecase := pricingtax.NewPricingTaxUsecase(
+		txManager,
+		logger,
+	)
+
+	adminPricingTaxHandler := handler.NewAdminPricingTaxHandler(
+		pricingTaxUsecase,
+		logger,
+	)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -321,6 +333,7 @@ func main() {
 		bookingHandler,
 		paymentHandler,
 		ticketHandler,
+		adminPricingTaxHandler,
 		jwtService,
 	)
 

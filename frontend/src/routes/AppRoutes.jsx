@@ -24,6 +24,7 @@ import AdminDashboardPage from "../pages/admin/AdminDashboardPage";
 import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
+import AdminPricingTaxPage from "../pages/admin/AdminPricingTaxPage";
 import VenueDemoPage from "../pages/venue/VenueDemoPage";
 
 // Organizer UI Components
@@ -105,6 +106,7 @@ export default function AppRoutes() {
                     <Route path="events" element={<AdminPlaceholderPage title="Events" />} />
                     <Route path="bookings" element={<AdminPlaceholderPage title="Bookings" />} />
                     <Route path="payments" element={<AdminPlaceholderPage title="Payments & Refunds" />} />
+                    <Route path="pricing-tax" element={<AdminPricingTaxPage />} />
                     <Route path="categories" element={<AdminPlaceholderPage title="Categories" />} />
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />
                 </Route>

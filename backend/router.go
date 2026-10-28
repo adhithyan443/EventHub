@@ -25,6 +25,7 @@ func setupRouter(
 	bookingHandler *handler.BookingHandler,
 	paymentHandler *handler.PaymentHandler,
 	ticketHandler *handler.TicketHandler,
+	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -71,7 +72,7 @@ func setupRouter(
 		jwtService,
 	)
 
-	registerAdminRoutes(router, organizerApplicationHandler, jwtService)
+	registerAdminRoutes(router, organizerApplicationHandler, adminPricingTaxHandler, jwtService)
 	registerCategoryRoutes(router, categoryHandler)
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService)
@@ -249,6 +250,7 @@ func registerOrganizerRoutes(
 func registerAdminRoutes(
 	router *gin.Engine,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
+	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
 	jwtService *token.JWTService,
 ) {
 	api := router.Group("/api/v1")
@@ -278,6 +280,13 @@ func registerAdminRoutes(
 		"/organizer-applications/:id/reject",
 		organizerApplicationHandler.RejectApplication,
 	)
+
+	// Pricing and Tax configuration endpoints
+	admin.GET("/pricing-tax", adminPricingTaxHandler.GetCurrentAndTimeline)
+	admin.GET("/pricing-tax/history", adminPricingTaxHandler.GetHistory)
+	admin.POST("/pricing-tax/publish", adminPricingTaxHandler.PublishImmediate)
+	admin.POST("/pricing-tax/schedule", adminPricingTaxHandler.ScheduleFuture)
+	admin.POST("/pricing-tax/scheduled/:id/cancel", adminPricingTaxHandler.CancelScheduled)
 }
 
 func registerCategoryRoutes(

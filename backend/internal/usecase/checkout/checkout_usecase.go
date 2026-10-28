@@ -8,7 +8,6 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 type CheckoutUsecase struct {
@@ -96,35 +95,29 @@ func (u *CheckoutUsecase) CreateCheckout(
 				return domain.ErrInvalidReservationRequest
 			}
 
-			subtotal := decimal.Zero
-
-			for _, item := range items {
-				if item.Quantity <= 0 || item.Price.IsNegative() {
-					return domain.ErrInvalidReservationRequest
-				}
-
-				subtotal = subtotal.Add(item.Total())
+			pricingConfig, err := tx.PricingTaxConfigurationRepository().FindActiveAt(ctx, now)
+			if err != nil {
+				u.logger.ErrorContext(ctx, "failed to resolve active pricing configuration for checkout",
+					slog.String("reservation_id", reservation.ID.String()),
+					slog.String("error", err.Error()),
+				)
+				return domain.ErrPricingConfigurationUnavailable
 			}
 
-			// Pricing policies are not finalized yet.
-			platformFee := decimal.Zero
-			taxAmount := decimal.Zero
-			discountAmount := decimal.Zero
-
-			totalAmount := subtotal.
-				Add(platformFee).
-				Add(taxAmount).
-				Sub(discountAmount)
+			pricingBreakdown, err := domain.CalculatePricing(items, pricingConfig)
+			if err != nil {
+				return err
+			}
 
 			checkout = &domain.Checkout{
 				ID:             uuid.New(),
 				ReservationID:  reservation.ID,
 				UserID:         req.UserID,
-				Subtotal:       subtotal,
-				PlatformFee:    platformFee,
-				TaxAmount:      taxAmount,
-				DiscountAmount: discountAmount,
-				TotalAmount:    totalAmount,
+				Subtotal:       pricingBreakdown.Subtotal,
+				PlatformFee:    pricingBreakdown.PlatformFee,
+				TaxAmount:      pricingBreakdown.TaxAmount,
+				DiscountAmount: pricingBreakdown.DiscountAmount,
+				TotalAmount:    pricingBreakdown.TotalAmount,
 				Status:         domain.CheckoutStatusActive,
 				ExpiresAt:      reservation.ExpiresAt,
 				CreatedAt:      now,
