@@ -52,6 +52,10 @@ func (m *mockBookingRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.B
 	return nil, domain.ErrBookingNotFound
 }
 
+func (m *mockBookingRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+	return m.FindByID(ctx, id)
+}
+
 func (m *mockBookingRepo) FindByBookingNumber(ctx context.Context, bookingNumber string) (*domain.Booking, error) {
 	for _, b := range m.bookingsByID {
 		if b.BookingNumber == bookingNumber {
@@ -124,6 +128,18 @@ func (m *mockBookingRepo) FindItemsByBookingIDs(ctx context.Context, bookingIDs 
 		}
 	}
 	return result, nil
+}
+
+func (m *mockBookingRepo) FindItemsByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingItem, error) {
+	var items []domain.BookingItem
+	for _, itemList := range m.createdItems {
+		for _, item := range itemList {
+			if item.BookingID == bookingID {
+				items = append(items, item)
+			}
+		}
+	}
+	return items, nil
 }
 
 type mockCheckoutRepo struct {
@@ -224,7 +240,8 @@ func (m *mockSeatReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID
 
 type mockSeatRepo struct {
 	domain.SeatRepository
-	details map[uuid.UUID]domain.SeatDetail
+	details       map[uuid.UUID]domain.SeatDetail
+	releasedSeats []uuid.UUID
 }
 
 func newMockSeatRepo() *mockSeatRepo {
@@ -241,6 +258,11 @@ func (m *mockSeatRepo) FindDetailsBySeatIDs(ctx context.Context, seatIDs []uuid.
 		}
 	}
 	return res, nil
+}
+
+func (m *mockSeatRepo) ReleaseBookedSeat(ctx context.Context, seatID uuid.UUID) error {
+	m.releasedSeats = append(m.releasedSeats, seatID)
+	return nil
 }
 
 type mockUserRepo struct {
@@ -294,15 +316,30 @@ func (m *mockVenueRepo) FindByID(id uuid.UUID) (*domain.Venue, error) {
 type mockTicketRepo struct {
 	domain.TicketRepository
 	ticketsByBooking map[uuid.UUID][]domain.Ticket
+	updatedStatuses  map[uuid.UUID]string
 }
 
 func (m *mockTicketRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Ticket, error) {
 	return m.ticketsByBooking[bookingID], nil
 }
 
+func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	if m.updatedStatuses == nil {
+		m.updatedStatuses = make(map[uuid.UUID]string)
+	}
+	m.updatedStatuses[bookingID] = status
+	if tickets, ok := m.ticketsByBooking[bookingID]; ok {
+		for i := range tickets {
+			tickets[i].Status = status
+		}
+	}
+	return nil
+}
+
 type mockTicketTypeRepo struct {
 	domain.TicketTypeRepository
-	types map[uuid.UUID]*domain.TicketType
+	types            map[uuid.UUID]*domain.TicketType
+	releasedQuantity map[uuid.UUID]int
 }
 
 func (m *mockTicketTypeRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.TicketType, error) {
@@ -310,6 +347,17 @@ func (m *mockTicketTypeRepo) FindByID(ctx context.Context, id uuid.UUID) (*domai
 		return t, nil
 	}
 	return nil, domain.ErrTicketTypeNotFound
+}
+
+func (m *mockTicketTypeRepo) ReleaseReservedQuantity(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error {
+	if m.releasedQuantity == nil {
+		m.releasedQuantity = make(map[uuid.UUID]int)
+	}
+	m.releasedQuantity[ticketTypeID] += quantity
+	if tt, ok := m.types[ticketTypeID]; ok {
+		tt.AvailableQuantity += quantity
+	}
+	return nil
 }
 
 type mockEventCancellationRepo struct {
@@ -347,6 +395,8 @@ type mockTxRepos struct {
 	ticketRepo            *mockTicketRepo
 	ticketTypeRepo        *mockTicketTypeRepo
 	eventCancellationRepo *mockEventCancellationRepo
+	paymentRepo           *mockPaymentRepo
+	refundRepo            *mockRefundRepo
 }
 
 func (m *mockTxRepos) SeatReservationRepository() domain.SeatReservationRepository {
@@ -382,6 +432,104 @@ func (m *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
 func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepository {
 	return m.eventCancellationRepo
 }
+func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository {
+	return m.paymentRepo
+}
+func (m *mockTxRepos) RefundRepository() domain.RefundRepository {
+	return m.refundRepo
+}
+
+type mockPaymentRepo struct {
+	domain.PaymentRepository
+	paymentsByBooking map[string][]domain.Payment
+}
+
+func (m *mockPaymentRepo) FindByBookingID(ctx context.Context, bookingID string) ([]domain.Payment, error) {
+	if m.paymentsByBooking != nil {
+		return m.paymentsByBooking[bookingID], nil
+	}
+	return nil, nil
+}
+
+type mockRefundRepo struct {
+	domain.RefundRepository
+	refundsByID      map[uuid.UUID]*domain.Refund
+	refundsByBooking map[uuid.UUID][]domain.Refund
+	createCalls      int
+	updateCalls      int
+}
+
+func newMockRefundRepo() *mockRefundRepo {
+	return &mockRefundRepo{
+		refundsByID:      make(map[uuid.UUID]*domain.Refund),
+		refundsByBooking: make(map[uuid.UUID][]domain.Refund),
+	}
+}
+
+func (m *mockRefundRepo) Create(ctx context.Context, refund *domain.Refund) error {
+	m.createCalls++
+	copied := *refund
+	m.refundsByID[refund.ID] = &copied
+	m.refundsByBooking[refund.BookingID] = append(m.refundsByBooking[refund.BookingID], copied)
+	return nil
+}
+
+func (m *mockRefundRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Refund, error) {
+	if r, ok := m.refundsByID[id]; ok {
+		copied := *r
+		return &copied, nil
+	}
+	return nil, domain.ErrRefundNotFound
+}
+
+func (m *mockRefundRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Refund, error) {
+	return m.FindByID(ctx, id)
+}
+
+func (m *mockRefundRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Refund, error) {
+	return m.refundsByBooking[bookingID], nil
+}
+
+func (m *mockRefundRepo) Update(ctx context.Context, refund *domain.Refund) error {
+	m.updateCalls++
+	copied := *refund
+	m.refundsByID[refund.ID] = &copied
+	list := m.refundsByBooking[refund.BookingID]
+	for i := range list {
+		if list[i].ID == refund.ID {
+			list[i] = copied
+			break
+		}
+	}
+	return nil
+}
+
+type mockPaymentRefundProvider struct {
+	refundResult       *domain.RefundResult
+	refundErr          error
+	refundCalls        int
+	lastPaymentID      string
+	lastAmount         decimal.Decimal
+	lastIdempotencyKey string
+}
+
+func (m *mockPaymentRefundProvider) Refund(ctx context.Context, gatewayPaymentID string, amount decimal.Decimal, currency string, idempotencyKey string) (*domain.RefundResult, error) {
+	m.refundCalls++
+	m.lastPaymentID = gatewayPaymentID
+	m.lastAmount = amount
+	m.lastIdempotencyKey = idempotencyKey
+	if m.refundErr != nil {
+		return nil, m.refundErr
+	}
+	if m.refundResult != nil {
+		return m.refundResult, nil
+	}
+	return &domain.RefundResult{
+		RefundID: "rfnd_" + uuid.NewString()[:8],
+		Amount:   amount,
+		Status:   domain.RefundStatusSuccess,
+	}, nil
+}
 
 type mockTxManager struct {
 	txRepos *mockTxRepos
@@ -391,8 +539,9 @@ func (m *mockTxManager) WithinTransaction(fn func(tx domain.TransactionRepositor
 	return fn(m.txRepos)
 }
 
-func setupBookingUsecase() (*bookinguc.BookingUsecase, *mockTxRepos) {
+func setupBookingUsecaseWithRefund() (*bookinguc.BookingUsecase, *mockTxRepos, *mockPaymentRefundProvider) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	refundProvider := &mockPaymentRefundProvider{}
 	txRepos := &mockTxRepos{
 		bookingRepo:           newMockBookingRepo(),
 		checkoutRepo:          newMockCheckoutRepo(),
@@ -405,10 +554,17 @@ func setupBookingUsecase() (*bookinguc.BookingUsecase, *mockTxRepos) {
 		ticketRepo:            &mockTicketRepo{ticketsByBooking: make(map[uuid.UUID][]domain.Ticket)},
 		ticketTypeRepo:        &mockTicketTypeRepo{types: make(map[uuid.UUID]*domain.TicketType)},
 		eventCancellationRepo: newMockEventCancellationRepo(),
+		paymentRepo:           &mockPaymentRepo{paymentsByBooking: make(map[string][]domain.Payment)},
+		refundRepo:            newMockRefundRepo(),
 	}
 	txManager := &mockTxManager{txRepos: txRepos}
-	uc := bookinguc.NewBookingUsecase(txManager, logger)
-	return uc, txRepos
+	uc := bookinguc.NewBookingUsecase(txManager, refundProvider, logger)
+	return uc, txRepos, refundProvider
+}
+
+func setupBookingUsecase() (*bookinguc.BookingUsecase, *mockTxRepos) {
+	uc, repos, _ := setupBookingUsecaseWithRefund()
+	return uc, repos
 }
 
 func TestBookingUsecase_CreateBooking_Success(t *testing.T) {
@@ -1229,4 +1385,464 @@ func TestBookingUsecase_CreateBooking_Snapshot_RepositoryError_AbortsTransaction
 
 	// No bookings should have been created due to transaction rollback
 	assert.Empty(t, repos.bookingRepo.createdBookings)
+}
+
+// --- Customer-Initiated Cancellation Tests ---
+
+func createCancellableBookingFixture(
+	repos *mockTxRepos,
+	userID uuid.UUID,
+	total decimal.Decimal,
+	cancellationAllowed bool,
+	deadlineHours int,
+	policy string,
+	percentage int,
+	eventDateFromNow time.Duration,
+) (*domain.Booking, *domain.Payment, []domain.BookingItem, []domain.Ticket) {
+	now := time.Now()
+	eventID := uuid.New()
+	eventDate := now.Add(eventDateFromNow)
+
+	repos.scheduleRepo.schedules[eventID] = &domain.EventSchedule{
+		EventID:   eventID,
+		EventDate: eventDate,
+		StartTime: eventDate,
+	}
+
+	bookingID := uuid.New()
+	booking := &domain.Booking{
+		ID:                        bookingID,
+		BookingNumber:             "BK-" + bookingID.String()[:8],
+		UserID:                    userID,
+		EventID:                   eventID,
+		Total:                     total,
+		Status:                    domain.BookingStatusConfirmed,
+		CancellationAllowed:       cancellationAllowed,
+		CancellationDeadlineHours: deadlineHours,
+		RefundPolicy:              policy,
+		RefundPercentage:          percentage,
+		CreatedAt:                 now.Add(-2 * time.Hour),
+		UpdatedAt:                 now.Add(-2 * time.Hour),
+	}
+	repos.bookingRepo.bookingsByID[bookingID] = booking
+
+	ticketTypeID := uuid.New()
+	repos.ticketTypeRepo.types[ticketTypeID] = &domain.TicketType{
+		ID:                ticketTypeID,
+		EventID:           eventID,
+		Name:              "General Admission",
+		TotalQuantity:     100,
+		AvailableQuantity: 50,
+		Price:             total,
+	}
+
+	item := domain.BookingItem{
+		ID:           uuid.New(),
+		BookingID:    bookingID,
+		TicketTypeID: &ticketTypeID,
+		Quantity:     2,
+		UnitPrice:    total.Div(decimal.NewFromInt(2)),
+		TotalPrice:   total,
+	}
+	repos.bookingRepo.createdItems = append(repos.bookingRepo.createdItems, []domain.BookingItem{item})
+
+	ticket1 := domain.Ticket{
+		ID:           uuid.New(),
+		BookingID:    bookingID,
+		UserID:       userID,
+		EventID:      eventID,
+		TicketTypeID: &ticketTypeID,
+		Status:       domain.TicketStatusValid,
+	}
+	ticket2 := domain.Ticket{
+		ID:           uuid.New(),
+		BookingID:    bookingID,
+		UserID:       userID,
+		EventID:      eventID,
+		TicketTypeID: &ticketTypeID,
+		Status:       domain.TicketStatusValid,
+	}
+	tickets := []domain.Ticket{ticket1, ticket2}
+	repos.ticketRepo.ticketsByBooking[bookingID] = tickets
+
+	var payment *domain.Payment
+	if total.IsPositive() {
+		payID := uuid.New().String()
+		txID := "pay_test_" + payID[:8]
+		payment = &domain.Payment{
+			ID:            payID,
+			BookingID:     bookingID.String(),
+			TransactionID: &txID,
+			Amount:        total,
+			Status:        domain.PaymentStatusSuccess,
+			PaidAt:        &now,
+		}
+		repos.paymentRepo.paymentsByBooking[bookingID.String()] = []domain.Payment{*payment}
+	}
+
+	return booking, payment, []domain.BookingItem{item}, tickets
+}
+
+func TestBookingUsecase_CancelBooking_FullRefundSuccess(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, payment, items, tickets := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, booking.ID, out.BookingID)
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.True(t, out.RefundAmount.Equal(total), "expected 100% refund of 500, got %s", out.RefundAmount)
+	assert.Equal(t, domain.RefundStatusSuccess, out.RefundStatus)
+	assert.NotEmpty(t, out.RefundID)
+
+	// Booking status in repository updated to CANCELLED
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+
+	// Tickets status updated to CANCELLED
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
+	}
+
+	// GA inventory restored
+	ticketTypeID := *items[0].TicketTypeID
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[ticketTypeID])
+	assert.Equal(t, 52, repos.ticketTypeRepo.types[ticketTypeID].AvailableQuantity)
+
+	// Gateway invoked with correct payment ID and amount
+	assert.Equal(t, 1, provider.refundCalls)
+	assert.Equal(t, *payment.TransactionID, provider.lastPaymentID)
+	assert.True(t, provider.lastAmount.Equal(total))
+
+	// Refund record persisted with SUCCESS
+	refunds := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refunds, 1)
+	assert.Equal(t, domain.RefundStatusSuccess, refunds[0].Status)
+	assert.True(t, refunds[0].Amount.Equal(total))
+	assert.Equal(t, out.RefundID, *refunds[0].GatewayRefundID)
+	assert.NotNil(t, refunds[0].ProcessedAt)
+
+	_ = tickets
+}
+
+func TestBookingUsecase_CancelBooking_PartialRefundSuccess(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(300)
+
+	booking, payment, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyPartial, 50, 48*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	expectedRefund := decimal.NewFromInt(150)
+	assert.True(t, out.RefundAmount.Equal(expectedRefund), "expected 50% refund of 300 = 150, got %s", out.RefundAmount)
+	assert.Equal(t, domain.RefundStatusSuccess, out.RefundStatus)
+
+	// Gateway invoked with 150
+	assert.Equal(t, 1, provider.refundCalls)
+	assert.True(t, provider.lastAmount.Equal(expectedRefund))
+	assert.Equal(t, *payment.TransactionID, provider.lastPaymentID)
+}
+
+func TestBookingUsecase_CancelBooking_NoRefundPolicy(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyNoRefund, 0, 48*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.True(t, out.RefundAmount.IsZero())
+	assert.Equal(t, "NO_REFUND", out.RefundStatus)
+
+	// Gateway should NOT be called
+	assert.Equal(t, 0, provider.refundCalls)
+
+	// Booking and tickets cancelled, inventory released
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
+	}
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_FreeBooking(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.Zero
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.True(t, out.RefundAmount.IsZero())
+
+	// Free bookings must not trigger gateway call
+	assert.Equal(t, 0, provider.refundCalls)
+
+	// Inventory restored
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_CancellationDisabled(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, userID, total, false, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrCancellationNotAllowed)
+	assert.Nil(t, out)
+
+	// Booking remains confirmed, gateway untouched
+	assert.Equal(t, domain.BookingStatusConfirmed, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	assert.Equal(t, 0, provider.refundCalls)
+}
+
+func TestBookingUsecase_CancelBooking_DeadlinePassed(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	// Event is in 10 hours, but deadline is 24 hours before event (deadline passed 14h ago)
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 10*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrCancellationDeadlinePassed)
+	assert.Nil(t, out)
+
+	// Booking remains confirmed
+	assert.Equal(t, domain.BookingStatusConfirmed, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	assert.Equal(t, 0, provider.refundCalls)
+}
+
+func TestBookingUsecase_CancelBooking_TicketAlreadyUsed(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Mark one ticket as USED
+	repos.ticketRepo.ticketsByBooking[booking.ID][0].Status = domain.TicketStatusUsed
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrTicketAlreadyUsed)
+	assert.Nil(t, out)
+
+	assert.Equal(t, domain.BookingStatusConfirmed, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	assert.Equal(t, 0, provider.refundCalls)
+}
+
+func TestBookingUsecase_CancelBooking_CrossCustomerUnauthorized(t *testing.T) {
+	uc, repos, _ := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	ownerID := uuid.New()
+	otherUserID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, ownerID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	out, err := uc.CancelBooking(ctx, otherUserID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrBookingNotFound)
+	assert.Nil(t, out)
+}
+
+func TestBookingUsecase_CancelBooking_AlreadyCancelled(t *testing.T) {
+	uc, repos, _ := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+	booking.Status = domain.BookingStatusCancelled
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrBookingAlreadyCancelled)
+	assert.Nil(t, out)
+}
+
+func TestBookingUsecase_CancelBooking_BookingNotConfirmed(t *testing.T) {
+	uc, repos, _ := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+	booking.Status = domain.BookingStatusPending
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrBookingCannotBeCancelled)
+	assert.Nil(t, out)
+}
+
+func TestBookingUsecase_CancelBooking_GatewayFailureAndRetry(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Attempt 1: Gateway fails
+	provider.refundErr = errors.New("gateway connection timeout")
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrGatewayRefundFailed)
+	assert.Nil(t, out)
+
+	// Refund record must be marked FAILED
+	refunds := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refunds, 1)
+	assert.Equal(t, domain.RefundStatusFailed, refunds[0].Status)
+
+	// Booking remains CONFIRMED, tickets remain VALID, inventory NOT restored
+	assert.Equal(t, domain.BookingStatusConfirmed, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusValid, tk.Status)
+	}
+	assert.Equal(t, 0, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Attempt 2: Gateway succeeds on retry
+	provider.refundErr = nil
+	provider.refundResult = &domain.RefundResult{
+		RefundID: "rfnd_retry_success",
+		Amount:   total,
+		Status:   domain.RefundStatusSuccess,
+	}
+
+	out2, err2 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err2)
+	require.NotNil(t, out2)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out2.Status)
+	assert.Equal(t, "rfnd_retry_success", out2.RefundID)
+	assert.Equal(t, domain.RefundStatusSuccess, out2.RefundStatus)
+
+	// Now booking is CANCELLED, tickets CANCELLED, inventory restored
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
+	}
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Total 2 refund records: 1 FAILED, 1 SUCCESS
+	refundsAfterRetry := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refundsAfterRetry, 2)
+	assert.Equal(t, domain.RefundStatusFailed, refundsAfterRetry[0].Status)
+	assert.Equal(t, domain.RefundStatusSuccess, refundsAfterRetry[1].Status)
+}
+
+func TestBookingUsecase_CancelBooking_ReservedSeatRelease(t *testing.T) {
+	uc, repos, _ := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Replace items with a reserved seat item
+	seatID := uuid.New()
+	repos.bookingRepo.createdItems = [][]domain.BookingItem{
+		{
+			{
+				ID:         uuid.New(),
+				BookingID:  booking.ID,
+				SeatID:     &seatID,
+				Quantity:   1,
+				UnitPrice:  total,
+				TotalPrice: total,
+			},
+		},
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify seat was released
+	require.Len(t, repos.seatRepo.releasedSeats, 1)
+	assert.Equal(t, seatID, repos.seatRepo.releasedSeats[0])
+}
+
+func TestBookingUsecase_CancelBooking_RefundInProgressConflict(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, payment, _, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Inject active pending refund within the 2-minute in-flight window
+	payUUID, _ := uuid.Parse(payment.ID)
+	repos.refundRepo.refundsByBooking[booking.ID] = []domain.Refund{
+		{
+			ID:        uuid.New(),
+			BookingID: booking.ID,
+			PaymentID: payUUID,
+			Amount:    total,
+			Status:    domain.RefundStatusPending,
+			CreatedAt: time.Now().Add(-30 * time.Second),
+		},
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrRefundInProgress)
+	assert.Nil(t, out)
+	assert.Equal(t, 0, provider.refundCalls)
 }

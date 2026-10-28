@@ -11,19 +11,26 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type BookingUsecase struct {
 	transactionManager domain.TransactionManager
+	refundProvider     domain.PaymentRefundProvider
 	logger             *slog.Logger
 }
 
 func NewBookingUsecase(
 	transactionManager domain.TransactionManager,
+	refundProvider domain.PaymentRefundProvider,
 	logger *slog.Logger,
 ) *BookingUsecase {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &BookingUsecase{
 		transactionManager: transactionManager,
+		refundProvider:     refundProvider,
 		logger:             logger,
 	}
 }
@@ -638,4 +645,357 @@ func (u *BookingUsecase) GetBookingPDFData(
 	}
 
 	return pdfData, nil
+}
+
+type CancelBookingOutput struct {
+	BookingID     uuid.UUID       `json:"booking_id"`
+	BookingNumber string          `json:"booking_number"`
+	Status        string          `json:"status"`
+	RefundAmount  decimal.Decimal `json:"refund_amount"`
+	RefundStatus  string          `json:"refund_status"`
+	RefundID      string          `json:"refund_id,omitempty"`
+	CancelledAt   time.Time       `json:"cancelled_at"`
+}
+
+func (u *BookingUsecase) CancelBooking(
+	ctx context.Context,
+	userID uuid.UUID,
+	bookingID uuid.UUID,
+) (*CancelBookingOutput, error) {
+	if userID == uuid.Nil || bookingID == uuid.Nil {
+		return nil, domain.ErrBookingNotFound
+	}
+
+	var (
+		booking           *domain.Booking
+		refundAmount      decimal.Decimal
+		successfulPayment *domain.Payment
+		paymentUUID       uuid.UUID
+		pendingRefund     *domain.Refund
+		isFreeOrNoRefund  bool
+		now               = time.Now()
+	)
+
+	// Phase 1: Validate booking state, policy, deadline, tickets, and prepare refund record.
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			var err error
+			booking, err = tx.BookingRepository().FindByIDForUpdate(ctx, bookingID)
+			if err != nil {
+				return err
+			}
+
+			if booking.UserID != userID {
+				u.logger.WarnContext(ctx, "unauthorized booking cancellation attempt",
+					slog.String("booking_id", bookingID.String()),
+					slog.String("user_id", userID.String()),
+				)
+				return domain.ErrBookingNotFound
+			}
+
+			if booking.Status == domain.BookingStatusCancelled {
+				return domain.ErrBookingAlreadyCancelled
+			}
+
+			if booking.Status != domain.BookingStatusConfirmed {
+				return domain.ErrBookingCannotBeCancelled
+			}
+
+			if !booking.CancellationAllowed {
+				return domain.ErrCancellationNotAllowed
+			}
+
+			// Validate deadline against event start time.
+			schedule, err := tx.EventScheduleRepository().FindByEventID(booking.EventID)
+			if err != nil {
+				return err
+			}
+			if schedule == nil {
+				return domain.ErrEventNotFound
+			}
+
+			eventStartTime := schedule.EventDate
+			if !schedule.StartTime.IsZero() {
+				eventStartTime = time.Date(
+					schedule.EventDate.Year(),
+					schedule.EventDate.Month(),
+					schedule.EventDate.Day(),
+					schedule.StartTime.Hour(),
+					schedule.StartTime.Minute(),
+					schedule.StartTime.Second(),
+					0,
+					schedule.EventDate.Location(),
+				)
+			}
+
+			deadline := eventStartTime.Add(-time.Duration(booking.CancellationDeadlineHours) * time.Hour)
+			if now.After(deadline) {
+				u.logger.WarnContext(ctx, "booking cancellation rejected: deadline passed",
+					slog.String("booking_id", bookingID.String()),
+					slog.Time("event_start_time", eventStartTime),
+					slog.Time("deadline", deadline),
+					slog.Time("attempted_at", now),
+				)
+				return domain.ErrCancellationDeadlinePassed
+			}
+
+			// Check tickets - cannot cancel if any ticket is used.
+			tickets, err := tx.TicketRepository().FindByBookingID(ctx, booking.ID)
+			if err != nil {
+				return err
+			}
+			for _, t := range tickets {
+				if t.Status == domain.TicketStatusUsed {
+					return domain.ErrTicketAlreadyUsed
+				}
+			}
+
+			// Calculate eligible refund amount based on snapshotted policy.
+			if booking.Total.IsZero() || !booking.Total.IsPositive() {
+				refundAmount = decimal.Zero
+				isFreeOrNoRefund = true
+			} else {
+				switch strings.ToUpper(strings.TrimSpace(booking.RefundPolicy)) {
+				case domain.RefundPolicyFull:
+					refundAmount = booking.Total
+				case domain.RefundPolicyPartial:
+					if booking.RefundPercentage <= 0 {
+						refundAmount = decimal.Zero
+						isFreeOrNoRefund = true
+					} else {
+						pct := decimal.NewFromInt(int64(booking.RefundPercentage))
+						refundAmount = booking.Total.Mul(pct).Div(decimal.NewFromInt(100)).RoundBank(2)
+						if refundAmount.IsZero() || !refundAmount.IsPositive() {
+							refundAmount = decimal.Zero
+							isFreeOrNoRefund = true
+						}
+					}
+				case domain.RefundPolicyNoRefund:
+					refundAmount = decimal.Zero
+					isFreeOrNoRefund = true
+				default:
+					refundAmount = decimal.Zero
+					isFreeOrNoRefund = true
+				}
+			}
+
+			if isFreeOrNoRefund {
+				// Immediate cancellation without gateway call.
+				if err := tx.BookingRepository().UpdateStatus(ctx, booking.ID, domain.BookingStatusCancelled); err != nil {
+					return err
+				}
+				if err := tx.TicketRepository().UpdateStatusByBookingID(ctx, booking.ID, domain.TicketStatusCancelled); err != nil {
+					return err
+				}
+				return u.restoreInventory(ctx, tx, booking.ID)
+			}
+
+			// Paid booking: locate successful payment.
+			payments, err := tx.PaymentRepository().FindByBookingID(ctx, booking.ID.String())
+			if err != nil {
+				return err
+			}
+			for i := range payments {
+				if payments[i].Status == domain.PaymentStatusSuccess {
+					successfulPayment = &payments[i]
+					break
+				}
+			}
+			if successfulPayment == nil || successfulPayment.TransactionID == nil || *successfulPayment.TransactionID == "" {
+				u.logger.ErrorContext(ctx, "successful payment record missing for paid booking cancellation",
+					slog.String("booking_id", bookingID.String()),
+				)
+				return domain.ErrPaymentNotFound
+			}
+
+			paymentUUID, err = uuid.Parse(successfulPayment.ID)
+			if err != nil {
+				return fmt.Errorf("invalid payment id format: %w", err)
+			}
+
+			// Ensure no active refund is already processed or pending in-flight.
+			existingRefunds, err := tx.RefundRepository().FindByBookingID(ctx, booking.ID)
+			if err != nil {
+				return err
+			}
+			for _, r := range existingRefunds {
+				if r.Status == domain.RefundStatusSuccess {
+					return domain.ErrRefundAlreadyProcessed
+				}
+				if r.Status == domain.RefundStatusPending && time.Since(r.CreatedAt) < 2*time.Minute {
+					return domain.ErrRefundInProgress
+				}
+			}
+
+			// Create PENDING refund record before invoking gateway outside transaction.
+			pendingRefund = &domain.Refund{
+				ID:        uuid.New(),
+				BookingID: booking.ID,
+				PaymentID: paymentUUID,
+				Amount:    refundAmount,
+				Status:    domain.RefundStatusPending,
+				Reason:    "CUSTOMER_CANCELLATION",
+				CreatedAt: now,
+				UpdatedAt: now,
+			}
+
+			return tx.RefundRepository().Create(ctx, pendingRefund)
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if isFreeOrNoRefund {
+		u.logger.InfoContext(ctx, "booking_cancelled_successfully",
+			slog.String("booking_id", booking.ID.String()),
+			slog.String("booking_number", booking.BookingNumber),
+			slog.String("refund_policy", booking.RefundPolicy),
+			slog.String("refund_amount", decimal.Zero.String()),
+		)
+
+		return &CancelBookingOutput{
+			BookingID:     booking.ID,
+			BookingNumber: booking.BookingNumber,
+			Status:        domain.BookingStatusCancelled,
+			RefundAmount:  decimal.Zero,
+			RefundStatus:  "NO_REFUND",
+			CancelledAt:   now,
+		}, nil
+	}
+
+	// Gateway execution outside DB transaction.
+	if u.refundProvider == nil {
+		u.logger.ErrorContext(ctx, "refund provider not configured")
+		return nil, errors.New("refund provider not configured")
+	}
+
+	gatewayPaymentID := *successfulPayment.TransactionID
+	idempotencyKey := pendingRefund.ID.String()
+
+	refundResult, gatewayErr := u.refundProvider.Refund(ctx, gatewayPaymentID, refundAmount, "INR", idempotencyKey)
+	if gatewayErr != nil || refundResult == nil || refundResult.Status != domain.RefundStatusSuccess {
+		// Mark refund as FAILED in separate short transaction so the customer can retry.
+		_ = u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+			pendingRefund.Status = domain.RefundStatusFailed
+			pendingRefund.UpdatedAt = time.Now()
+			return tx.RefundRepository().Update(ctx, pendingRefund)
+		})
+
+		u.logger.ErrorContext(ctx, "booking_cancellation_gateway_refund_failed",
+			slog.String("booking_id", booking.ID.String()),
+			slog.String("refund_id", pendingRefund.ID.String()),
+			slog.String("gateway_payment_id", gatewayPaymentID),
+			slog.Any("error", gatewayErr),
+		)
+
+		if gatewayErr != nil {
+			return nil, fmt.Errorf("%w: %v", domain.ErrGatewayRefundFailed, gatewayErr)
+		}
+		return nil, domain.ErrGatewayRefundFailed
+	}
+
+	// Phase 2: Gateway confirmed refund. Mark refund SUCCESS, booking CANCELLED, tickets CANCELLED, release inventory.
+	completionTime := time.Now()
+	err = u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			b, err := tx.BookingRepository().FindByIDForUpdate(ctx, booking.ID)
+			if err != nil {
+				return err
+			}
+			if b.Status == domain.BookingStatusCancelled {
+				return nil
+			}
+
+			pendingRefund.Status = domain.RefundStatusSuccess
+			pendingRefund.GatewayRefundID = &refundResult.RefundID
+			pendingRefund.ProcessedAt = &completionTime
+			pendingRefund.UpdatedAt = completionTime
+			if err := tx.RefundRepository().Update(ctx, pendingRefund); err != nil {
+				return err
+			}
+
+			if err := tx.BookingRepository().UpdateStatus(ctx, b.ID, domain.BookingStatusCancelled); err != nil {
+				return err
+			}
+
+			if err := tx.TicketRepository().UpdateStatusByBookingID(ctx, b.ID, domain.TicketStatusCancelled); err != nil {
+				return err
+			}
+
+			return u.restoreInventory(ctx, tx, b.ID)
+		},
+	)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "booking_cancellation_finalization_failed",
+			slog.String("booking_id", booking.ID.String()),
+			slog.String("refund_id", pendingRefund.ID.String()),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	u.logger.InfoContext(ctx, "booking_cancelled_with_refund_success",
+		slog.String("booking_id", booking.ID.String()),
+		slog.String("booking_number", booking.BookingNumber),
+		slog.String("refund_id", pendingRefund.ID.String()),
+		slog.String("gateway_refund_id", refundResult.RefundID),
+		slog.String("refund_amount", refundAmount.String()),
+		slog.String("refund_policy", booking.RefundPolicy),
+	)
+
+	return &CancelBookingOutput{
+		BookingID:     booking.ID,
+		BookingNumber: booking.BookingNumber,
+		Status:        domain.BookingStatusCancelled,
+		RefundAmount:  refundAmount,
+		RefundStatus:  domain.RefundStatusSuccess,
+		RefundID:      refundResult.RefundID,
+		CancelledAt:   completionTime,
+	}, nil
+}
+
+func (u *BookingUsecase) restoreInventory(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	bookingID uuid.UUID,
+) error {
+	items, err := tx.BookingRepository().FindItemsByBookingID(ctx, bookingID)
+	if err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		if item.TicketTypeID != nil && *item.TicketTypeID != uuid.Nil {
+			if err := tx.TicketTypeRepository().ReleaseReservedQuantity(
+				ctx,
+				*item.TicketTypeID,
+				item.Quantity,
+			); err != nil {
+				u.logger.ErrorContext(ctx, "failed to release ticket quantity on cancellation",
+					slog.String("booking_id", bookingID.String()),
+					slog.String("ticket_type_id", item.TicketTypeID.String()),
+					slog.Int("quantity", item.Quantity),
+					slog.Any("error", err),
+				)
+				return err
+			}
+		}
+
+		if item.SeatID != nil && *item.SeatID != uuid.Nil {
+			if err := tx.SeatRepository().ReleaseBookedSeat(
+				ctx,
+				*item.SeatID,
+			); err != nil {
+				u.logger.ErrorContext(ctx, "failed to release booked seat on cancellation",
+					slog.String("booking_id", bookingID.String()),
+					slog.String("seat_id", item.SeatID.String()),
+					slog.Any("error", err),
+				)
+				return err
+			}
+		}
+	}
+
+	return nil
 }

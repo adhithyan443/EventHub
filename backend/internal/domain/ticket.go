@@ -66,4 +66,10 @@ type TicketRepository interface {
 		id uuid.UUID,
 		status string,
 	) error
+
+	UpdateStatusByBookingID(
+		ctx context.Context,
+		bookingID uuid.UUID,
+		status string,
+	) error
 }

@@ -46,4 +46,5 @@ type SeatRepository interface {
 	ReserveIfAvailable(ctx context.Context, seatID uuid.UUID) error
 	ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error
 	BookReservedSeat(ctx context.Context, seatID uuid.UUID) error
+	ReleaseBookedSeat(ctx context.Context, seatID uuid.UUID) error
 }

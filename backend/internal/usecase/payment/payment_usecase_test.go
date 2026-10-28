@@ -487,6 +487,16 @@ func (m *mockTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]
 func (m *mockTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return nil
 }
+func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.tickets {
+		if m.tickets[i].BookingID == bookingID {
+			m.tickets[i].Status = status
+		}
+	}
+	return nil
+}
 func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
 	return 0, nil
 }
@@ -564,6 +574,13 @@ func (m *mockTxRepos) RazorpayWebhookEventRepository() domain.RazorpayWebhookEve
 func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepository {
 	return m.eventCancellationRepo
 }
+func (m *mockTxRepos) RefundRepository() domain.RefundRepository {
+	return &mockRefundRepo{}
+}
+
+type mockRefundRepo struct {
+	domain.RefundRepository
+}
 
 type mockTransactionManager struct {
 	repos *mockTxRepos
@@ -638,6 +655,14 @@ func (m *mockPaymentProvider) CheckOrderStatus(ctx context.Context, providerOrde
 	return nil, errors.New("order not found")
 }
 
+func (m *mockPaymentProvider) Refund(ctx context.Context, gatewayPaymentID string, amount decimal.Decimal, currency string, idempotencyKey string) (*domain.RefundResult, error) {
+	return &domain.RefundResult{
+		RefundID: "rfnd_" + uuid.NewString()[:8],
+		Amount:   amount,
+		Status:   domain.RefundStatusSuccess,
+	}, nil
+}
+
 // --- Test Fixture Setup ---
 
 type testFixture struct {
@@ -678,8 +703,8 @@ func setupFixture(t *testing.T) *testFixture {
 	}
 	tm := &mockTransactionManager{repos: txRepos}
 
-	bookingUC := bookinguc.NewBookingUsecase(tm, logger)
 	provider := newMockPaymentProvider()
+	bookingUC := bookinguc.NewBookingUsecase(tm, provider, logger)
 	paymentUC := payment.NewPaymentUsecase(tm, bookingUC, provider, logger)
 
 	userID := uuid.New()

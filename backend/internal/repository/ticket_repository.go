@@ -219,6 +219,34 @@ func (r *ticketRepository) UpdateStatus(
 	return nil
 }
 
+func (r *ticketRepository) UpdateStatusByBookingID(
+	ctx context.Context,
+	bookingID uuid.UUID,
+	status string,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.TicketModel{}).
+		Where("booking_id = ?", bookingID).
+		Update("status", status)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to update ticket status by booking ID",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("status", status),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	r.logger.InfoContext(ctx, "ticket status updated by booking ID",
+		slog.String("booking_id", bookingID.String()),
+		slog.String("status", status),
+		slog.Int64("rows_affected", result.RowsAffected),
+	)
+
+	return nil
+}
+
 func toTicketModel(ticket *domain.Ticket) *models.TicketModel {
 	return &models.TicketModel{
 		ID:              ticket.ID,

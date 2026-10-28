@@ -403,6 +403,7 @@ func registerBookingRoutes(
 
 	bookings.GET("", bookingHandler.GetMyBookings)
 	bookings.GET("/:id", bookingHandler.GetBookingByID)
+	bookings.POST("/:id/cancel", bookingHandler.CancelBooking)
 	bookings.GET("/:id/qr", bookingHandler.GetBookingQR)
 	bookings.GET("/:id/download", bookingHandler.DownloadBookingPDF)
 }

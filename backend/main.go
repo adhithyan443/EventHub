@@ -154,19 +154,7 @@ func main() {
 		logger,
 	)
 
-	// Booking dependencies.
-	bookingUsecase := booking.NewBookingUsecase(
-		txManager,
-		logger,
-	)
-
-	bookingHandler := handler.NewBookingHandler(
-		bookingUsecase,
-		qrService,
-		logger,
-	)
-
-	// Payment dependencies.
+	// Payment provider.
 	razorpayProvider, err := payment.NewRazorpayProvider(
 		cfg.RazorpayKeyID,
 		cfg.RazorpayKeySecret,
@@ -178,6 +166,20 @@ func main() {
 		return
 	}
 
+	// Booking dependencies.
+	bookingUsecase := booking.NewBookingUsecase(
+		txManager,
+		razorpayProvider,
+		logger,
+	)
+
+	bookingHandler := handler.NewBookingHandler(
+		bookingUsecase,
+		qrService,
+		logger,
+	)
+
+	// Payment dependencies.
 	paymentUsecase := payment.NewPaymentUsecase(
 		txManager,
 		bookingUsecase,

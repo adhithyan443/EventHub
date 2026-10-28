@@ -254,3 +254,79 @@ func sanitizeBookingFilename(eventName string, bookingID uuid.UUID) string {
 	}
 	return fmt.Sprintf("%s-%s.pdf", cleanedStr, bookingID.String())
 }
+
+// CancelBooking handles POST /api/v1/bookings/:id/cancel.
+func (h *BookingHandler) CancelBooking(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "unauthorized",
+		})
+		return
+	}
+
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil || bookingID == uuid.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid booking ID",
+		})
+		return
+	}
+
+	result, err := h.bookingUsecase.CancelBooking(
+		c.Request.Context(),
+		userID,
+		bookingID,
+	)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrBookingNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "booking not found",
+			})
+		case errors.Is(err, domain.ErrBookingAlreadyCancelled):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "booking has already been cancelled",
+			})
+		case errors.Is(err, domain.ErrBookingCannotBeCancelled):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "booking cannot be cancelled in its current state",
+			})
+		case errors.Is(err, domain.ErrCancellationNotAllowed):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "cancellation is not allowed for this booking",
+			})
+		case errors.Is(err, domain.ErrCancellationDeadlinePassed):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "cancellation deadline has passed",
+			})
+		case errors.Is(err, domain.ErrTicketAlreadyUsed):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "cannot cancel booking because one or more tickets have already been used",
+			})
+		case errors.Is(err, domain.ErrRefundInProgress):
+			c.JSON(http.StatusConflict, gin.H{
+				"error": "a refund is already in progress for this booking",
+			})
+		case errors.Is(err, domain.ErrGatewayRefundFailed):
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": "payment gateway failed to process refund, please try again",
+			})
+		default:
+			h.logger.ErrorContext(c.Request.Context(), "booking cancellation failed",
+				slog.String("booking_id", bookingID.String()),
+				slog.String("user_id", userID.String()),
+				slog.Any("error", err),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to cancel booking",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "booking successfully cancelled",
+		"data":    result,
+	})
+}

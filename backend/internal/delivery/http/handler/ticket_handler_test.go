@@ -52,6 +52,9 @@ func (s *stubTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]
 func (s *stubTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return s.err
 }
+func (s *stubTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return s.err
+}
 
 type stubEventRepo struct {
 	event *domain.Event

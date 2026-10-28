@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 
+	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/shopspring/decimal"
 )
 
@@ -54,4 +55,12 @@ type PaymentProvider interface {
 		expectedAmount decimal.Decimal,
 		currency string,
 	) (*ProviderOrder, error)
+
+	Refund(
+		ctx context.Context,
+		gatewayPaymentID string,
+		amount decimal.Decimal,
+		currency string,
+		idempotencyKey string,
+	) (*domain.RefundResult, error)
 }

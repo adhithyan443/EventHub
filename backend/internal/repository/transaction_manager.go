@@ -44,6 +44,7 @@ type transactionRepositories struct {
 	checkoutRepo             domain.CheckoutRepository
 	bookingRepo              domain.BookingRepository
 	paymentRepo              domain.PaymentRepository
+	refundRepo               domain.RefundRepository
 	razorpayWebhookEventRepo domain.RazorpayWebhookEventRepository
 	pricingTaxRepo           domain.PricingTaxConfigurationRepository
 }
@@ -138,6 +139,7 @@ func (m *TransactionManager) WithinTransaction(
 			checkoutRepo:             NewCheckoutRepository(txDB, m.logger),
 			bookingRepo:              NewBookingRepository(txDB, m.logger),
 			paymentRepo:              NewPaymentRepository(txDB, m.logger),
+			refundRepo:               NewRefundRepository(txDB, m.logger),
 			razorpayWebhookEventRepo: NewRazorpayWebhookEventRepository(txDB, m.logger),
 			pricingTaxRepo:           NewPricingTaxRepository(txDB, m.logger),
 		}
@@ -240,6 +242,10 @@ func (r *transactionRepositories) BookingRepository() domain.BookingRepository {
 
 func (r *transactionRepositories) PaymentRepository() domain.PaymentRepository {
 	return r.paymentRepo
+}
+
+func (r *transactionRepositories) RefundRepository() domain.RefundRepository {
+	return r.refundRepo
 }
 
 func (r *transactionRepositories) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {

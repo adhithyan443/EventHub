@@ -9,9 +9,16 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var ErrBookingNotFound = errors.New("booking not found")
-var ErrDuplicateReservationBooking = errors.New(
-	"booking already exists for reservation",
+var (
+	ErrBookingNotFound             = errors.New("booking not found")
+	ErrDuplicateReservationBooking = errors.New(
+		"booking already exists for reservation",
+	)
+	ErrBookingAlreadyCancelled    = errors.New("booking is already cancelled")
+	ErrBookingCannotBeCancelled   = errors.New("booking cannot be cancelled in its current state")
+	ErrCancellationNotAllowed     = errors.New("cancellation is not allowed for this booking")
+	ErrCancellationDeadlinePassed = errors.New("cancellation deadline has passed")
+	ErrTicketAlreadyUsed          = errors.New("booking tickets have already been used and cannot be cancelled")
 )
 
 const (

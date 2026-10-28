@@ -56,6 +56,9 @@ func (m *mockTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]
 func (m *mockTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return m.err
 }
+func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return m.err
+}
 
 type mockEventRepo struct {
 	events map[uuid.UUID]*domain.Event

@@ -156,9 +156,9 @@ func TestPricingTaxRepository_PostgreSQL_ExclusionAndAdvisoryLock(t *testing.T) 
 	tx := db.Begin()
 	defer tx.Rollback()
 
-	// Ensure table exists in tx
+	// Ensure isolated temporary table exists in tx
 	err := tx.Exec(`
-		CREATE TABLE IF NOT EXISTS public.pricing_tax_configurations (
+		CREATE TEMP TABLE IF NOT EXISTS pricing_tax_configurations (
 			id UUID PRIMARY KEY,
 			version INTEGER NOT NULL UNIQUE,
 			status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
@@ -178,7 +178,7 @@ func TestPricingTaxRepository_PostgreSQL_ExclusionAndAdvisoryLock(t *testing.T) 
 			change_reason VARCHAR(255) NOT NULL,
 			created_at TIMESTAMP WITH TIME ZONE NOT NULL,
 			updated_at TIMESTAMP WITH TIME ZONE NOT NULL
-		);
+		) ON COMMIT DROP;
 	`).Error
 	require.NoError(t, err)
 

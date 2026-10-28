@@ -36,6 +36,7 @@ type TransactionRepositories interface {
 	CheckoutRepository() CheckoutRepository
 	BookingRepository() BookingRepository
 	PaymentRepository() PaymentRepository
+	RefundRepository() RefundRepository
 	RazorpayWebhookEventRepository() RazorpayWebhookEventRepository
 	PricingTaxConfigurationRepository() PricingTaxConfigurationRepository
 }
