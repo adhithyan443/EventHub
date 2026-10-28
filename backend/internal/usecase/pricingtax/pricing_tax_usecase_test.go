@@ -31,7 +31,12 @@ func (m *mockPricingTaxRepo) FindActiveAt(ctx context.Context, t time.Time) (*do
 	if m.err != nil {
 		return nil, m.err
 	}
-	return m.active, nil
+	if m.active != nil {
+		cfg := *m.active
+		cfg.Status = cfg.ResolveStatus(t)
+		return &cfg, nil
+	}
+	return nil, domain.ErrPricingConfigurationUnavailable
 }
 
 func (m *mockPricingTaxRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.PricingTaxConfiguration, error) {
@@ -51,20 +56,30 @@ func (m *mockPricingTaxRepo) FindLatest(ctx context.Context) (*domain.PricingTax
 	return m.latest, nil
 }
 
-func (m *mockPricingTaxRepo) FindTimeline(ctx context.Context) ([]domain.PricingTaxConfiguration, error) {
+func (m *mockPricingTaxRepo) FindTimeline(ctx context.Context, asOf time.Time) ([]domain.PricingTaxConfiguration, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
 	res := make([]domain.PricingTaxConfiguration, len(m.timeline))
-	copy(res, m.timeline)
+	for i := range m.timeline {
+		cfg := m.timeline[i]
+		cfg.Status = cfg.ResolveStatus(asOf)
+		res[i] = cfg
+	}
 	return res, nil
 }
 
-func (m *mockPricingTaxRepo) FindHistory(ctx context.Context, page, limit int) ([]domain.PricingTaxConfiguration, int64, error) {
+func (m *mockPricingTaxRepo) FindHistory(ctx context.Context, page, limit int, asOf time.Time) ([]domain.PricingTaxConfiguration, int64, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}
-	return m.history, m.total, nil
+	res := make([]domain.PricingTaxConfiguration, len(m.history))
+	for i := range m.history {
+		cfg := m.history[i]
+		cfg.Status = cfg.ResolveStatus(asOf)
+		res[i] = cfg
+	}
+	return res, m.total, nil
 }
 
 func (m *mockPricingTaxRepo) Create(ctx context.Context, config *domain.PricingTaxConfiguration) error {
@@ -280,4 +295,114 @@ func TestPricingTaxUsecase_CancelScheduledRestoresPredecessor(t *testing.T) {
 	// Predecessor v1 must be restored to target v2's EffectiveTo (which is nil)
 	assert.Nil(t, repo.byID[v1ID].EffectiveTo)
 	assert.Equal(t, domain.PricingTaxStatusCancelled, repo.byID[v2ID].Status)
+}
+
+func TestPricingTaxUsecase_HistoricalTimelineAndHistoryQueries(t *testing.T) {
+	epoch := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	t2 := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+
+	v1 := domain.PricingTaxConfiguration{
+		ID:            uuid.New(),
+		Version:       1,
+		Status:        domain.PricingTaxStatusActive,
+		EffectiveFrom: epoch,
+		EffectiveTo:   &t1,
+	}
+	v2 := domain.PricingTaxConfiguration{
+		ID:            uuid.New(),
+		Version:       2,
+		Status:        domain.PricingTaxStatusActive,
+		EffectiveFrom: t1,
+		EffectiveTo:   &t2,
+	}
+	v3 := domain.PricingTaxConfiguration{
+		ID:            uuid.New(),
+		Version:       3,
+		Status:        domain.PricingTaxStatusScheduled,
+		EffectiveFrom: t2,
+		EffectiveTo:   nil,
+	}
+
+	repo := &mockPricingTaxRepo{
+		latest:   &v3,
+		timeline: []domain.PricingTaxConfiguration{v1, v2, v3},
+		history:  []domain.PricingTaxConfiguration{v3, v2, v1},
+		total:    3,
+	}
+	uc := setupTestUsecase(repo)
+	ctx := context.Background()
+
+	t.Run("query timeline as of historical date prior to v3 effective time", func(t *testing.T) {
+		asOfPast := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+		timeline, err := uc.GetTimeline(ctx, asOfPast)
+		require.NoError(t, err)
+		require.Len(t, timeline, 3)
+
+		assert.Equal(t, domain.PricingTaxStatusSuperseded, timeline[0].Status) // v1
+		assert.Equal(t, domain.PricingTaxStatusActive, timeline[1].Status)     // v2 is active on Oct 15
+		assert.Equal(t, domain.PricingTaxStatusScheduled, timeline[2].Status)  // v3 is scheduled on Oct 15
+	})
+
+	t.Run("query timeline as of timestamp after v3 effective time", func(t *testing.T) {
+		asOfPresent := time.Date(2026, 10, 28, 11, 0, 0, 0, time.UTC)
+		timeline, err := uc.GetTimeline(ctx, asOfPresent)
+		require.NoError(t, err)
+		require.Len(t, timeline, 3)
+
+		assert.Equal(t, domain.PricingTaxStatusSuperseded, timeline[0].Status) // v1
+		assert.Equal(t, domain.PricingTaxStatusSuperseded, timeline[1].Status) // v2 superseded
+		assert.Equal(t, domain.PricingTaxStatusActive, timeline[2].Status)     // v3 active!
+	})
+
+	t.Run("query history as of historical timestamp", func(t *testing.T) {
+		asOfPast := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+		history, total, err := uc.GetHistory(ctx, 1, 10, asOfPast)
+		require.NoError(t, err)
+		assert.Equal(t, int64(3), total)
+		require.Len(t, history, 3)
+
+		assert.Equal(t, domain.PricingTaxStatusScheduled, history[0].Status)  // v3
+		assert.Equal(t, domain.PricingTaxStatusActive, history[1].Status)     // v2
+		assert.Equal(t, domain.PricingTaxStatusSuperseded, history[2].Status) // v1
+	})
+}
+
+func TestPricingTaxUsecase_CannotCancelActiveOrPastConfiguration(t *testing.T) {
+	now := time.Now().UTC()
+	pastTime := now.Add(-1 * time.Hour) // Started 1 hour ago
+	epoch := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	v1ID := uuid.New()
+	v2ID := uuid.New()
+
+	v1 := domain.PricingTaxConfiguration{
+		ID:            v1ID,
+		Version:       1,
+		Status:        domain.PricingTaxStatusActive,
+		EffectiveFrom: epoch,
+		EffectiveTo:   &pastTime,
+	}
+	v2 := domain.PricingTaxConfiguration{
+		ID:            v2ID,
+		Version:       2,
+		Status:        domain.PricingTaxStatusScheduled, // stored status in DB was SCHEDULED
+		EffectiveFrom: pastTime,                        // but effective time has passed!
+		EffectiveTo:   nil,
+	}
+
+	repo := &mockPricingTaxRepo{
+		latest:   &v2,
+		timeline: []domain.PricingTaxConfiguration{v1, v2},
+		byID: map[uuid.UUID]*domain.PricingTaxConfiguration{
+			v1ID: &v1,
+			v2ID: &v2,
+		},
+	}
+	uc := setupTestUsecase(repo)
+	ctx := context.Background()
+
+	// Attempting to cancel v2 now must fail because v2 is active
+	err := uc.CancelScheduled(ctx, v2ID, uuid.New(), "Too late to cancel", 2)
+	require.ErrorIs(t, err, domain.ErrCannotCancelActiveConfiguration)
 }

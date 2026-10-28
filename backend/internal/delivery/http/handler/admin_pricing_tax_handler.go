@@ -33,7 +33,19 @@ func NewAdminPricingTaxHandler(
 func (h *AdminPricingTaxHandler) GetCurrentAndTimeline(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	active, err := h.usecase.GetActiveConfiguration(ctx)
+	var asOf time.Time
+	if asOfStr := c.Query("as_of"); asOfStr != "" {
+		parsed, err := time.Parse(time.RFC3339, asOfStr)
+		if err != nil {
+			c.Error(appErrors.NewValidationError("invalid as_of timestamp format, expected RFC3339"))
+			return
+		}
+		asOf = parsed.UTC()
+	} else {
+		asOf = time.Now().UTC()
+	}
+
+	active, err := h.usecase.GetActiveConfiguration(ctx, asOf)
 	if err != nil {
 		if errors.Is(err, domain.ErrPricingConfigurationUnavailable) {
 			c.Error(appErrors.NewInternalError("pricing configuration is unavailable"))
@@ -43,7 +55,7 @@ func (h *AdminPricingTaxHandler) GetCurrentAndTimeline(c *gin.Context) {
 		return
 	}
 
-	timeline, err := h.usecase.GetTimeline(ctx)
+	timeline, err := h.usecase.GetTimeline(ctx, asOf)
 	if err != nil {
 		c.Error(err)
 		return
@@ -54,6 +66,7 @@ func (h *AdminPricingTaxHandler) GetCurrentAndTimeline(c *gin.Context) {
 		"data": gin.H{
 			"active":   active,
 			"timeline": timeline,
+			"as_of":    asOf,
 		},
 	})
 }
@@ -64,7 +77,19 @@ func (h *AdminPricingTaxHandler) GetHistory(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 
-	history, total, err := h.usecase.GetHistory(ctx, page, limit)
+	var asOf time.Time
+	if asOfStr := c.Query("as_of"); asOfStr != "" {
+		parsed, err := time.Parse(time.RFC3339, asOfStr)
+		if err != nil {
+			c.Error(appErrors.NewValidationError("invalid as_of timestamp format, expected RFC3339"))
+			return
+		}
+		asOf = parsed.UTC()
+	} else {
+		asOf = time.Now().UTC()
+	}
+
+	history, total, err := h.usecase.GetHistory(ctx, page, limit, asOf)
 	if err != nil {
 		c.Error(err)
 		return
@@ -77,6 +102,7 @@ func (h *AdminPricingTaxHandler) GetHistory(c *gin.Context) {
 			"total":   total,
 			"page":    page,
 			"limit":   limit,
+			"as_of":   asOf,
 		},
 	})
 }

@@ -101,6 +101,26 @@ func TestPricingTaxModel_MappingRoundtrip(t *testing.T) {
 	assert.Equal(t, original.ChangeReason, restored.ChangeReason)
 }
 
+func TestPricingTaxModel_ToDomainAt(t *testing.T) {
+	effectiveFrom := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+	m := &models.PricingTaxModel{
+		ID:            uuid.New(),
+		Version:       3,
+		Status:        domain.PricingTaxStatusScheduled,
+		EffectiveFrom: effectiveFrom,
+		EffectiveTo:   nil,
+	}
+
+	before := m.ToDomainAt(effectiveFrom.Add(-1 * time.Minute))
+	assert.Equal(t, domain.PricingTaxStatusScheduled, before.Status)
+
+	at := m.ToDomainAt(effectiveFrom)
+	assert.Equal(t, domain.PricingTaxStatusActive, at.Status)
+
+	after := m.ToDomainAt(effectiveFrom.Add(1 * time.Hour))
+	assert.Equal(t, domain.PricingTaxStatusActive, after.Status)
+}
+
 // Database Integration Tests
 func getTestDB(t *testing.T) *gorm.DB {
 	dbURL := os.Getenv("DATABASE_URL")

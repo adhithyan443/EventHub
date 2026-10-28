@@ -195,7 +195,9 @@ export default function AdminPricingTaxPage() {
     }
   };
 
-  const scheduledConfigs = timeline.filter((c) => c.status === "SCHEDULED");
+  const scheduledConfigs = timeline.filter(
+    (c) => c.status === "SCHEDULED" && new Date(c.effective_from) > new Date()
+  );
 
   return (
     <div className="space-y-8 p-6 max-w-7xl mx-auto text-[#141b2b]">
@@ -321,7 +323,7 @@ export default function AdminPricingTaxPage() {
                       Version {sched.version} (SCHEDULED)
                     </span>
                     <span className="text-xs text-[#4f7a75]">
-                      Takes effect: {new Date(sched.effective_from).toLocaleString()}
+                      Takes effect: {new Date(sched.effective_from).toLocaleString()} ({new Date(sched.effective_from).toISOString().replace("T", " ").substring(0, 19)} UTC)
                     </span>
                   </div>
                   <div className="mt-2 text-sm text-[#141b2b] flex gap-4">
@@ -502,15 +504,25 @@ export default function AdminPricingTaxPage() {
 
             {formMode === "future" ? (
               <div>
-                <label className="block text-xs font-medium text-[#4f7a75] mb-1">
-                  Effective Start Date & Time
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-medium text-[#4f7a75]">
+                    Effective Start Date & Time
+                  </label>
+                  <span className="text-[11px] text-[#00685f]">
+                    Timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone}
+                  </span>
+                </div>
                 <input
                   type="datetime-local"
                   value={futureDate}
                   onChange={(e) => setFutureDate(e.target.value)}
                   className="w-full px-3 py-2 border border-[#bcc9c6] rounded-lg text-sm bg-white focus:outline-none focus:border-[#00685f]"
                 />
+                {futureDate && (
+                  <p className="text-[11px] text-[#4f7a75] mt-1">
+                    Scheduled for: <span className="font-medium text-[#141b2b]">{new Date(futureDate).toLocaleString()}</span> (UTC: {new Date(futureDate).toISOString().replace("T", " ").substring(0, 19)} UTC)
+                  </p>
+                )}
               </div>
             ) : (
               <div>
@@ -595,7 +607,7 @@ export default function AdminPricingTaxPage() {
                     {row.tax_enabled ? `${row.tax_percent}%` : "0% (Disabled)"}
                   </td>
                   <td className="py-3 px-3 font-mono text-[11px] text-[#4f7a75]">
-                    [{new Date(row.effective_from).toLocaleDateString()}, {row.effective_to ? new Date(row.effective_to).toLocaleDateString() : "∞"})
+                    [{new Date(row.effective_from).toLocaleString()}, {row.effective_to ? new Date(row.effective_to).toLocaleString() : "∞"})
                   </td>
                   <td className="py-3 px-3 max-w-xs truncate" title={row.change_reason}>
                     {row.change_reason}

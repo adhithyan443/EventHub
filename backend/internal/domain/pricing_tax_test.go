@@ -245,3 +245,102 @@ func TestCalculatePricing(t *testing.T) {
 		assert.Equal(t, "1050.00", res.TotalAmount.StringFixed(2))
 	})
 }
+
+func TestPricingTaxConfiguration_ResolveStatus(t *testing.T) {
+	effectiveFrom := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
+	effectiveTo := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+
+	boundedConfig := &PricingTaxConfiguration{
+		ID:            uuid.New(),
+		Version:       3,
+		Status:        PricingTaxStatusScheduled,
+		EffectiveFrom: effectiveFrom,
+		EffectiveTo:   &effectiveTo,
+	}
+
+	openEndedConfig := &PricingTaxConfiguration{
+		ID:            uuid.New(),
+		Version:       4,
+		Status:        PricingTaxStatusScheduled,
+		EffectiveFrom: effectiveFrom,
+		EffectiveTo:   nil,
+	}
+
+	t.Run("bounded: before effective time returns SCHEDULED", func(t *testing.T) {
+		at := effectiveFrom.Add(-1 * time.Nanosecond)
+		assert.Equal(t, PricingTaxStatusScheduled, boundedConfig.ResolveStatus(at))
+	})
+
+	t.Run("bounded: exactly at effective time returns ACTIVE", func(t *testing.T) {
+		assert.Equal(t, PricingTaxStatusActive, boundedConfig.ResolveStatus(effectiveFrom))
+	})
+
+	t.Run("bounded: after effective time but before effective to returns ACTIVE", func(t *testing.T) {
+		at := effectiveFrom.Add(1 * time.Hour)
+		assert.Equal(t, PricingTaxStatusActive, boundedConfig.ResolveStatus(at))
+	})
+
+	t.Run("bounded: at the end of effective interval (effective_to) returns SUPERSEDED", func(t *testing.T) {
+		assert.Equal(t, PricingTaxStatusSuperseded, boundedConfig.ResolveStatus(effectiveTo))
+	})
+
+	t.Run("bounded: after effective to returns SUPERSEDED", func(t *testing.T) {
+		at := effectiveTo.Add(1 * time.Second)
+		assert.Equal(t, PricingTaxStatusSuperseded, boundedConfig.ResolveStatus(at))
+	})
+
+	t.Run("open-ended: before effective time returns SCHEDULED", func(t *testing.T) {
+		at := effectiveFrom.Add(-1 * time.Millisecond)
+		assert.Equal(t, PricingTaxStatusScheduled, openEndedConfig.ResolveStatus(at))
+	})
+
+	t.Run("open-ended: exactly at effective time returns ACTIVE", func(t *testing.T) {
+		assert.Equal(t, PricingTaxStatusActive, openEndedConfig.ResolveStatus(effectiveFrom))
+	})
+
+	t.Run("open-ended: long after effective time returns ACTIVE", func(t *testing.T) {
+		at := effectiveFrom.Add(365 * 24 * time.Hour)
+		assert.Equal(t, PricingTaxStatusActive, openEndedConfig.ResolveStatus(at))
+	})
+
+	t.Run("cancellation: historical evaluation before CancelledAt reflects pre-cancellation status", func(t *testing.T) {
+		cancelledAt := effectiveFrom.Add(-2 * time.Hour) // cancelled at 08:00 UTC
+		cancelledConfig := &PricingTaxConfiguration{
+			ID:            uuid.New(),
+			Version:       5,
+			Status:        PricingTaxStatusCancelled,
+			EffectiveFrom: effectiveFrom,
+			EffectiveTo:   nil,
+			CancelledAt:   &cancelledAt,
+		}
+
+		// At 07:00 UTC (before cancellation occurred), the schedule was SCHEDULED
+		priorTime := cancelledAt.Add(-1 * time.Hour)
+		assert.Equal(t, PricingTaxStatusScheduled, cancelledConfig.ResolveStatus(priorTime))
+
+		// Exactly at 08:00 UTC (cancelledAt), it is CANCELLED
+		assert.Equal(t, PricingTaxStatusCancelled, cancelledConfig.ResolveStatus(cancelledAt))
+
+		// At 09:00 UTC (after cancellation, before effectiveFrom), it is CANCELLED
+		afterCancelledTime := cancelledAt.Add(1 * time.Hour)
+		assert.Equal(t, PricingTaxStatusCancelled, cancelledConfig.ResolveStatus(afterCancelledTime))
+
+		// At 10:30 UTC (during scheduled interval), cancelled schedule NEVER becomes ACTIVE
+		duringScheduledInterval := effectiveFrom.Add(30 * time.Minute)
+		assert.Equal(t, PricingTaxStatusCancelled, cancelledConfig.ResolveStatus(duringScheduledInterval))
+	})
+
+	t.Run("cancellation: static CANCELLED without CancelledAt timestamp always evaluates to CANCELLED", func(t *testing.T) {
+		legacyCancelledConfig := &PricingTaxConfiguration{
+			ID:            uuid.New(),
+			Version:       6,
+			Status:        PricingTaxStatusCancelled,
+			EffectiveFrom: effectiveFrom,
+			EffectiveTo:   nil,
+			CancelledAt:   nil,
+		}
+		assert.Equal(t, PricingTaxStatusCancelled, legacyCancelledConfig.ResolveStatus(effectiveFrom.Add(-1 * time.Hour)))
+		assert.Equal(t, PricingTaxStatusCancelled, legacyCancelledConfig.ResolveStatus(effectiveFrom))
+		assert.Equal(t, PricingTaxStatusCancelled, legacyCancelledConfig.ResolveStatus(effectiveFrom.Add(1 * time.Hour)))
+	})
+}

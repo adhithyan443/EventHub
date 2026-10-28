@@ -56,11 +56,15 @@ type ScheduleRequest struct {
 	AdminUserID              uuid.UUID       `json:"-"`
 }
 
-func (u *PricingTaxUsecase) GetActiveConfiguration(ctx context.Context) (*domain.PricingTaxConfiguration, error) {
+func (u *PricingTaxUsecase) GetActiveConfiguration(ctx context.Context, asOf ...time.Time) (*domain.PricingTaxConfiguration, error) {
+	evalTime := time.Now().UTC()
+	if len(asOf) > 0 && !asOf[0].IsZero() {
+		evalTime = asOf[0].UTC()
+	}
 	var config *domain.PricingTaxConfiguration
 	err := u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
 		var err error
-		config, err = tx.PricingTaxConfigurationRepository().FindActiveAt(ctx, time.Now().UTC())
+		config, err = tx.PricingTaxConfigurationRepository().FindActiveAt(ctx, evalTime)
 		return err
 	})
 	if err != nil {
@@ -69,11 +73,15 @@ func (u *PricingTaxUsecase) GetActiveConfiguration(ctx context.Context) (*domain
 	return config, nil
 }
 
-func (u *PricingTaxUsecase) GetTimeline(ctx context.Context) ([]domain.PricingTaxConfiguration, error) {
+func (u *PricingTaxUsecase) GetTimeline(ctx context.Context, asOf ...time.Time) ([]domain.PricingTaxConfiguration, error) {
+	evalTime := time.Now().UTC()
+	if len(asOf) > 0 && !asOf[0].IsZero() {
+		evalTime = asOf[0].UTC()
+	}
 	var timeline []domain.PricingTaxConfiguration
 	err := u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
 		var err error
-		timeline, err = tx.PricingTaxConfigurationRepository().FindTimeline(ctx)
+		timeline, err = tx.PricingTaxConfigurationRepository().FindTimeline(ctx, evalTime)
 		return err
 	})
 	if err != nil {
@@ -82,12 +90,16 @@ func (u *PricingTaxUsecase) GetTimeline(ctx context.Context) ([]domain.PricingTa
 	return timeline, nil
 }
 
-func (u *PricingTaxUsecase) GetHistory(ctx context.Context, page, limit int) ([]domain.PricingTaxConfiguration, int64, error) {
+func (u *PricingTaxUsecase) GetHistory(ctx context.Context, page, limit int, asOf ...time.Time) ([]domain.PricingTaxConfiguration, int64, error) {
+	evalTime := time.Now().UTC()
+	if len(asOf) > 0 && !asOf[0].IsZero() {
+		evalTime = asOf[0].UTC()
+	}
 	var history []domain.PricingTaxConfiguration
 	var total int64
 	err := u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
 		var err error
-		history, total, err = tx.PricingTaxConfigurationRepository().FindHistory(ctx, page, limit)
+		history, total, err = tx.PricingTaxConfigurationRepository().FindHistory(ctx, page, limit, evalTime)
 		return err
 	})
 	if err != nil {
@@ -127,7 +139,7 @@ func (u *PricingTaxUsecase) PublishImmediate(ctx context.Context, req PublishReq
 		}
 
 		now := time.Now().UTC()
-		timeline, err := repo.FindTimeline(ctx)
+		timeline, err := repo.FindTimeline(ctx, now)
 		if err != nil {
 			return err
 		}
@@ -276,7 +288,7 @@ func (u *PricingTaxUsecase) ScheduleFuture(ctx context.Context, req ScheduleRequ
 			return domain.ErrConcurrentConfigurationModification
 		}
 
-		timeline, err := repo.FindTimeline(ctx)
+		timeline, err := repo.FindTimeline(ctx, now)
 		if err != nil {
 			return err
 		}
@@ -379,11 +391,11 @@ func (u *PricingTaxUsecase) CancelScheduled(
 			return err
 		}
 
-		if target.Status != domain.PricingTaxStatusScheduled || !target.EffectiveFrom.After(now) {
+		if target.ResolveStatus(now) != domain.PricingTaxStatusScheduled {
 			return domain.ErrCannotCancelActiveConfiguration
 		}
 
-		timeline, err := repo.FindTimeline(ctx)
+		timeline, err := repo.FindTimeline(ctx, now)
 		if err != nil {
 			return err
 		}

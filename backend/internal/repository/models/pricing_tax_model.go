@@ -87,3 +87,13 @@ func (m *PricingTaxModel) ToDomain() *domain.PricingTaxConfiguration {
 		UpdatedAt:                m.UpdatedAt,
 	}
 }
+
+// ToDomainAt projects the model into domain entity with its temporal status resolved at reference timestamp at.
+func (m *PricingTaxModel) ToDomainAt(at time.Time) *domain.PricingTaxConfiguration {
+	if m == nil {
+		return nil
+	}
+	d := m.ToDomain()
+	d.Status = d.ResolveStatus(at)
+	return d
+}

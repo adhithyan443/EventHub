@@ -95,13 +95,17 @@ func (m *mockCheckoutRepo) ExpireActiveByReservationID(ctx context.Context, rese
 }
 
 type mockPricingTaxRepo struct {
-	config *domain.PricingTaxConfiguration
-	err    error
+	config           *domain.PricingTaxConfiguration
+	findActiveAtFunc func(t time.Time) (*domain.PricingTaxConfiguration, error)
+	err              error
 }
 
 func (m *mockPricingTaxRepo) FindActiveAt(ctx context.Context, t time.Time) (*domain.PricingTaxConfiguration, error) {
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.findActiveAtFunc != nil {
+		return m.findActiveAtFunc(t)
 	}
 	return m.config, nil
 }
@@ -111,10 +115,10 @@ func (m *mockPricingTaxRepo) FindByID(ctx context.Context, id uuid.UUID) (*domai
 func (m *mockPricingTaxRepo) FindLatest(ctx context.Context) (*domain.PricingTaxConfiguration, error) {
 	return nil, nil
 }
-func (m *mockPricingTaxRepo) FindTimeline(ctx context.Context) ([]domain.PricingTaxConfiguration, error) {
+func (m *mockPricingTaxRepo) FindTimeline(ctx context.Context, asOf time.Time) ([]domain.PricingTaxConfiguration, error) {
 	return nil, nil
 }
-func (m *mockPricingTaxRepo) FindHistory(ctx context.Context, page, limit int) ([]domain.PricingTaxConfiguration, int64, error) {
+func (m *mockPricingTaxRepo) FindHistory(ctx context.Context, page, limit int, asOf time.Time) ([]domain.PricingTaxConfiguration, int64, error) {
 	return nil, 0, nil
 }
 func (m *mockPricingTaxRepo) Create(ctx context.Context, config *domain.PricingTaxConfiguration) error {
@@ -319,5 +323,112 @@ func TestCheckoutUsecase_CreateCheckout(t *testing.T) {
 		assert.Equal(t, existingCheckout.ID, chk.ID)
 		assert.Equal(t, "5.00", chk.PlatformFee.StringFixed(2))
 		assert.Equal(t, "105.00", chk.TotalAmount.StringFixed(2))
+	})
+
+	t.Run("checkout selects active pricing at its creation timestamp", func(t *testing.T) {
+		boundaryTime := time.Now().Add(10 * time.Minute)
+		epoch := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		v2 := &domain.PricingTaxConfiguration{
+			ID:                 uuid.New(),
+			Version:            2,
+			Status:             domain.PricingTaxStatusActive,
+			PlatformFeeEnabled: true,
+			PlatformFeePercent: decimal.NewFromFloat(4.99),
+			FreeTicketExempt:   true,
+			EffectiveFrom:      epoch,
+			EffectiveTo:        &boundaryTime,
+		}
+
+		v3 := &domain.PricingTaxConfiguration{
+			ID:                 uuid.New(),
+			Version:            3,
+			Status:             domain.PricingTaxStatusScheduled,
+			PlatformFeeEnabled: true,
+			PlatformFeePercent: decimal.NewFromFloat(7.00),
+			FreeTicketExempt:   true,
+			EffectiveFrom:      boundaryTime,
+			EffectiveTo:        nil,
+		}
+
+		resolver := func(t time.Time) (*domain.PricingTaxConfiguration, error) {
+			if t.Before(boundaryTime) {
+				cfg := *v2
+				cfg.Status = cfg.ResolveStatus(t)
+				return &cfg, nil
+			}
+			cfg := *v3
+			cfg.Status = cfg.ResolveStatus(t)
+			return &cfg, nil
+		}
+
+		// Reservation 1: evaluated at current time (before boundaryTime)
+		resID1 := uuid.New()
+		res1 := &domain.SeatReservation{
+			ID:        resID1,
+			UserID:    userID,
+			Status:    domain.ReservationStatusActive,
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+		items1 := []domain.SeatReservationItem{
+			{ID: uuid.New(), ReservationID: resID1, Price: decimal.NewFromInt(1000), Quantity: 1},
+		}
+
+		resRepo := &mockReservationRepo{
+			reservation: res1,
+			items:       items1,
+		}
+		checkoutRepo := &mockCheckoutRepo{}
+		pricingRepo := &mockPricingTaxRepo{
+			findActiveAtFunc: resolver,
+		}
+
+		uc := setupTestCheckoutUsecase(resRepo, checkoutRepo, pricingRepo)
+
+		// Create checkout 1: fee at 4.99% on 1000 = 49.90
+		chk1, err := uc.CreateCheckout(ctx, CreateCheckoutRequest{
+			UserID:        userID,
+			ReservationID: resID1,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "49.90", chk1.PlatformFee.StringFixed(2))
+		assert.Equal(t, "1049.90", chk1.TotalAmount.StringFixed(2))
+
+		// Reservation 2: simulated after boundaryTime
+		resID2 := uuid.New()
+		res2 := &domain.SeatReservation{
+			ID:        resID2,
+			UserID:    userID,
+			Status:    domain.ReservationStatusActive,
+			ExpiresAt: time.Now().Add(5 * time.Minute),
+		}
+		items2 := []domain.SeatReservationItem{
+			{ID: uuid.New(), ReservationID: resID2, Price: decimal.NewFromInt(1000), Quantity: 1},
+		}
+
+		// When resolver is invoked after boundaryTime, v3 applies (7.00%)
+		futureResolver := func(t time.Time) (*domain.PricingTaxConfiguration, error) {
+			cfg := *v3
+			cfg.Status = cfg.ResolveStatus(boundaryTime.Add(1 * time.Second))
+			return &cfg, nil
+		}
+
+		resRepo2 := &mockReservationRepo{
+			reservation: res2,
+			items:       items2,
+		}
+		checkoutRepo2 := &mockCheckoutRepo{}
+		pricingRepo2 := &mockPricingTaxRepo{
+			findActiveAtFunc: futureResolver,
+		}
+
+		uc2 := setupTestCheckoutUsecase(resRepo2, checkoutRepo2, pricingRepo2)
+		chk2, err := uc2.CreateCheckout(ctx, CreateCheckoutRequest{
+			UserID:        userID,
+			ReservationID: resID2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, "70.00", chk2.PlatformFee.StringFixed(2))
+		assert.Equal(t, "1070.00", chk2.TotalAmount.StringFixed(2))
 	})
 }

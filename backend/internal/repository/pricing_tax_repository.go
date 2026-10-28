@@ -42,7 +42,7 @@ func (r *PricingTaxRepository) FindActiveAt(ctx context.Context, t time.Time) (*
 		)
 		return nil, err
 	}
-	return m.ToDomain(), nil
+	return m.ToDomainAt(t), nil
 }
 
 func (r *PricingTaxRepository) FindByID(ctx context.Context, id uuid.UUID) (*domain.PricingTaxConfiguration, error) {
@@ -69,7 +69,7 @@ func (r *PricingTaxRepository) FindLatest(ctx context.Context) (*domain.PricingT
 	return m.ToDomain(), nil
 }
 
-func (r *PricingTaxRepository) FindTimeline(ctx context.Context) ([]domain.PricingTaxConfiguration, error) {
+func (r *PricingTaxRepository) FindTimeline(ctx context.Context, asOf time.Time) ([]domain.PricingTaxConfiguration, error) {
 	var list []models.PricingTaxModel
 	err := r.db.WithContext(ctx).
 		Where("status != ?", domain.PricingTaxStatusCancelled).
@@ -81,12 +81,12 @@ func (r *PricingTaxRepository) FindTimeline(ctx context.Context) ([]domain.Prici
 
 	result := make([]domain.PricingTaxConfiguration, len(list))
 	for i := range list {
-		result[i] = *list[i].ToDomain()
+		result[i] = *list[i].ToDomainAt(asOf)
 	}
 	return result, nil
 }
 
-func (r *PricingTaxRepository) FindHistory(ctx context.Context, page, limit int) ([]domain.PricingTaxConfiguration, int64, error) {
+func (r *PricingTaxRepository) FindHistory(ctx context.Context, page, limit int, asOf time.Time) ([]domain.PricingTaxConfiguration, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -112,7 +112,7 @@ func (r *PricingTaxRepository) FindHistory(ctx context.Context, page, limit int)
 
 	result := make([]domain.PricingTaxConfiguration, len(list))
 	for i := range list {
-		result[i] = *list[i].ToDomain()
+		result[i] = *list[i].ToDomainAt(asOf)
 	}
 	return result, total, nil
 }

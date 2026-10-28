@@ -61,6 +61,32 @@ type PricingTaxConfiguration struct {
 	UpdatedAt                time.Time       `json:"updated_at"`
 }
 
+// ResolveStatus evaluates the configuration lifecycle state at reference timestamp at.
+// The half-open interval [effective_from, effective_to) defines active validity:
+//   - at < effective_from                 => SCHEDULED
+//   - effective_from <= at < effective_to => ACTIVE
+//   - at >= effective_to                  => SUPERSEDED
+// If cancelled, it is only CANCELLED at or after CancelledAt (or if static status is CANCELLED without CancelledAt).
+// For historical queries before CancelledAt, the cancellation had not taken place yet,
+// reflecting its pre-cancellation lifecycle state at that historical timestamp.
+func (c *PricingTaxConfiguration) ResolveStatus(at time.Time) string {
+	if c.CancelledAt != nil {
+		if !at.Before(*c.CancelledAt) {
+			return PricingTaxStatusCancelled
+		}
+	} else if c.Status == PricingTaxStatusCancelled {
+		return PricingTaxStatusCancelled
+	}
+
+	if at.Before(c.EffectiveFrom) {
+		return PricingTaxStatusScheduled
+	}
+	if c.EffectiveTo == nil || at.Before(*c.EffectiveTo) {
+		return PricingTaxStatusActive
+	}
+	return PricingTaxStatusSuperseded
+}
+
 // PricingBreakdown captures the computed monetary breakdown for a reservation.
 type PricingBreakdown struct {
 	Subtotal        decimal.Decimal `json:"subtotal"`
@@ -84,11 +110,13 @@ type PricingTaxConfigurationRepository interface {
 	// FindLatest returns the latest configuration by version.
 	FindLatest(ctx context.Context) (*PricingTaxConfiguration, error)
 
-	// FindTimeline returns all non-cancelled configurations ordered by effective_from ASC.
-	FindTimeline(ctx context.Context) ([]PricingTaxConfiguration, error)
+	// FindTimeline returns all non-cancelled configurations ordered by effective_from ASC,
+	// with statuses resolved relative to the evaluation timestamp asOf.
+	FindTimeline(ctx context.Context, asOf time.Time) ([]PricingTaxConfiguration, error)
 
-	// FindHistory returns paginated configuration audit records ordered by version DESC.
-	FindHistory(ctx context.Context, page, limit int) ([]PricingTaxConfiguration, int64, error)
+	// FindHistory returns paginated configuration audit records ordered by version DESC,
+	// with statuses resolved relative to the evaluation timestamp asOf.
+	FindHistory(ctx context.Context, page, limit int, asOf time.Time) ([]PricingTaxConfiguration, int64, error)
 
 	// Create inserts a new configuration.
 	Create(ctx context.Context, config *PricingTaxConfiguration) error
