@@ -312,18 +312,41 @@ func (m *mockTicketTypeRepo) FindByID(ctx context.Context, id uuid.UUID) (*domai
 	return nil, domain.ErrTicketTypeNotFound
 }
 
+type mockEventCancellationRepo struct {
+	domain.EventCancellationRepository
+	cancellations map[uuid.UUID]*domain.EventCancellation
+	findErr       error
+}
+
+func newMockEventCancellationRepo() *mockEventCancellationRepo {
+	return &mockEventCancellationRepo{
+		cancellations: make(map[uuid.UUID]*domain.EventCancellation),
+	}
+}
+
+func (m *mockEventCancellationRepo) FindByEventID(eventID uuid.UUID) (*domain.EventCancellation, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	if c, ok := m.cancellations[eventID]; ok {
+		return c, nil
+	}
+	return nil, domain.ErrEventNotFound
+}
+
 type mockTxRepos struct {
 	domain.TransactionRepositories
-	bookingRepo         *mockBookingRepo
-	checkoutRepo        *mockCheckoutRepo
-	seatReservationRepo *mockSeatReservationRepo
-	seatRepo            *mockSeatRepo
-	userRepo            *mockUserRepo
-	eventRepo           *mockEventRepo
-	scheduleRepo        *mockScheduleRepo
-	venueRepo           *mockVenueRepo
-	ticketRepo          *mockTicketRepo
-	ticketTypeRepo      *mockTicketTypeRepo
+	bookingRepo           *mockBookingRepo
+	checkoutRepo          *mockCheckoutRepo
+	seatReservationRepo   *mockSeatReservationRepo
+	seatRepo              *mockSeatRepo
+	userRepo              *mockUserRepo
+	eventRepo             *mockEventRepo
+	scheduleRepo          *mockScheduleRepo
+	venueRepo             *mockVenueRepo
+	ticketRepo            *mockTicketRepo
+	ticketTypeRepo        *mockTicketTypeRepo
+	eventCancellationRepo *mockEventCancellationRepo
 }
 
 func (m *mockTxRepos) SeatReservationRepository() domain.SeatReservationRepository {
@@ -356,6 +379,9 @@ func (m *mockTxRepos) TicketRepository() domain.TicketRepository {
 func (m *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
 	return m.ticketTypeRepo
 }
+func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepository {
+	return m.eventCancellationRepo
+}
 
 type mockTxManager struct {
 	txRepos *mockTxRepos
@@ -368,16 +394,17 @@ func (m *mockTxManager) WithinTransaction(fn func(tx domain.TransactionRepositor
 func setupBookingUsecase() (*bookinguc.BookingUsecase, *mockTxRepos) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	txRepos := &mockTxRepos{
-		bookingRepo:         newMockBookingRepo(),
-		checkoutRepo:        newMockCheckoutRepo(),
-		seatReservationRepo: newMockSeatReservationRepo(),
-		seatRepo:            newMockSeatRepo(),
-		userRepo:            &mockUserRepo{users: make(map[uuid.UUID]*domain.User)},
-		eventRepo:           &mockEventRepo{events: make(map[uuid.UUID]*domain.Event)},
-		scheduleRepo:        &mockScheduleRepo{schedules: make(map[uuid.UUID]*domain.EventSchedule)},
-		venueRepo:           &mockVenueRepo{venues: make(map[uuid.UUID]*domain.Venue)},
-		ticketRepo:          &mockTicketRepo{ticketsByBooking: make(map[uuid.UUID][]domain.Ticket)},
-		ticketTypeRepo:      &mockTicketTypeRepo{types: make(map[uuid.UUID]*domain.TicketType)},
+		bookingRepo:           newMockBookingRepo(),
+		checkoutRepo:          newMockCheckoutRepo(),
+		seatReservationRepo:   newMockSeatReservationRepo(),
+		seatRepo:              newMockSeatRepo(),
+		userRepo:              &mockUserRepo{users: make(map[uuid.UUID]*domain.User)},
+		eventRepo:             &mockEventRepo{events: make(map[uuid.UUID]*domain.Event)},
+		scheduleRepo:          &mockScheduleRepo{schedules: make(map[uuid.UUID]*domain.EventSchedule)},
+		venueRepo:             &mockVenueRepo{venues: make(map[uuid.UUID]*domain.Venue)},
+		ticketRepo:            &mockTicketRepo{ticketsByBooking: make(map[uuid.UUID][]domain.Ticket)},
+		ticketTypeRepo:        &mockTicketTypeRepo{types: make(map[uuid.UUID]*domain.TicketType)},
+		eventCancellationRepo: newMockEventCancellationRepo(),
 	}
 	txManager := &mockTxManager{txRepos: txRepos}
 	uc := bookinguc.NewBookingUsecase(txManager, logger)
@@ -945,4 +972,261 @@ func TestBookingUsecase_GetBookingPDFData_CrossCustomer_FailsClosed(t *testing.T
 
 	_, err := uc.GetBookingPDFData(ctx, callerID, bookingID)
 	assert.ErrorIs(t, err, domain.ErrBookingNotFound)
+}
+
+func createTestReservationAndCheckout(
+	repos *mockTxRepos,
+	userID, eventID uuid.UUID,
+	now time.Time,
+) (uuid.UUID, uuid.UUID) {
+	reservationID := uuid.New()
+	checkoutID := uuid.New()
+	seatID := uuid.New()
+
+	repos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	repos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: reservationID,
+			SeatID:        &seatID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(500),
+		},
+	}
+	repos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:             checkoutID,
+		ReservationID:  reservationID,
+		UserID:         userID,
+		Subtotal:       decimal.NewFromInt(500),
+		PlatformFee:    decimal.NewFromInt(25),
+		TaxAmount:      decimal.NewFromInt(90),
+		DiscountAmount: decimal.Zero,
+		TotalAmount:    decimal.NewFromInt(615),
+		Status:         domain.CheckoutStatusActive,
+		ExpiresAt:      now.Add(15 * time.Minute),
+	}
+
+	return reservationID, checkoutID
+}
+
+func TestBookingUsecase_CreateBooking_Snapshot_FullRefund(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	_, checkoutID := createTestReservationAndCheckout(repos, userID, eventID, now)
+
+	repos.eventCancellationRepo.cancellations[eventID] = &domain.EventCancellation{
+		ID:                        uuid.New(),
+		EventID:                   eventID,
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 24,
+		RefundPolicy:              domain.RefundPolicyFull,
+		RefundPercentage:          100,
+	}
+
+	booking, err := uc.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, booking)
+
+	assert.True(t, booking.CancellationAllowed)
+	assert.Equal(t, 24, booking.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyFull, booking.RefundPolicy)
+	assert.Equal(t, 100, booking.RefundPercentage)
+
+	require.Len(t, repos.bookingRepo.createdBookings, 1)
+	persisted := repos.bookingRepo.createdBookings[0]
+	assert.True(t, persisted.CancellationAllowed)
+	assert.Equal(t, 24, persisted.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyFull, persisted.RefundPolicy)
+	assert.Equal(t, 100, persisted.RefundPercentage)
+}
+
+func TestBookingUsecase_CreateBooking_Snapshot_PartialRefund(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	_, checkoutID := createTestReservationAndCheckout(repos, userID, eventID, now)
+
+	repos.eventCancellationRepo.cancellations[eventID] = &domain.EventCancellation{
+		ID:                        uuid.New(),
+		EventID:                   eventID,
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 48,
+		RefundPolicy:              domain.RefundPolicyPartial,
+		RefundPercentage:          75,
+	}
+
+	booking, err := uc.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, booking)
+
+	assert.True(t, booking.CancellationAllowed)
+	assert.Equal(t, 48, booking.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyPartial, booking.RefundPolicy)
+	assert.Equal(t, 75, booking.RefundPercentage)
+
+	require.Len(t, repos.bookingRepo.createdBookings, 1)
+	persisted := repos.bookingRepo.createdBookings[0]
+	assert.True(t, persisted.CancellationAllowed)
+	assert.Equal(t, 48, persisted.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyPartial, persisted.RefundPolicy)
+	assert.Equal(t, 75, persisted.RefundPercentage)
+}
+
+func TestBookingUsecase_CreateBooking_Snapshot_NoRefund(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	_, checkoutID := createTestReservationAndCheckout(repos, userID, eventID, now)
+
+	repos.eventCancellationRepo.cancellations[eventID] = &domain.EventCancellation{
+		ID:                        uuid.New(),
+		EventID:                   eventID,
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 12,
+		RefundPolicy:              domain.RefundPolicyNoRefund,
+		RefundPercentage:          0,
+	}
+
+	booking, err := uc.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, booking)
+
+	assert.True(t, booking.CancellationAllowed)
+	assert.Equal(t, 12, booking.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyNoRefund, booking.RefundPolicy)
+	assert.Equal(t, 0, booking.RefundPercentage)
+
+	require.Len(t, repos.bookingRepo.createdBookings, 1)
+	persisted := repos.bookingRepo.createdBookings[0]
+	assert.True(t, persisted.CancellationAllowed)
+	assert.Equal(t, 12, persisted.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyNoRefund, persisted.RefundPolicy)
+	assert.Equal(t, 0, persisted.RefundPercentage)
+}
+
+func TestBookingUsecase_CreateBooking_Snapshot_CancellationDisabled(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	_, checkoutID := createTestReservationAndCheckout(repos, userID, eventID, now)
+
+	repos.eventCancellationRepo.cancellations[eventID] = &domain.EventCancellation{
+		ID:                        uuid.New(),
+		EventID:                   eventID,
+		CancellationAllowed:       false,
+		CancellationDeadlineHours: 0,
+		RefundPolicy:              domain.RefundPolicyNoRefund,
+		RefundPercentage:          0,
+	}
+
+	booking, err := uc.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, booking)
+
+	assert.False(t, booking.CancellationAllowed)
+	assert.Equal(t, 0, booking.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyNoRefund, booking.RefundPolicy)
+	assert.Equal(t, 0, booking.RefundPercentage)
+
+	require.Len(t, repos.bookingRepo.createdBookings, 1)
+	persisted := repos.bookingRepo.createdBookings[0]
+	assert.False(t, persisted.CancellationAllowed)
+	assert.Equal(t, 0, persisted.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyNoRefund, persisted.RefundPolicy)
+	assert.Equal(t, 0, persisted.RefundPercentage)
+}
+
+func TestBookingUsecase_CreateBooking_Snapshot_MissingPolicy_DefaultsSafely(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	_, checkoutID := createTestReservationAndCheckout(repos, userID, eventID, now)
+
+	// Explicitly ensure no policy exists for this event
+	delete(repos.eventCancellationRepo.cancellations, eventID)
+
+	booking, err := uc.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, booking)
+
+	// Safe defaults must be applied when policy record is absent
+	assert.False(t, booking.CancellationAllowed)
+	assert.Equal(t, 0, booking.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyNoRefund, booking.RefundPolicy)
+	assert.Equal(t, 0, booking.RefundPercentage)
+
+	require.Len(t, repos.bookingRepo.createdBookings, 1)
+	persisted := repos.bookingRepo.createdBookings[0]
+	assert.False(t, persisted.CancellationAllowed)
+	assert.Equal(t, 0, persisted.CancellationDeadlineHours)
+	assert.Equal(t, domain.RefundPolicyNoRefund, persisted.RefundPolicy)
+	assert.Equal(t, 0, persisted.RefundPercentage)
+}
+
+func TestBookingUsecase_CreateBooking_Snapshot_RepositoryError_AbortsTransaction(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	_, checkoutID := createTestReservationAndCheckout(repos, userID, eventID, now)
+
+	// Unexpected database failure
+	dbErr := errors.New("db connection failure")
+	repos.eventCancellationRepo.findErr = dbErr
+
+	booking, err := uc.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, dbErr)
+	assert.Nil(t, booking)
+
+	// No bookings should have been created due to transaction rollback
+	assert.Empty(t, repos.bookingRepo.createdBookings)
 }

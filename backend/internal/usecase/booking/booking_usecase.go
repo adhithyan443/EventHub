@@ -121,6 +121,34 @@ func (u *BookingUsecase) CreateBooking(
 				bookingID.String()[:12],
 			)
 
+			// Retrieve the event's cancellation policy applicable at booking time.
+			cancellationAllowed := false
+			cancellationDeadlineHours := 0
+			cancellationRefundPolicy := domain.RefundPolicyNoRefund
+			cancellationRefundPercentage := 0
+
+			cancellation, err := tx.EventCancellationRepository().FindByEventID(reservation.EventID)
+			if err != nil {
+				if errors.Is(err, domain.ErrEventNotFound) {
+					u.logger.WarnContext(ctx, "event cancellation policy not found, applying default no-refund snapshot",
+						slog.String("event_id", reservation.EventID.String()),
+						slog.String("booking_id", bookingID.String()),
+					)
+				} else {
+					u.logger.ErrorContext(ctx, "failed to retrieve event cancellation policy for booking snapshot",
+						slog.String("event_id", reservation.EventID.String()),
+						slog.String("booking_id", bookingID.String()),
+						slog.String("error", err.Error()),
+					)
+					return err
+				}
+			} else if cancellation != nil {
+				cancellationAllowed = cancellation.CancellationAllowed
+				cancellationDeadlineHours = cancellation.CancellationDeadlineHours
+				cancellationRefundPolicy = cancellation.RefundPolicy
+				cancellationRefundPercentage = cancellation.RefundPercentage
+			}
+
 			booking = &domain.Booking{
 				ID:            bookingID,
 				BookingNumber: bookingNumber,
@@ -136,10 +164,24 @@ func (u *BookingUsecase) CreateBooking(
 				Discount:    checkout.DiscountAmount,
 				Total:       checkout.TotalAmount,
 
+				CancellationAllowed:       cancellationAllowed,
+				CancellationDeadlineHours: cancellationDeadlineHours,
+				RefundPolicy:              cancellationRefundPolicy,
+				RefundPercentage:          cancellationRefundPercentage,
+
 				Status:    domain.BookingStatusPending,
 				CreatedAt: now,
 				UpdatedAt: now,
 			}
+
+			u.logger.InfoContext(ctx, "booking_cancellation_policy_snapshotted",
+				slog.String("booking_id", bookingID.String()),
+				slog.String("event_id", reservation.EventID.String()),
+				slog.Bool("cancellation_allowed", booking.CancellationAllowed),
+				slog.Int("cancellation_deadline_hours", booking.CancellationDeadlineHours),
+				slog.String("refund_policy", booking.RefundPolicy),
+				slog.Int("refund_percentage", booking.RefundPercentage),
+			)
 
 			bookingItems := make([]domain.BookingItem, 0, len(reservationItems))
 

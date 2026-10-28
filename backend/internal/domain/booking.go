@@ -33,6 +33,11 @@ type Booking struct {
 	Discount    decimal.Decimal
 	Total       decimal.Decimal
 
+	CancellationAllowed       bool   `json:"cancellation_allowed"`
+	CancellationDeadlineHours int    `json:"cancellation_deadline_hours"`
+	RefundPolicy              string `json:"refund_policy"`
+	RefundPercentage          int    `json:"refund_percentage"`
+
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time

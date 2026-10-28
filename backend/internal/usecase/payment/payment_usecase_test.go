@@ -514,15 +514,30 @@ func (m *mockRazorpayWebhookEventRepo) Create(ctx context.Context, eventID strin
 	return nil
 }
 
+type mockEventCancellationRepo struct {
+	domain.EventCancellationRepository
+	cancellations map[uuid.UUID]*domain.EventCancellation
+}
+
+func (m *mockEventCancellationRepo) FindByEventID(eventID uuid.UUID) (*domain.EventCancellation, error) {
+	if m.cancellations != nil {
+		if c, ok := m.cancellations[eventID]; ok {
+			return c, nil
+		}
+	}
+	return nil, domain.ErrEventNotFound
+}
+
 type mockTxRepos struct {
 	domain.TransactionRepositories
-	paymentRepo         *mockPaymentRepo
-	bookingRepo         *mockBookingRepo
-	checkoutRepo        *mockCheckoutRepo
-	seatReservationRepo *mockSeatReservationRepo
-	ticketRepo          *mockTicketRepo
-	seatRepo            *mockSeatRepo
-	webhookEventRepo    *mockRazorpayWebhookEventRepo
+	paymentRepo           *mockPaymentRepo
+	bookingRepo           *mockBookingRepo
+	checkoutRepo          *mockCheckoutRepo
+	seatReservationRepo   *mockSeatReservationRepo
+	ticketRepo            *mockTicketRepo
+	seatRepo              *mockSeatRepo
+	webhookEventRepo      *mockRazorpayWebhookEventRepo
+	eventCancellationRepo *mockEventCancellationRepo
 }
 
 func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository {
@@ -545,6 +560,9 @@ func (m *mockTxRepos) SeatRepository() domain.SeatRepository {
 }
 func (m *mockTxRepos) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {
 	return m.webhookEventRepo
+}
+func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepository {
+	return m.eventCancellationRepo
 }
 
 type mockTransactionManager struct {
@@ -649,13 +667,14 @@ func setupFixture(t *testing.T) *testFixture {
 	webhookEventRepo := &mockRazorpayWebhookEventRepo{events: make(map[string]string)}
 
 	txRepos := &mockTxRepos{
-		paymentRepo:         paymentRepo,
-		bookingRepo:         bookingRepo,
-		checkoutRepo:        checkoutRepo,
-		seatReservationRepo: reservationRepo,
-		ticketRepo:          ticketRepo,
-		seatRepo:            seatRepo,
-		webhookEventRepo:    webhookEventRepo,
+		paymentRepo:           paymentRepo,
+		bookingRepo:           bookingRepo,
+		checkoutRepo:          checkoutRepo,
+		seatReservationRepo:   reservationRepo,
+		ticketRepo:            ticketRepo,
+		seatRepo:              seatRepo,
+		webhookEventRepo:      webhookEventRepo,
+		eventCancellationRepo: &mockEventCancellationRepo{cancellations: make(map[uuid.UUID]*domain.EventCancellation)},
 	}
 	tm := &mockTransactionManager{repos: txRepos}
 
