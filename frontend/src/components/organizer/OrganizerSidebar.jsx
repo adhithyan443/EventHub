@@ -7,6 +7,7 @@ import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db0
 import useAuthStore from "../../store/authStore";
 import useEventCreationStore from "../../store/eventCreationStore";
 import useOrganizerStore from "../../store/organizerStore";
+import notify from "../../utils/toast";
 
 export default function OrganizerSidebar({ className = "", isOpen = false, onClose }) {
   const location = useLocation();
@@ -28,6 +29,7 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
       clearAuth();
       resetEventForm();
       setIsLoggingOut(false);
+      notify.info("Signed out successfully.");
       navigate("/login", { replace: true });
     }
   }

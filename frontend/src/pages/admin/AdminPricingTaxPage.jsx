@@ -6,6 +6,7 @@ import {
   scheduleFuturePricingTax,
   cancelScheduledPricingTax,
 } from "../../api/pricingTaxApi";
+import notify from "../../utils/toast";
 
 export default function AdminPricingTaxPage() {
   const [activeConfig, setActiveConfig] = useState(null);
@@ -129,7 +130,9 @@ export default function AdminPricingTaxPage() {
           replace_future_schedules: replaceFuture,
           change_reason: changeReason.trim(),
         });
-        setSuccessMsg("Configuration published immediately and activated successfully.");
+        const msg = "Configuration published immediately and activated successfully.";
+        setSuccessMsg(msg);
+        notify.success(msg);
       } else {
         if (!futureDate) {
           setErrorMsg("Please select an effective future date and time.");
@@ -150,7 +153,9 @@ export default function AdminPricingTaxPage() {
           effective_from: new Date(futureDate).toISOString(),
           change_reason: changeReason.trim(),
         });
-        setSuccessMsg("Upcoming configuration scheduled successfully.");
+        const msg = "Upcoming configuration scheduled successfully.";
+        setSuccessMsg(msg);
+        notify.success(msg);
       }
 
       setChangeReason("");
@@ -158,9 +163,13 @@ export default function AdminPricingTaxPage() {
     } catch (err) {
       if (err?.response?.status === 409) {
         setConflictOccurred(true);
-        setErrorMsg("Version Conflict: Another administrator updated the configuration. Please reload the timeline.");
+        const conflictMsg = "Version Conflict: Another administrator updated the configuration. Please reload the timeline.";
+        setErrorMsg(conflictMsg);
+        notify.error(conflictMsg);
       } else {
-        setErrorMsg(err?.response?.data?.message || err?.message || "Failed to update configuration.");
+        const errText = err?.response?.data?.message || err?.message || "Failed to update configuration.";
+        setErrorMsg(errText);
+        notify.error(errText);
       }
     } finally {
       setSubmitting(false);
@@ -179,16 +188,22 @@ export default function AdminPricingTaxPage() {
         expected_base_version: cancelModalConfig.version,
         reason: cancelReason.trim(),
       });
-      setSuccessMsg("Scheduled configuration cancelled and timeline predecessor restored.");
+      const msg = "Scheduled configuration cancelled and timeline predecessor restored.";
+      setSuccessMsg(msg);
+      notify.success(msg);
       setCancelModalConfig(null);
       setCancelReason("");
       triggerRefresh();
     } catch (err) {
       if (err?.response?.status === 409) {
         setConflictOccurred(true);
-        setErrorMsg("Version Conflict: Configuration timeline was updated concurrently.");
+        const conflictMsg = "Version Conflict: Configuration timeline was updated concurrently.";
+        setErrorMsg(conflictMsg);
+        notify.error(conflictMsg);
       } else {
-        setErrorMsg(err?.response?.data?.message || err?.message || "Failed to cancel scheduled configuration.");
+        const errText = err?.response?.data?.message || err?.message || "Failed to cancel scheduled configuration.";
+        setErrorMsg(errText);
+        notify.error(errText);
       }
     } finally {
       setSubmitting(false);

@@ -11,6 +11,7 @@ import {
   cancelStoredReservation,
 } from "../../../api/reservationApi";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "Date TBA";
@@ -317,6 +318,7 @@ export default function CustomerEventDetailsPage() {
           ? "Your session has expired. Please log in again to reserve tickets."
           : err?.response?.data?.message || "Failed to create reservation. Please try again.";
       setReservationError(errorMsg);
+      notify.error(errorMsg);
     } finally {
       reservingRef.current = false;
       setIsReserving(false);

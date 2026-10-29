@@ -9,6 +9,7 @@ import OrganizerPromoCard from "./OrganizerPromoCard";
 import { TicketIcon, CalendarIcon, RefreshIcon } from "../../../components/layout/icons";
 import { logout } from "../../../api/authApi";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 export default function ProfilePage() {
     const navigate = useNavigate();
@@ -31,6 +32,7 @@ export default function ProfilePage() {
             console.error("Logout failed:", error);
         } finally {
             clearAuth();
+            notify.info("Signed out successfully.");
             navigate("/login", { replace: true });
         }
     }

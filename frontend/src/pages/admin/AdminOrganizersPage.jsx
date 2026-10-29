@@ -1,6 +1,7 @@
 import { useState } from "react";
 import SuspendModal from "../../components/admin/SuspendModal";
 import OrganizerDetailDrawer from "../../components/admin/OrganizerDetailDrawer";
+import notify from "../../utils/toast";
 
 const initialOrganizers = [
   {
@@ -78,6 +79,7 @@ export default function AdminOrganizersPage() {
       setActiveDrawerOrg((prev) => (prev ? { ...prev, status: "SUSPENDED" } : null));
     }
     setSuspendTarget(null);
+    notify.warning("Organizer account suspended.");
   };
 
   return (
@@ -94,7 +96,7 @@ export default function AdminOrganizersPage() {
         </div>
         <button
           type="button"
-          onClick={() => alert("Exporting organizers list...")}
+          onClick={() => notify.info("Exporting organizers list...")}
           className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer self-start sm:self-auto shrink-0"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">

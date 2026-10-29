@@ -12,6 +12,7 @@ import {
   cancelStoredReservation,
 } from "../../../api/reservationApi";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "Date TBA";
@@ -147,7 +148,9 @@ export default function SeatSelectionPage() {
       }
 
       if (prev.length >= bookingLimit) {
-        setReservationError(`You can reserve up to ${bookingLimit} seats per booking.`);
+        const limitMsg = `You can reserve up to ${bookingLimit} seats per booking.`;
+        setReservationError(limitMsg);
+        notify.warning(`Booking limit reached: You can reserve up to ${bookingLimit} seats.`);
         return prev;
       }
 
@@ -271,20 +274,21 @@ export default function SeatSelectionPage() {
       });
     } catch (err) {
       const status = err?.response?.status;
+      let errorMsg;
       if (status === 409) {
-        setReservationError(
-          "One or more of your selected seats are no longer available. Please select different seats."
-        );
+        errorMsg =
+          "One or more of your selected seats are no longer available. Please select different seats.";
         // Refresh layout so user sees updated seat availability
         setRetryCount((c) => c + 1);
       } else if (status === 401) {
-        setReservationError("Your session has expired. Please log in again.");
+        errorMsg = "Your session has expired. Please log in again.";
       } else {
-        setReservationError(
+        errorMsg =
           err?.response?.data?.message ||
-            "Failed to reserve seats. Please try again."
-        );
+          "Failed to reserve seats. Please try again.";
       }
+      setReservationError(errorMsg);
+      notify.error(errorMsg);
     } finally {
       reservingRef.current = false;
       setIsReserving(false);

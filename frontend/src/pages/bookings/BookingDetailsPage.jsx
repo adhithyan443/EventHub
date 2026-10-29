@@ -6,12 +6,17 @@ import { getBookingById, downloadBookingPdf } from "../../api/bookingApi";
 import { getPublicEventById } from "../../api/eventApi";
 import { getMyTickets, downloadTicketPdf } from "../../api/ticketApi";
 import BookingBreadcrumbs from "./components/BookingBreadcrumbs";
+import CancelBookingModal from "./components/CancelBookingModal";
+import { checkCancellationEligibility, formatDeadlineDateTime } from "../../utils/cancellation";
+import notify from "../../utils/toast";
 import {
   CalendarIcon,
   LocationPinIcon,
   BuildingIcon,
   TicketIconOutline,
   DownloadIcon,
+  ShieldCheckIcon,
+  AlertTriangleIcon,
 } from "./components/BookingIcons";
 
 const formatDate = (dateStr) => {
@@ -71,9 +76,28 @@ export default function BookingDetailsPage() {
   const [error, setError] = useState(null);
 
   const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
-  const [downloadError, setDownloadError] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [showCancelModal, setShowCancelModal] = useState(false);
+
+  const handleCancellationSuccess = () => {
+    setBooking((prev) =>
+      prev
+        ? {
+            ...prev,
+            Status: "CANCELLED",
+            status: "CANCELLED",
+          }
+        : null
+    );
+    setTickets((prev) =>
+      prev.map((t) => ({
+        ...t,
+        Status: "CANCELLED",
+        status: "CANCELLED",
+      }))
+    );
+    notify.success("Booking cancelled successfully.");
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -153,36 +177,28 @@ export default function BookingDetailsPage() {
   const handleDownload = async () => {
     const targetBookingId = booking?.ID || booking?.id || bookingId;
     if (!targetBookingId) {
-      setDownloadError("No booking found for PDF download.");
+      notify.error("No booking found for PDF download.");
       return;
     }
 
     setIsDownloading(true);
-    setDownloadError(null);
-    setDownloadSuccess(false);
 
     try {
       await downloadBookingPdf(targetBookingId);
-      setDownloadSuccess(true);
-      setTimeout(() => {
-        setDownloadSuccess(false);
-      }, 4000);
+      notify.success("Ticket pass downloaded successfully.");
     } catch (err) {
       const targetTicket = tickets[0];
       const ticketId = targetTicket?.ID || targetTicket?.id;
       if (ticketId) {
         try {
           await downloadTicketPdf(ticketId);
-          setDownloadSuccess(true);
-          setTimeout(() => {
-            setDownloadSuccess(false);
-          }, 4000);
+          notify.success("Ticket pass downloaded successfully.");
           return;
         } catch {
           // ignore secondary failure
         }
       }
-      setDownloadError(err?.message || "Failed to download ticket pass. Please try again.");
+      notify.error(err?.message || "Failed to download ticket pass. Please try again.");
     } finally {
       setIsDownloading(false);
     }
@@ -329,6 +345,13 @@ export default function BookingDetailsPage() {
   // Resolved seats list from booking
   const assignedSeats = booking?.Seats || booking?.seats || [];
 
+  // Cancellation eligibility evaluation
+  const eligibility = checkCancellationEligibility(
+    booking,
+    event?.schedule,
+    tickets
+  );
+
   return (
     <div className="flex min-h-screen flex-col bg-[#f9faff] text-[#141b2b]">
       <AppHeader />
@@ -363,6 +386,23 @@ export default function BookingDetailsPage() {
             {bookingStatus}
           </span>
         </div>
+
+        {/* Cancelled Booking Banner */}
+        {bookingStatus === "CANCELLED" && (
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 sm:p-5 text-red-900 shadow-xs flex items-start gap-3.5">
+            <div className="rounded-full bg-red-100 p-2 text-red-600 shrink-0">
+              <AlertTriangleIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="font-display font-bold text-sm sm:text-base text-red-900">
+                Booking Cancelled
+              </h3>
+              <p className="mt-1 text-xs sm:text-sm text-red-700 leading-relaxed">
+                This booking has been cancelled. Any issued digital passes and QR codes are no longer valid for event admission, and assigned seats have been released back to event inventory.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* 2-Column Responsive Layout */}
         <div className="mt-6 sm:mt-8 grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-6 sm:gap-8 items-start">
@@ -509,53 +549,64 @@ export default function BookingDetailsPage() {
             </section>
           </div>
 
-          {/* Right Column: Digital Ticket Promo + Payment Summary */}
+          {/* Right Column: Digital Ticket Promo + Payment Summary + Cancellation Policy */}
           <div className="space-y-6">
             {/* Digital Ticket Promo Card */}
-            <section className="rounded-xl bg-gradient-to-r from-[#00685f] to-[#248b80] p-6 text-center text-white shadow-xs">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white mb-2">
-                <TicketIconOutline className="w-6 h-6" />
-              </div>
-              <strong className="mt-2 block font-display text-lg sm:text-xl font-bold">
-                Your digital ticket is ready
-              </strong>
-              <p className="mt-1 text-xs sm:text-sm text-white/80">
-                Keep it handy for event entry.
-              </p>
-
-              <div className="mt-6 space-y-3">
-                <Link
-                  to={`/bookings/${currentBookingId}/ticket`}
-                  className="block w-full rounded-lg bg-white py-3 text-xs sm:text-sm font-bold text-[#00685f] hover:bg-slate-50 transition-colors shadow-xs"
-                >
-                  View Ticket
-                </Link>
-
-                <button
-                  type="button"
-                  onClick={handleDownload}
-                  disabled={isDownloading}
-                  className={`w-full inline-flex items-center justify-center gap-2 rounded-lg border border-white/30 py-3 text-xs sm:text-sm font-semibold text-white transition-colors cursor-pointer ${
-                    isDownloading ? "opacity-75" : "hover:bg-white/10"
-                  }`}
-                >
-                  <DownloadIcon className="w-4 h-4" />
-                  <span>{isDownloading ? "Downloading PDF..." : "Download Booking PDF"}</span>
-                </button>
-              </div>
-
-              {downloadSuccess && (
-                <p className="mt-3 text-xs text-white font-medium animate-pulse">
-                  ✓ Ticket PDF downloaded successfully!
+            {bookingStatus === "CANCELLED" ? (
+              <section className="rounded-xl bg-gradient-to-r from-slate-700 to-slate-800 p-6 text-center text-white shadow-xs">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white mb-2">
+                  <AlertTriangleIcon className="w-6 h-6" />
+                </div>
+                <strong className="mt-2 block font-display text-lg sm:text-xl font-bold">
+                  Booking Cancelled
+                </strong>
+                <p className="mt-1 text-xs sm:text-sm text-white/80">
+                  Digital ticket passes are void and no longer valid for entry.
                 </p>
-              )}
 
-              {downloadError && (
-                <p className="mt-3 text-xs text-rose-200 font-medium">
-                  {downloadError}
+                <div className="mt-6">
+                  <Link
+                    to={`/bookings/${currentBookingId}/ticket`}
+                    className="block w-full rounded-lg bg-white/10 border border-white/20 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-white/20 transition-colors"
+                  >
+                    View Inactive Ticket Pass
+                  </Link>
+                </div>
+              </section>
+            ) : (
+              <section className="rounded-xl bg-gradient-to-r from-[#00685f] to-[#248b80] p-6 text-center text-white shadow-xs">
+                <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-white/20 text-white mb-2">
+                  <TicketIconOutline className="w-6 h-6" />
+                </div>
+                <strong className="mt-2 block font-display text-lg sm:text-xl font-bold">
+                  Your digital ticket is ready
+                </strong>
+                <p className="mt-1 text-xs sm:text-sm text-white/80">
+                  Keep it handy for event entry.
                 </p>
-              )}
-            </section>
+
+                <div className="mt-6 space-y-3">
+                  <Link
+                    to={`/bookings/${currentBookingId}/ticket`}
+                    className="block w-full rounded-lg bg-white py-3 text-xs sm:text-sm font-bold text-[#00685f] hover:bg-slate-50 transition-colors shadow-xs"
+                  >
+                    View Ticket
+                  </Link>
+
+                  <button
+                    type="button"
+                    onClick={handleDownload}
+                    disabled={isDownloading}
+                    className={`w-full inline-flex items-center justify-center gap-2 rounded-lg border border-white/30 py-3 text-xs sm:text-sm font-semibold text-white transition-colors cursor-pointer ${
+                      isDownloading ? "opacity-75" : "hover:bg-white/10"
+                    }`}
+                  >
+                    <DownloadIcon className="w-4 h-4" />
+                    <span>{isDownloading ? "Downloading PDF..." : "Download Booking PDF"}</span>
+                  </button>
+                </div>
+              </section>
+            )}
 
             {/* Payment Summary Card */}
             <section className="rounded-xl border border-[#dfe5e3] bg-white p-5 sm:p-6 shadow-xs">
@@ -602,9 +653,121 @@ export default function BookingDetailsPage() {
                 </strong>
               </div>
             </section>
+
+            {/* Cancellation Policy Card */}
+            <section className="rounded-xl border border-[#dfe5e3] bg-white p-5 sm:p-6 shadow-xs">
+              <div className="flex items-center gap-2">
+                <ShieldCheckIcon className="w-5 h-5 text-[#00685f]" />
+                <h3 className="font-display font-semibold text-base sm:text-lg text-ink">
+                  Cancellation Policy
+                </h3>
+              </div>
+
+              <div className="mt-4 space-y-3 border-t border-[#dfe5e3] pt-4 text-xs sm:text-sm">
+                <div className="flex justify-between items-center text-[#565e74]">
+                  <span>Policy Type</span>
+                  <span className="font-semibold text-ink">
+                    {eligibility.refundPolicy === "FULL"
+                      ? "Full Refund (100%)"
+                      : eligibility.refundPolicy === "PARTIAL"
+                      ? `Partial Refund (${eligibility.refundPercentage}%)`
+                      : "No Refund"}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center text-[#565e74]">
+                  <span>Cancellation</span>
+                  <span
+                    className={`font-semibold ${
+                      (booking.CancellationAllowed ?? booking.cancellation_allowed)
+                        ? "text-emerald-700"
+                        : "text-slate-600"
+                    }`}
+                  >
+                    {(booking.CancellationAllowed ?? booking.cancellation_allowed)
+                      ? "Permitted"
+                      : "Not Allowed"}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center text-[#565e74]">
+                  <span>Deadline Notice</span>
+                  <span className="font-medium text-[#3d4947]">
+                    {eligibility.deadlineHours > 0
+                      ? `${eligibility.deadlineHours} hrs before event`
+                      : "Until event starts"}
+                  </span>
+                </div>
+
+                {eligibility.deadlineDate && (
+                  <div className="flex flex-col gap-1 border-t border-slate-100 pt-2.5 text-xs">
+                    <span className="text-[#565e74]">Cancellation Window</span>
+                    <span
+                      className={`font-medium ${
+                        eligibility.deadlinePassed
+                          ? "text-amber-700"
+                          : "text-[#00685f]"
+                      }`}
+                    >
+                      {eligibility.deadlinePassed
+                        ? `Closed on ${formatDeadlineDateTime(eligibility.deadlineDate)}`
+                        : `Allowed until ${formatDeadlineDateTime(eligibility.deadlineDate)}`}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Actions / Status within Policy Card */}
+              {bookingStatus === "CONFIRMED" && (
+                <div className="mt-5 border-t border-[#dfe5e3] pt-4">
+                  {eligibility.eligible ? (
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => setShowCancelModal(true)}
+                        className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-50/70 py-2.5 px-4 text-xs sm:text-sm font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300 transition-colors cursor-pointer shadow-xs"
+                      >
+                        <span>Cancel Booking</span>
+                      </button>
+                      <p className="mt-2 text-[11px] text-[#565e74] text-center">
+                        Eligible refund: ₹{eligibility.expectedRefund.toLocaleString("en-IN")}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-[#565e74]">
+                      <strong className="text-slate-700 block font-semibold mb-0.5">
+                        Cancellation Unavailable
+                      </strong>
+                      <span>{eligibility.reason}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {bookingStatus === "CANCELLED" && (
+                <div className="mt-5 border-t border-[#dfe5e3] pt-4 rounded-lg bg-red-50/60 p-3 border border-red-100 text-xs">
+                  <span className="font-bold text-red-700 block mb-1">
+                    Booking Cancelled
+                  </span>
+                  <span className="text-red-800">
+                    Policy applied: {eligibility.refundPolicy === "FULL" ? "100% Refund" : eligibility.refundPolicy === "PARTIAL" ? `${eligibility.refundPercentage}% Refund` : "No Refund"}.
+                  </span>
+                </div>
+              )}
+            </section>
           </div>
         </div>
       </main>
+
+      {/* Cancel Booking Confirmation & Result Modal */}
+      {showCancelModal && (
+        <CancelBookingModal
+          booking={booking}
+          event={event}
+          onClose={() => setShowCancelModal(false)}
+          onSuccess={handleCancellationSuccess}
+        />
+      )}
 
       <Footer />
     </div>

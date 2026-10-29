@@ -6,6 +6,7 @@ import PasswordInput from "../../components/ui/PasswordInput";
 import PasswordStrength from "../../components/ui/PasswordStrength";
 import Button from "../../components/ui/Button";
 import { resetPassword } from "../../api/authApi";
+import notify from "../../utils/toast";
 
 export default function ResetPasswordPage() {
     // Gets the reset token from the link received through email.
@@ -59,15 +60,12 @@ export default function ResetPasswordPage() {
         try {
             setLoading(true);
             setErrors({});
-            // setSuccess("");
 
             const response = await resetPassword(token, password);
 
             console.log("Password reset successful:", response);
 
-            // setSuccess(
-            //     "Password reset successfully. Redirecting to login..."
-            // );
+            notify.success("Password reset successfully! Redirecting to login...");
 
             setTimeout(() => {
                 navigate("/login");
@@ -83,6 +81,7 @@ export default function ResetPasswordPage() {
             setErrors({
                 general: message,
             });
+            notify.error(message);
         } finally {
             setLoading(false);
         }

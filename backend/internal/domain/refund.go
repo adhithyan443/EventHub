@@ -41,6 +41,7 @@ type RefundResult struct {
 	RefundID string
 	Amount   decimal.Decimal
 	Status   string
+	Receipt  string
 }
 
 type PaymentRefundProvider interface {
@@ -51,6 +52,10 @@ type PaymentRefundProvider interface {
 		currency string,
 		idempotencyKey string,
 	) (*RefundResult, error)
+	FetchRefunds(
+		ctx context.Context,
+		gatewayPaymentID string,
+	) ([]RefundResult, error)
 }
 
 type RefundRepository interface {

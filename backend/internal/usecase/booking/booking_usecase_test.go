@@ -21,6 +21,7 @@ type mockBookingRepo struct {
 	bookingsByReservation map[uuid.UUID]*domain.Booking
 	bookingsByID          map[uuid.UUID]*domain.Booking
 	createErr             error
+	updateStatusErr       error
 	createdBookings       []*domain.Booking
 	createdItems          [][]domain.BookingItem
 }
@@ -73,6 +74,9 @@ func (m *mockBookingRepo) FindByReservationID(ctx context.Context, reservationID
 }
 
 func (m *mockBookingRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	if m.updateStatusErr != nil {
+		return m.updateStatusErr
+	}
 	if b, ok := m.bookingsByID[id]; ok {
 		b.Status = status
 		return nil
@@ -511,6 +515,9 @@ type mockPaymentRefundProvider struct {
 	lastPaymentID      string
 	lastAmount         decimal.Decimal
 	lastIdempotencyKey string
+	existingRefunds    []domain.RefundResult
+	fetchRefundsErr    error
+	fetchRefundsCalls  int
 }
 
 func (m *mockPaymentRefundProvider) Refund(ctx context.Context, gatewayPaymentID string, amount decimal.Decimal, currency string, idempotencyKey string) (*domain.RefundResult, error) {
@@ -528,7 +535,19 @@ func (m *mockPaymentRefundProvider) Refund(ctx context.Context, gatewayPaymentID
 		RefundID: "rfnd_" + uuid.NewString()[:8],
 		Amount:   amount,
 		Status:   domain.RefundStatusSuccess,
+		Receipt:  idempotencyKey,
 	}, nil
+}
+
+func (m *mockPaymentRefundProvider) FetchRefunds(ctx context.Context, gatewayPaymentID string) ([]domain.RefundResult, error) {
+	m.fetchRefundsCalls++
+	if m.fetchRefundsErr != nil {
+		return nil, m.fetchRefundsErr
+	}
+	if m.existingRefunds != nil {
+		return m.existingRefunds, nil
+	}
+	return []domain.RefundResult{}, nil
 }
 
 type mockTxManager struct {
@@ -1845,4 +1864,311 @@ func TestBookingUsecase_CancelBooking_RefundInProgressConflict(t *testing.T) {
 	assert.ErrorIs(t, err, domain.ErrRefundInProgress)
 	assert.Nil(t, out)
 	assert.Equal(t, 0, provider.refundCalls)
+}
+
+// ---------------------------------------------------------------------------
+// Refund Lifecycle Regression Tests
+// ---------------------------------------------------------------------------
+
+func TestBookingUsecase_CancelBooking_GatewayPendingStatus_Success(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(1250)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyPartial, 50, 48*time.Hour,
+	)
+
+	expectedRefund := total.Mul(decimal.NewFromInt(50)).Div(decimal.NewFromInt(100)).RoundBank(2)
+
+	// Gateway returns PENDING (e.g. card payment refund in-flight)
+	provider.refundResult = &domain.RefundResult{
+		RefundID: "rfnd_gateway_pending_01",
+		Amount:   expectedRefund,
+		Status:   domain.RefundStatusPending,
+		Receipt:  booking.ID.String(),
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.Equal(t, "rfnd_gateway_pending_01", out.RefundID)
+	assert.Equal(t, domain.RefundStatusPending, out.RefundStatus)
+	assert.True(t, expectedRefund.Equal(out.RefundAmount))
+
+	// Verify DB state
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
+	}
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Verify refund record has gateway refund ID and status PENDING
+	refunds := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refunds, 1)
+	assert.Equal(t, domain.RefundStatusPending, refunds[0].Status)
+	require.NotNil(t, refunds[0].GatewayRefundID)
+	assert.Equal(t, "rfnd_gateway_pending_01", *refunds[0].GatewayRefundID)
+}
+
+func TestBookingUsecase_CancelBooking_GatewaySuccessStatus_Success(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(1000)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	provider.refundResult = &domain.RefundResult{
+		RefundID: "rfnd_gateway_success_01",
+		Amount:   total,
+		Status:   domain.RefundStatusSuccess,
+		Receipt:  booking.ID.String(),
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.Equal(t, "rfnd_gateway_success_01", out.RefundID)
+	assert.Equal(t, domain.RefundStatusSuccess, out.RefundStatus)
+
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
+	}
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	refunds := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refunds, 1)
+	assert.Equal(t, domain.RefundStatusSuccess, refunds[0].Status)
+	require.NotNil(t, refunds[0].GatewayRefundID)
+	assert.Equal(t, "rfnd_gateway_success_01", *refunds[0].GatewayRefundID)
+}
+
+func TestBookingUsecase_CancelBooking_ConfirmedGatewayRejection(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(800)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Definitive gateway rejection
+	provider.refundErr = errors.New("gateway rejected: payment already refunded")
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, domain.ErrGatewayRefundFailed)
+	assert.Nil(t, out)
+
+	// Booking remains CONFIRMED, tickets remain VALID, inventory NOT restored
+	assert.Equal(t, domain.BookingStatusConfirmed, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	for _, tk := range repos.ticketRepo.ticketsByBooking[booking.ID] {
+		assert.Equal(t, domain.TicketStatusValid, tk.Status)
+	}
+	assert.Equal(t, 0, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Refund record marked FAILED
+	refunds := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refunds, 1)
+	assert.Equal(t, domain.RefundStatusFailed, refunds[0].Status)
+}
+
+func TestBookingUsecase_CancelBooking_AmbiguousTimeout_WithSubsequentReconciliation(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(600)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Refund call fails with network timeout
+	provider.refundErr = errors.New("i/o timeout")
+	// But post-failure reconciliation discovers the refund was processed on gateway
+	provider.existingRefunds = []domain.RefundResult{
+		{
+			RefundID: "rfnd_recovered_after_timeout",
+			Amount:   total,
+			Status:   domain.RefundStatusSuccess,
+			Receipt:  booking.ID.String(),
+		},
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.Equal(t, "rfnd_recovered_after_timeout", out.RefundID)
+	assert.Equal(t, domain.RefundStatusSuccess, out.RefundStatus)
+
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_RepeatedRequests_ConsistentState(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(500)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// First cancellation request
+	out1, err1 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err1)
+	require.NotNil(t, out1)
+	assert.Equal(t, 1, provider.refundCalls)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Second cancellation request on already cancelled booking
+	out2, err2 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err2)
+	assert.ErrorIs(t, err2, domain.ErrBookingAlreadyCancelled)
+	assert.Nil(t, out2)
+
+	// Zero additional refund calls and zero additional quantity release
+	assert.Equal(t, 1, provider.refundCalls)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_DatabaseFailureAfterGatewayAcceptance_Recoverable(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(900)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Attempt 1: Gateway accepted refund, but Phase 2 DB update fails
+	provider.refundResult = &domain.RefundResult{
+		RefundID: "rfnd_db_crash_1",
+		Amount:   total,
+		Status:   domain.RefundStatusSuccess,
+		Receipt:  booking.ID.String(),
+	}
+	repos.bookingRepo.updateStatusErr = errors.New("database connection reset")
+
+	out1, err1 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err1)
+	assert.Nil(t, out1)
+
+	// Booking remains CONFIRMED because DB transaction rolled back
+	assert.Equal(t, domain.BookingStatusConfirmed, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	assert.Equal(t, 0, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Attempt 2: Retry with DB recovered; preflight reconciliation finds the gateway refund
+	repos.bookingRepo.updateStatusErr = nil
+	provider.refundResult = nil
+	provider.existingRefunds = []domain.RefundResult{
+		{
+			RefundID: "rfnd_db_crash_1",
+			Amount:   total,
+			Status:   domain.RefundStatusSuccess,
+			Receipt:  booking.ID.String(),
+		},
+	}
+
+	out2, err2 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err2)
+	require.NotNil(t, out2)
+
+	// No duplicate gateway call
+	assert.Equal(t, 1, provider.refundCalls)
+	assert.Equal(t, "rfnd_db_crash_1", out2.RefundID)
+	assert.Equal(t, domain.BookingStatusCancelled, out2.Status)
+	assert.Equal(t, domain.BookingStatusCancelled, repos.bookingRepo.bookingsByID[booking.ID].Status)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_ExistingGatewayRefundReconciliation(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(450)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Pre-populate gateway with an existing refund for this booking
+	provider.existingRefunds = []domain.RefundResult{
+		{
+			RefundID: "rfnd_preexisting_gateway_99",
+			Amount:   total,
+			Status:   domain.RefundStatusPending,
+			Receipt:  booking.ID.String(),
+		},
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	// Verify refund was reconciled without issuing a new gateway call
+	assert.Equal(t, 0, provider.refundCalls)
+	assert.Equal(t, "rfnd_preexisting_gateway_99", out.RefundID)
+	assert.Equal(t, domain.RefundStatusPending, out.RefundStatus)
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_ExactlyOnceInventoryRestoration(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(1200)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Step 1: Transient gateway error -> released quantity is 0
+	provider.refundErr = errors.New("temporary gateway 503")
+	out1, err1 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err1)
+	assert.Nil(t, out1)
+	assert.Equal(t, 0, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Step 2: Retry succeeds -> released quantity becomes exactly 2
+	provider.refundErr = nil
+	provider.refundResult = &domain.RefundResult{
+		RefundID: "rfnd_exactly_once",
+		Amount:   total,
+		Status:   domain.RefundStatusSuccess,
+		Receipt:  booking.ID.String(),
+	}
+	out2, err2 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err2)
+	assert.Equal(t, domain.BookingStatusCancelled, out2.Status)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Step 3: Repeated cancellation attempt -> rejected, released quantity remains exactly 2
+	out3, err3 := uc.CancelBooking(ctx, userID, booking.ID)
+	require.Error(t, err3)
+	assert.ErrorIs(t, err3, domain.ErrBookingAlreadyCancelled)
+	assert.Nil(t, out3)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Verify all tickets are CANCELLED
+	tickets := repos.ticketRepo.ticketsByBooking[booking.ID]
+	require.Len(t, tickets, 2)
+	for _, tk := range tickets {
+		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
+	}
 }

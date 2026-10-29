@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { ToastContainer } from "react-toastify";
 import AppRoutes from "./routes/AppRoutes";
 import useAuthStore from "./store/authStore";
 
@@ -10,7 +11,24 @@ function App() {
     initializeAuth();
   }, [initializeAuth]);
 
-  return <AppRoutes />;
+  return (
+    <>
+      <AppRoutes />
+      <ToastContainer
+        position="top-right"
+        autoClose={4000}
+        hideProgressBar={false}
+        newestOnTop={true}
+        closeOnClick={true}
+        rtl={false}
+        pauseOnFocusLoss={true}
+        draggable={true}
+        pauseOnHover={true}
+        theme="light"
+        limit={4}
+      />
+    </>
+  );
 }
 
 export default App;

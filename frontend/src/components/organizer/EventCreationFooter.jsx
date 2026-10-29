@@ -1,4 +1,4 @@
-import { useState } from "react";
+import notify from "../../utils/toast";
 
 export default function EventCreationFooter({
   onBack,
@@ -7,13 +7,8 @@ export default function EventCreationFooter({
   isReviewStep = false,
   continueLabel,
 }) {
-  const [draftSavedToast, setDraftSavedToast] = useState(false);
-
   const handleSaveDraft = () => {
-    setDraftSavedToast(true);
-    setTimeout(() => {
-      setDraftSavedToast(false);
-    }, 2500);
+    notify.success("Progress saved as draft locally.");
   };
 
   const primaryLabel =
@@ -21,16 +16,6 @@ export default function EventCreationFooter({
 
   return (
     <footer className="sticky bottom-0 left-0 right-0 z-20 bg-white/95 backdrop-blur border-t border-[#bcc9c6]/50 px-4 sm:px-8 py-3 sm:py-4 shadow-[0_-4px_12px_rgba(0,0,0,0.03)] flex items-center justify-between gap-2 sm:gap-4">
-      {/* Toast Notification for Draft */}
-      {draftSavedToast && (
-        <div className="absolute top-[-44px] left-1/2 -translate-x-1/2 bg-[#00685f] text-white text-xs font-semibold px-4 py-2 rounded-full shadow-lg flex items-center gap-2 animate-bounce">
-          <svg className="size-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-          </svg>
-          <span>Progress saved as draft locally</span>
-        </div>
-      )}
-
       {/* Left side: Back button */}
       <div>
         {!isFirstStep && onBack ? (

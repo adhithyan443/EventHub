@@ -21,6 +21,8 @@ import {
   updateOrganizerEvent,
 } from "../../../api/organizerApi";
 
+import notify from "../../../utils/toast";
+
 import imgDefaultBanner from "../../../assets/organizer/0b2568d2a1321299cd93ab73936efb2e8bc467fe.png";
 
 const isUUID = (str) =>
@@ -705,6 +707,7 @@ export default function CreateEventReviewPublishPage() {
 
     if (validationError) {
       setPublishError(validationError);
+      notify.warning("Please complete all required fields before publishing.");
       return;
     }
 
@@ -969,6 +972,11 @@ export default function CreateEventReviewPublishPage() {
       }
 
       setShowSuccessModal(true);
+      notify.success(
+        isEditMode
+          ? "Event updated successfully!"
+          : "Event published live successfully!"
+      );
     } catch (err) {
       console.error(
         isEditMode ? "Failed to update event:" : "Failed to create event:",
@@ -983,6 +991,7 @@ export default function CreateEventReviewPublishPage() {
           : "Failed to save event. Please try again.");
 
       setPublishError(errMsg);
+      notify.error(errMsg);
     } finally {
       setPublishing(false);
     }

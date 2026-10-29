@@ -6,6 +6,7 @@ import { getBookingById, getBookingQrBlob, downloadBookingPdf } from "../../api/
 import { getMyTicketById, getMyTickets, downloadTicketPdf } from "../../api/ticketApi";
 import { getPublicEventById } from "../../api/eventApi";
 import BookingBreadcrumbs from "./components/BookingBreadcrumbs";
+import notify from "../../utils/toast";
 import {
   CalendarIcon,
   ClockIcon,
@@ -13,6 +14,7 @@ import {
   DownloadIcon,
   InfoCircleIcon,
   TicketIconOutline,
+  AlertTriangleIcon,
 } from "./components/BookingIcons";
 
 const formatFullDate = (dateStr) => {
@@ -68,8 +70,6 @@ export default function TicketPage() {
   const [qrError, setQrError] = useState(null);
 
   const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadSuccess, setDownloadSuccess] = useState(false);
-  const [downloadError, setDownloadError] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
@@ -244,22 +244,17 @@ export default function TicketPage() {
 
   const handleDownload = async () => {
     if (!bookingId) {
-      setDownloadError("No booking reference available for download.");
+      notify.error("No booking reference available for download.");
       return;
     }
 
     setIsDownloading(true);
-    setDownloadError(null);
-    setDownloadSuccess(false);
 
     try {
       await downloadBookingPdf(bookingId);
-      setDownloadSuccess(true);
-      setTimeout(() => {
-        setDownloadSuccess(false);
-      }, 4000);
+      notify.success("Ticket pass download started.");
     } catch (err) {
-      setDownloadError(
+      notify.error(
         err?.message || "Failed to download booking PDF pass. Please try again."
       );
     } finally {
@@ -270,17 +265,12 @@ export default function TicketPage() {
   const handleDownloadSingleTicket = async (singleTicketId) => {
     if (!singleTicketId) return;
     setIsDownloading(true);
-    setDownloadError(null);
-    setDownloadSuccess(false);
 
     try {
       await downloadTicketPdf(singleTicketId);
-      setDownloadSuccess(true);
-      setTimeout(() => {
-        setDownloadSuccess(false);
-      }, 4000);
+      notify.success("Individual ticket pass download started.");
     } catch (err) {
-      setDownloadError(
+      notify.error(
         err?.message || "Failed to download individual ticket pass."
       );
     } finally {
@@ -394,7 +384,19 @@ export default function TicketPage() {
   const organizerName = event?.organizer_name || event?.organizer?.name || "Event Organizer";
 
   // Active ticket properties
-  const ticketStatus = (booking?.Status || booking?.status || activeTicket?.Status || activeTicket?.status || "CONFIRMED").toUpperCase();
+  const isCancelled =
+    (
+      booking?.Status ||
+      booking?.status ||
+      activeTicket?.Status ||
+      activeTicket?.status ||
+      ""
+    ).toUpperCase() === "CANCELLED";
+
+  const ticketStatus = isCancelled
+    ? "CANCELLED"
+    : (booking?.Status || booking?.status || activeTicket?.Status || activeTicket?.status || "CONFIRMED").toUpperCase();
+
   const ticketPrice = Number(activeTicket?.Price || activeTicket?.price || 0);
 
   // Match tier name
@@ -422,20 +424,29 @@ export default function TicketPage() {
               <h1 className="font-display text-3xl sm:text-4xl md:text-5xl font-bold tracking-tight text-ink">
                 Your Ticket Pass
               </h1>
-              <span className="inline-flex items-center gap-1 rounded-full bg-[#008378] px-3 py-1 text-xs font-semibold text-white tracking-wide uppercase">
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
-                </svg>
-                {ticketStatus}
-              </span>
+              {isCancelled ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-red-100 border border-red-200 px-3 py-1 text-xs font-bold text-red-700 tracking-wide uppercase">
+                  <AlertTriangleIcon className="w-3.5 h-3.5 text-red-600" />
+                  CANCELLED (VOID)
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded-full bg-[#008378] px-3 py-1 text-xs font-semibold text-white tracking-wide uppercase">
+                  <svg
+                    className="w-3.5 h-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+                  </svg>
+                  {ticketStatus}
+                </span>
+              )}
             </div>
             <p className="mt-2 text-sm sm:text-base text-[#3d4947]">
-              Present this verified booking pass with authoritative QR credential at event entrance.
+              {isCancelled
+                ? "This booking has been cancelled. This ticket pass is void and will not be accepted for event admission."
+                : "Present this verified booking pass with authoritative QR credential at event entrance."}
             </p>
           </div>
 
@@ -449,18 +460,54 @@ export default function TicketPage() {
           )}
         </div>
 
+        {/* Cancelled Alert Banner */}
+        {isCancelled && (
+          <div className="mx-auto mt-6 max-w-[1270px] rounded-xl border border-red-200 bg-red-50 p-4 sm:p-5 text-red-900 shadow-xs flex items-start gap-3.5">
+            <div className="rounded-full bg-red-100 p-2 text-red-600 shrink-0">
+              <AlertTriangleIcon className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="font-display font-bold text-base text-red-900">
+                Ticket Pass Cancelled & Inactive
+              </h2>
+              <p className="mt-1 text-xs sm:text-sm text-red-700 leading-relaxed">
+                This ticket pass was cancelled. Any assigned seats or admissions associated with this pass have been released back to event inventory. This pass cannot be used for event admission.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Main Ticket Layout */}
         <div className="mx-auto mt-8 sm:mt-12 grid max-w-[1270px] grid-cols-1 lg:grid-cols-[1fr_320px] items-start gap-6 sm:gap-8">
           {/* Digital Ticket Pass Container */}
           <section className="overflow-hidden rounded-xl border border-[#bcc9c6] bg-white shadow-sm">
             {/* Ticket Header Ribbon */}
-            <div className="flex flex-wrap items-center justify-between gap-2 bg-[#e9edff] px-5 sm:px-6 py-2.5 text-xs sm:text-sm tracking-wider font-semibold text-[#3d4947] border-b border-[#bcc9c6]/40 uppercase">
+            <div
+              className={`flex flex-wrap items-center justify-between gap-2 px-5 sm:px-6 py-2.5 text-xs sm:text-sm tracking-wider font-semibold border-b uppercase ${
+                isCancelled
+                  ? "bg-red-50 text-red-800 border-red-200/60"
+                  : "bg-[#e9edff] text-[#3d4947] border-[#bcc9c6]/40"
+              }`}
+            >
               <span className="flex items-center gap-2">
-                <TicketIconOutline className="w-4 h-4 text-[#00685f]" />
-                EVENTHUB DIGITAL BOOKING PASS
+                <TicketIconOutline
+                  className={`w-4 h-4 ${
+                    isCancelled ? "text-red-600" : "text-[#00685f]"
+                  }`}
+                />
+                {isCancelled
+                  ? "EVENTHUB DIGITAL PASS — VOID / CANCELLED"
+                  : "EVENTHUB DIGITAL BOOKING PASS"}
               </span>
               <span className="font-mono">Ref: {bookingNumber}</span>
             </div>
+
+            {/* Void notification across ticket if cancelled */}
+            {isCancelled && (
+              <div className="bg-red-600 px-4 py-1.5 text-center text-xs font-bold tracking-widest text-white uppercase">
+                ⚠ TICKET CANCELLED — INVALID FOR EVENT ADMISSION
+              </div>
+            )}
 
             {/* Ticket Body: Details (left) and Authoritative QR Stub (right) */}
             <div className="grid grid-cols-1 lg:grid-cols-[1fr_240px]">
@@ -613,14 +660,20 @@ export default function TicketPage() {
                               <code className="rounded bg-[#eef1ff] px-2.5 py-1 font-mono text-xs font-bold text-slate-800">
                                 {itemCode}
                               </code>
-                              <button
-                                type="button"
-                                onClick={() => handleDownloadSingleTicket(itemId)}
-                                disabled={isDownloading}
-                                className="text-xs text-[#00685f] hover:underline font-semibold cursor-pointer"
-                              >
-                                PDF
-                              </button>
+                              {isCancelled ? (
+                                <span className="rounded bg-red-100 px-2 py-0.5 text-[11px] font-bold text-red-700">
+                                  VOID
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadSingleTicket(itemId)}
+                                  disabled={isDownloading}
+                                  className="text-xs text-[#00685f] hover:underline font-semibold cursor-pointer"
+                                >
+                                  PDF
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -638,7 +691,7 @@ export default function TicketPage() {
                   </span>
 
                   {/* Authoritative Booking QR Container */}
-                  <div className="mx-auto mt-4 rounded-xl bg-white p-3 border border-slate-200/80 shadow-xs flex items-center justify-center min-h-[170px] min-w-[170px]">
+                  <div className="relative mx-auto mt-4 rounded-xl bg-white p-3 border border-slate-200/80 shadow-xs flex items-center justify-center min-h-[170px] min-w-[170px] overflow-hidden">
                     {qrLoading && (
                       <div className="flex flex-col items-center justify-center gap-2 p-6">
                         <div className="size-8 border-2 border-[#00685f]/30 border-t-[#00685f] rounded-full animate-spin" />
@@ -664,46 +717,66 @@ export default function TicketPage() {
                       <img
                         src={qrCodeUrl}
                         alt="Authoritative Booking QR Code"
-                        className="h-36 w-36 sm:h-40 sm:w-40 object-contain"
+                        className={`h-36 w-36 sm:h-40 sm:w-40 object-contain ${
+                          isCancelled ? "opacity-20 grayscale" : ""
+                        }`}
                       />
+                    )}
+
+                    {/* Void Stamp Overlay */}
+                    {isCancelled && (
+                      <div className="absolute inset-0 bg-white/80 backdrop-blur-[1px] flex flex-col items-center justify-center p-2 text-center border-2 border-dashed border-red-400">
+                        <div className="size-8 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-1 font-bold text-sm">
+                          ✕
+                        </div>
+                        <span className="font-display font-bold text-xs sm:text-sm text-red-700 uppercase tracking-wider">
+                          Pass Void
+                        </span>
+                        <span className="text-[10px] text-red-600 font-medium">
+                          Cancelled Booking
+                        </span>
+                      </div>
                     )}
                   </div>
 
                   {/* Booking QR Details */}
-                  <p className="mt-3 text-xs font-medium text-[#565e74]">Booking QR Pass</p>
+                  <p className="mt-3 text-xs font-medium text-[#565e74]">
+                    {isCancelled ? "Void Booking QR" : "Booking QR Pass"}
+                  </p>
                   <code className="mt-1 inline-block rounded bg-[#eef1ff] px-3 py-1 font-mono text-xs sm:text-sm font-bold tracking-widest text-[#141b2b] border border-slate-200/60 max-w-full truncate">
                     {bookingNumber}
                   </code>
                   <span className="mt-1 text-[11px] text-[#565e74]">
-                    {assignedSeats.length > 0
+                    {isCancelled
+                      ? "Deactivated"
+                      : assignedSeats.length > 0
                       ? `Admits ${tickets.length || assignedSeats.length} • Reserved`
                       : `Admits ${tickets.length || 1} • General`}
                   </span>
                 </div>
 
                 <div className="w-full mt-6">
-                  <button
-                    type="button"
-                    onClick={handleDownload}
-                    disabled={isDownloading}
-                    className={`w-full inline-flex items-center justify-center gap-2 rounded-lg bg-[#00685f] py-3 px-4 text-xs sm:text-sm font-semibold text-white shadow-xs transition-colors cursor-pointer ${
-                      isDownloading ? "opacity-75" : "hover:bg-[#00544c]"
-                    }`}
-                  >
-                    <DownloadIcon className="w-4 h-4" />
-                    <span>{isDownloading ? "Downloading..." : "⇩ Download PDF Pass"}</span>
-                  </button>
-
-                  {downloadSuccess && (
-                    <p className="mt-2 text-[11px] text-emerald-700 font-medium">
-                      ✓ Download started successfully!
-                    </p>
-                  )}
-
-                  {downloadError && (
-                    <p className="mt-2 text-[11px] text-rose-600 font-medium">
-                      {downloadError}
-                    </p>
+                  {isCancelled ? (
+                    <button
+                      type="button"
+                      disabled
+                      className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-slate-100 border border-slate-200 py-3 px-4 text-xs sm:text-sm font-semibold text-slate-400 cursor-not-allowed"
+                    >
+                      <DownloadIcon className="w-4 h-4 text-slate-400" />
+                      <span>Pass Void (Cancelled)</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleDownload}
+                      disabled={isDownloading}
+                      className={`w-full inline-flex items-center justify-center gap-2 rounded-lg bg-[#00685f] py-3 px-4 text-xs sm:text-sm font-semibold text-white shadow-xs transition-colors cursor-pointer ${
+                        isDownloading ? "opacity-75" : "hover:bg-[#00544c]"
+                      }`}
+                    >
+                      <DownloadIcon className="w-4 h-4" />
+                      <span>{isDownloading ? "Downloading..." : "⇩ Download PDF Pass"}</span>
+                    </button>
                   )}
                 </div>
               </div>
@@ -729,19 +802,39 @@ export default function TicketPage() {
               </dd>
 
               <dt className="text-[#3d4947]">Pass Status</dt>
-              <dd className="text-right font-bold text-[#008378] flex items-center justify-end gap-1">
-                <span className="w-2 h-2 rounded-full bg-[#008378]" />
+              <dd
+                className={`text-right font-bold flex items-center justify-end gap-1 ${
+                  isCancelled ? "text-red-700" : "text-[#008378]"
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    isCancelled ? "bg-red-600" : "bg-[#008378]"
+                  }`}
+                />
                 {ticketStatus}
               </dd>
 
               <dt className="text-[#3d4947]">Seating</dt>
               <dd className="text-right font-semibold text-ink">
-                {assignedSeats.length > 0 ? `${assignedSeats.length} Reserved` : "General"}
+                {isCancelled
+                  ? "Released"
+                  : assignedSeats.length > 0
+                  ? `${assignedSeats.length} Reserved`
+                  : "General"}
               </dd>
             </dl>
 
-            <div className="mt-6 rounded-lg border border-[#bcc9c6] bg-[#eef1ff] p-4 text-center font-body text-xs sm:text-sm text-[#3d4947]">
-              This booking pass contains one authoritative QR credential for all admitted party members.
+            <div
+              className={`mt-6 rounded-lg border p-4 text-center font-body text-xs sm:text-sm ${
+                isCancelled
+                  ? "border-red-200 bg-red-50 text-red-800"
+                  : "border-[#bcc9c6] bg-[#eef1ff] text-[#3d4947]"
+              }`}
+            >
+              {isCancelled
+                ? "This ticket pass has been cancelled and permanently deactivated. Gate scanners will reject this barcode."
+                : "This booking pass contains one authoritative QR credential for all admitted party members."}
             </div>
           </aside>
         </div>

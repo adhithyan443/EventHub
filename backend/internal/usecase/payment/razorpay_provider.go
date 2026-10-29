@@ -575,6 +575,10 @@ func (p *RazorpayProvider) Refund(
 
 	refundID, _ := response["id"].(string)
 	statusStr, _ := response["status"].(string)
+	receiptStr, _ := response["receipt"].(string)
+	if receiptStr == "" {
+		receiptStr = trimmedIdempotencyKey
+	}
 
 	var refundStatus string
 	switch strings.ToLower(statusStr) {
@@ -608,7 +612,77 @@ func (p *RazorpayProvider) Refund(
 		RefundID: refundID,
 		Amount:   actualAmount,
 		Status:   refundStatus,
+		Receipt:  receiptStr,
 	}, nil
+}
+
+func (p *RazorpayProvider) FetchRefunds(
+	ctx context.Context,
+	gatewayPaymentID string,
+) ([]domain.RefundResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	trimmedPaymentID := strings.TrimSpace(gatewayPaymentID)
+	if trimmedPaymentID == "" {
+		return nil, errors.New("gateway payment ID is required")
+	}
+
+	response, err := p.client.Payment.FetchMultipleRefund(trimmedPaymentID, nil, nil)
+	if err != nil {
+		p.logger.ErrorContext(ctx, "failed to fetch razorpay refunds for payment",
+			slog.String("gateway_payment_id", trimmedPaymentID),
+			slog.Any("error", err),
+		)
+		return nil, fmt.Errorf("failed to fetch refunds from gateway: %w", err)
+	}
+
+	items, ok := response["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		return []domain.RefundResult{}, nil
+	}
+
+	results := make([]domain.RefundResult, 0, len(items))
+	for _, item := range items {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		refundID, _ := itemMap["id"].(string)
+		statusStr, _ := itemMap["status"].(string)
+		receiptStr, _ := itemMap["receipt"].(string)
+
+		var refundStatus string
+		switch strings.ToLower(statusStr) {
+		case "processed", "success":
+			refundStatus = domain.RefundStatusSuccess
+		case "pending":
+			refundStatus = domain.RefundStatusPending
+		case "failed":
+			refundStatus = domain.RefundStatusFailed
+		default:
+			if refundID != "" {
+				refundStatus = domain.RefundStatusSuccess
+			} else {
+				refundStatus = domain.RefundStatusFailed
+			}
+		}
+
+		actualAmount := decimal.Zero
+		if amtVal, ok := razorpayAmount(itemMap["amount"]); ok && amtVal > 0 {
+			actualAmount = decimal.NewFromInt(amtVal).Div(decimal.NewFromInt(100))
+		}
+
+		results = append(results, domain.RefundResult{
+			RefundID: refundID,
+			Amount:   actualAmount,
+			Status:   refundStatus,
+			Receipt:  receiptStr,
+		})
+	}
+
+	return results, nil
 }
 
 var _ PaymentProvider = (*RazorpayProvider)(nil)

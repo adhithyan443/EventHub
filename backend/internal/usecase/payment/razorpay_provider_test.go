@@ -79,3 +79,19 @@ func TestRazorpayProvider_VerifyWebhookSignature(t *testing.T) {
 		})
 	}
 }
+
+func TestRazorpayProvider_FetchRefunds_Validation(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	provider, err := payment.NewRazorpayProvider("rzp_test_key", "rzp_test_secret", "secret", logger)
+	require.NoError(t, err)
+
+	// Empty gateway payment ID
+	_, err = provider.FetchRefunds(t.Context(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gateway payment ID is required")
+
+	// Whitespace gateway payment ID
+	_, err = provider.FetchRefunds(t.Context(), "   ")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "gateway payment ID is required")
+}

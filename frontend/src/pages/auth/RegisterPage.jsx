@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { startGoogleLogin, register } from "../../api/authApi";
+import notify from "../../utils/toast";
 
 import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
@@ -108,6 +109,8 @@ export default function RegisterPage() {
                 password: form.password,
             });
 
+            notify.success("Account registered! Please check your email for the OTP.");
+
             navigate("/verify-otp", {
                 replace: true,
                 state: {
@@ -124,6 +127,7 @@ export default function RegisterPage() {
             setErrors({
                 submit: message,
             });
+            notify.error(message);
         } finally {
             setIsSubmitting(false);
         }

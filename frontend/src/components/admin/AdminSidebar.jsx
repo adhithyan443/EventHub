@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { LogoutIcon } from "../layout/icons";
 import { logout } from "../../api/authApi";
 import useAuthStore from "../../store/authStore";
+import notify from "../../utils/toast";
 
 const navItems = [
   {
@@ -143,6 +144,7 @@ export default function AdminSidebar({ className = "", isOpen = false, onClose }
     } finally {
       clearAuth();
       setIsLoggingOut(false);
+      notify.info("Signed out successfully.");
       navigate("/login", { replace: true });
     }
   }

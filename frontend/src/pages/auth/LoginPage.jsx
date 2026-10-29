@@ -6,6 +6,7 @@ import GoogleIcon from "../../components/ui/GoogleIcon";
 import { Link, useNavigate } from "react-router-dom";
 import { login, startGoogleLogin } from "../../api/authApi";
 import useAuthStore from "../../store/authStore";
+import notify from "../../utils/toast";
 // import apiClient from "../../api/client";
 
 export default function LoginPage() {
@@ -74,6 +75,8 @@ export default function LoginPage() {
             );
             // await testProtectedAPI();
 
+            notify.success(`Welcome back${response.user?.fullName ? `, ${response.user.fullName}` : ""}!`);
+
             switch (response.user.role) {
                 case "ADMIN":
                     navigate("/admin");
@@ -91,6 +94,7 @@ export default function LoginPage() {
                     setErrors({
                         general: "Invalid user role.",
                     });
+                    notify.error("Invalid user role.");
             }
 
 
@@ -104,6 +108,7 @@ export default function LoginPage() {
             setErrors({
                 general: message,
             });
+            notify.error(message);
         }
     }
 

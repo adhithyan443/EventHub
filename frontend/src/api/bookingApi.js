@@ -90,3 +90,17 @@ export const downloadBookingPdf = async (bookingId) => {
     throw err;
   }
 };
+
+/**
+ * Cancels a booking for the authenticated customer and initiates refund processing if eligible.
+ * @param {string} bookingId - UUID of the booking
+ * @returns {Promise<{ message: string, data: object }>}
+ */
+export const cancelBooking = async (bookingId) => {
+  if (!bookingId) {
+    throw new Error("Booking ID is required.");
+  }
+
+  const response = await apiClient.post(`/bookings/${bookingId}/cancel`);
+  return response.data;
+};

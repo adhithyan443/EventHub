@@ -7,6 +7,7 @@ import {
   approveOrganizerApplication,
   rejectOrganizerApplication,
 } from "../../api/adminOrganizerApi";
+import notify from "../../utils/toast";
 
 const statusColors = {
   PENDING: "bg-[#fef3c7] text-[#92400e]",
@@ -161,16 +162,18 @@ export default function AdminApplicationsPage() {
       );
 
       setTotal((prev) => Math.max(0, prev - 1));
+      notify.success("Organizer application approved successfully.");
     } catch (err) {
       console.error(
         "Failed to approve organizer application:",
         err
       );
 
-      setError(
+      const errorMsg =
         err.response?.data?.message ||
-        "Failed to approve organizer application."
-      );
+        "Failed to approve organizer application.";
+      setError(errorMsg);
+      notify.error(errorMsg);
     } finally {
       setActionLoading(false);
     }
@@ -197,16 +200,18 @@ export default function AdminApplicationsPage() {
       );
 
       setTotal((prev) => Math.max(0, prev - 1));
+      notify.success("Organizer application rejected.");
     } catch (err) {
       console.error(
         "Failed to reject organizer application:",
         err
       );
 
-      setError(
+      const errorMsg =
         err.response?.data?.message ||
-        "Failed to reject organizer application."
-      );
+        "Failed to reject organizer application.";
+      setError(errorMsg);
+      notify.error(errorMsg);
     } finally {
       setActionLoading(false);
     }
@@ -326,7 +331,7 @@ export default function AdminApplicationsPage() {
         <button
           type="button"
           onClick={() =>
-            alert("Exporting applications data...")
+            notify.info("Exporting applications data...")
           }
           className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer self-start sm:self-auto shrink-0"
         >

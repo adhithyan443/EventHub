@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "react-toastify/dist/ReactToastify.css";
 
 @theme {
   --color-primary: #0D9488;
@@ -11,6 +12,41 @@
   --font-display: "Space Grotesk", sans-serif;
   --font-body: "Plus Jakarta Sans", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
+}
+
+:root {
+  --toastify-color-light: #ffffff;
+  --toastify-color-dark: #0f172a;
+  --toastify-color-info: #0284c7;
+  --toastify-color-success: #0d9488;
+  --toastify-color-warning: #f59e0b;
+  --toastify-color-error: #ef4444;
+  --toastify-text-color-light: #0f172a;
+  --toastify-font-family: var(--font-body), "Plus Jakarta Sans", sans-serif;
+  --toastify-toast-bd-radius: 12px;
+  --toastify-toast-width: 380px;
+  --toastify-z-index: 9999;
+}
+
+.Toastify__toast {
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.08), 0 4px 6px -4px rgba(15, 23, 42, 0.04);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.Toastify__toast--success .Toastify__progress-bar {
+  background: #0d9488;
+}
+
+@media (max-width: 640px) {
+  .Toastify__toast-container {
+    width: calc(100vw - 32px) !important;
+    left: 16px !important;
+    right: 16px !important;
+    top: 16px !important;
+    margin: 0 auto;
+  }
 }
 
 body {

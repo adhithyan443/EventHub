@@ -10,6 +10,7 @@ import { createPayment, verifyPayment } from "../../../api/paymentApi";
 import { cancelReservation, clearStoredReservation } from "../../../api/reservationApi";
 import { loadRazorpay } from "../../../utils/loadRazorpay";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "Date TBA";
@@ -229,14 +230,16 @@ export default function CheckoutPage() {
       const status = err?.response?.status;
       if (status === 409 || status === 400) {
         setIsExpired(true);
-        setPaymentError(
-          "Your ticket reservation has expired or is no longer valid. Please select tickets again."
-        );
+        const expMsg =
+          "Your ticket reservation has expired or is no longer valid. Please select tickets again.";
+        setPaymentError(expMsg);
+        notify.error(expMsg);
       } else {
-        setPaymentError(
+        const errMsg =
           err?.response?.data?.message ||
-          "Failed to initialize checkout. Please try again."
-        );
+          "Failed to initialize checkout. Please try again.";
+        setPaymentError(errMsg);
+        notify.error(errMsg);
       }
     } finally {
       setIsCheckingOut(false);
@@ -257,9 +260,10 @@ export default function CheckoutPage() {
 
     const sdkLoaded = await loadRazorpay();
     if (!sdkLoaded || !window.Razorpay) {
-      setPaymentError(
-        "Could not load the secure Razorpay Checkout SDK. Please check your network connection and try again."
-      );
+      const sdkMsg =
+        "Could not load the secure Razorpay Checkout SDK. Please check your network connection and try again.";
+      setPaymentError(sdkMsg);
+      notify.error(sdkMsg);
       setIsPaying(false);
       return;
     }
@@ -376,13 +380,15 @@ export default function CheckoutPage() {
 
             setConfirmedBooking(verifyRes?.data?.booking || null);
             setConfirmedPayment(verifyRes?.data?.payment || null);
+            notify.success("Payment successful! Your tickets are confirmed.");
             setCurrentStep(4);
             window.scrollTo({ top: 0, behavior: "smooth" });
           } catch (err) {
-            setPaymentError(
+            const verifyErrMsg =
               err?.response?.data?.message ||
-              "Payment verification failed. If your account was debited, your booking will be confirmed via webhook shortly."
-            );
+              "Payment verification failed. If your account was debited, your booking will be confirmed via webhook shortly.";
+            setPaymentError(verifyErrMsg);
+            notify.error(verifyErrMsg);
           } finally {
             setIsPaying(false);
           }
@@ -396,6 +402,7 @@ export default function CheckoutPage() {
           failResponse?.error?.description ||
           "Payment authorization failed at the gateway. Please try again or choose another method.";
         setPaymentError(errorDesc);
+        notify.error(errorDesc);
         setIsPaying(false);
       });
 
@@ -406,6 +413,7 @@ export default function CheckoutPage() {
         err?.message ||
         "Failed to initiate payment. Please try again.";
       setPaymentError(errorMsg);
+      notify.error(errorMsg);
       setIsPaying(false);
     }
   };

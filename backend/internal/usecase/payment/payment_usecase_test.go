@@ -663,6 +663,10 @@ func (m *mockPaymentProvider) Refund(ctx context.Context, gatewayPaymentID strin
 	}, nil
 }
 
+func (m *mockPaymentProvider) FetchRefunds(ctx context.Context, gatewayPaymentID string) ([]domain.RefundResult, error) {
+	return []domain.RefundResult{}, nil
+}
+
 // --- Test Fixture Setup ---
 
 type testFixture struct {

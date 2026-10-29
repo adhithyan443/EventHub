@@ -13,6 +13,12 @@ import {
   ChevronRightIcon,
 } from "./components/BookingIcons";
 import RefundDetailsModal from "./components/RefundDetailsModal";
+import CancelBookingModal from "./components/CancelBookingModal";
+import {
+  checkCancellationEligibility,
+  calculateExpectedRefund,
+} from "../../utils/cancellation";
+import notify from "../../utils/toast";
 
 const ITEMS_PER_PAGE = 5;
 
@@ -49,8 +55,27 @@ export default function MyBookingsPage() {
   const [sortBy, setSortBy] = useState("newest");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRefundBooking, setSelectedRefundBooking] = useState(null);
+  const [cancellingBooking, setCancellingBooking] = useState(null);
 
   const [reloadKey, setReloadKey] = useState(0);
+
+  const handleCancellationSuccess = (output) => {
+    const cancelledId = output.booking_id;
+    setBookings((prev) =>
+      prev.map((b) => {
+        const id = b.ID || b.id;
+        if (id === cancelledId) {
+          return {
+            ...b,
+            Status: "CANCELLED",
+            status: "CANCELLED",
+          };
+        }
+        return b;
+      })
+    );
+    notify.success("Booking cancelled successfully.");
+  };
 
   const tabs = ["All", "Confirmed", "Cancelled", "Refunded"];
 
@@ -365,6 +390,7 @@ export default function MyBookingsPage() {
                 const bookedOnDate = formatDate(booking.CreatedAt || booking.created_at);
                 const totalAmount = Number(booking.Total || booking.total || 0);
                 const assignedSeats = booking.Seats || booking.seats || [];
+                const eligibility = checkCancellationEligibility(booking, event?.schedule);
 
                 return (
                   <article
@@ -455,7 +481,14 @@ export default function MyBookingsPage() {
                           </p>
                           <p className="text-xs sm:text-sm text-[#565e74] inline-flex items-center gap-1.5">
                             <RefundUndoIcon className="w-3.5 h-3.5 text-[#565e74]" />
-                            Refund Status: PROCESSING
+                            Policy:{" "}
+                            <span className="font-semibold text-slate-700">
+                              {(booking.RefundPolicy || booking.refund_policy || "NO_REFUND").toUpperCase() === "FULL"
+                                ? "100% Refund"
+                                : (booking.RefundPolicy || booking.refund_policy || "NO_REFUND").toUpperCase() === "PARTIAL"
+                                ? `${booking.RefundPercentage || booking.refund_percentage || 0}% Refund`
+                                : "No Refund"}
+                            </span>
                           </p>
                         </div>
                       )}
@@ -484,23 +517,44 @@ export default function MyBookingsPage() {
                           </Link>
                         )}
 
+                        {status === "CONFIRMED" && eligibility.eligible && (
+                          <button
+                            type="button"
+                            onClick={() => setCancellingBooking({ booking, event })}
+                            className="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50/70 px-4 py-2 text-xs sm:text-sm font-semibold text-rose-700 hover:bg-rose-100 hover:border-rose-300 shadow-xs transition-colors cursor-pointer"
+                          >
+                            Cancel Booking
+                          </button>
+                        )}
+
                         {(status === "CANCELLED" || status === "REFUNDED") && (
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
+                              const refundCalc = calculateExpectedRefund(booking);
                               setSelectedRefundBooking({
                                 id: bookingNumber,
                                 title: eventTitle,
                                 bookedOn: bookedOnDate,
                                 totalAmount,
-                                refundAmount: totalAmount,
-                                refundStatus: status === "REFUNDED" ? "REFUNDED" : "PROCESSING",
+                                refundAmount: refundCalc.expectedRefund,
+                                refundStatus:
+                                  refundCalc.expectedRefund > 0
+                                    ? status === "REFUNDED"
+                                      ? "REFUNDED"
+                                      : "PROCESSING"
+                                    : "NO_REFUND",
                                 refundDate: bookedOnDate,
-                                refundMethod: "Original Payment Method",
+                                refundMethod:
+                                  refundCalc.expectedRefund > 0
+                                    ? "Original Payment Method"
+                                    : "Non-refundable per policy",
                                 refundNote:
-                                  "Your refund has been initiated and will reflect in your account within 3–5 business days.",
-                              })
-                            }
+                                  refundCalc.expectedRefund > 0
+                                    ? "Your refund has been initiated to your original payment method."
+                                    : "No refund was eligible under the event cancellation policy.",
+                              });
+                            }}
                             className="inline-flex items-center justify-center rounded-lg border border-[#dfe5e3] bg-white px-4 py-2 text-xs sm:text-sm font-semibold text-[#565e74] hover:bg-slate-50 hover:text-ink transition-colors cursor-pointer"
                           >
                             View Refund
@@ -565,6 +619,16 @@ export default function MyBookingsPage() {
         <RefundDetailsModal
           booking={selectedRefundBooking}
           onClose={() => setSelectedRefundBooking(null)}
+        />
+      )}
+
+      {/* Cancel Booking Confirmation Modal */}
+      {cancellingBooking && (
+        <CancelBookingModal
+          booking={cancellingBooking.booking}
+          event={cancellingBooking.event}
+          onClose={() => setCancellingBooking(null)}
+          onSuccess={handleCancellationSuccess}
         />
       )}
 
