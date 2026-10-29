@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReviewPanel from "../../components/admin/ReviewPanel";
 import RejectModal from "../../components/admin/RejectModal";
+import ApproveModal from "../../components/admin/ApproveModal";
 import {
   getOrganizerApplications,
   getOrganizerApplicationById,
@@ -35,6 +36,9 @@ export default function AdminApplicationsPage() {
 
   // Application selected for rejection.
   const [rejectTarget, setRejectTarget] = useState(null);
+
+  // Application selected for approval confirmation.
+  const [approveTarget, setApproveTarget] = useState(null);
 
   // Current backend page.
   const [page, setPage] = useState(1);
@@ -154,6 +158,7 @@ export default function AdminApplicationsPage() {
 
       await approveOrganizerApplication(id);
 
+      setApproveTarget(null);
       setReviewApp(null);
 
       // Remove the approved application from the current list.
@@ -762,8 +767,27 @@ export default function AdminApplicationsPage() {
             setRejectTarget(reviewApp)
           }
           onApprove={() =>
-            handleApprove(reviewApp.id)
+            setApproveTarget(reviewApp)
           }
+        />
+      )}
+
+      {/* Approve Confirmation Modal */}
+      {approveTarget && (
+        <ApproveModal
+          appId={approveTarget.id}
+          businessName={
+            approveTarget.business_name ||
+            approveTarget.businessName ||
+            "Organizer Application"
+          }
+          actionLoading={actionLoading}
+          onConfirm={() =>
+            handleApprove(approveTarget.id)
+          }
+          onCancel={() => {
+            if (!actionLoading) setApproveTarget(null);
+          }}
         />
       )}
 
@@ -772,7 +796,9 @@ export default function AdminApplicationsPage() {
         <RejectModal
           appId={rejectTarget.id}
           businessName={
-            rejectTarget.business_name
+            rejectTarget.business_name ||
+            rejectTarget.businessName ||
+            "Organizer Application"
           }
           actionLoading={actionLoading}
           onConfirm={(reason) =>
@@ -781,9 +807,9 @@ export default function AdminApplicationsPage() {
               reason
             )
           }
-          onCancel={() =>
-            setRejectTarget(null)
-          }
+          onCancel={() => {
+            if (!actionLoading) setRejectTarget(null);
+          }}
         />
       )}
     </div>

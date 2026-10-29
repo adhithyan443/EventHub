@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"strings"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
@@ -92,6 +93,8 @@ func setupAdminApplicationTestRouter(
 		middleware.RequireRole("ADMIN"),
 	)
 	admin.GET("/organizer-applications/:id", appHandler.GetApplication)
+	admin.PATCH("/organizer-applications/:id/approve", appHandler.ApproveApplication)
+	admin.PATCH("/organizer-applications/:id/reject", appHandler.RejectApplication)
 
 	return router
 }
@@ -438,5 +441,92 @@ func TestAdminGetApplication_AuthorizedWithLogoAndContactDetails(t *testing.T) {
 	}
 	if resp.Data.VerificationDocumentURL != expectedDocURL {
 		t.Errorf("expected presigned doc URL %s, got %s", expectedDocURL, resp.Data.VerificationDocumentURL)
+	}
+}
+
+
+func TestAdminApproveApplication_InvalidID(t *testing.T) {
+	jwtService := token.NewJWTService("01234567890123456789012345678901")
+	tokenStr, err := jwtService.GenerateAccessToken(uuid.New(), "ADMIN")
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	repo := &stubOrganizerApplicationRepo{}
+	router := setupAdminApplicationTestRouter(repo, nil, jwtService)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/organizer-applications/invalid-uuid/approve", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestAdminApproveApplication_Unauthorized_NonAdminRole(t *testing.T) {
+	jwtService := token.NewJWTService("01234567890123456789012345678901")
+	tokenStr, err := jwtService.GenerateAccessToken(uuid.New(), "CUSTOMER")
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	repo := &stubOrganizerApplicationRepo{}
+	router := setupAdminApplicationTestRouter(repo, nil, jwtService)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/organizer-applications/"+uuid.New().String()+"/approve", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d", rec.Code)
+	}
+}
+
+func TestAdminRejectApplication_InvalidID(t *testing.T) {
+	jwtService := token.NewJWTService("01234567890123456789012345678901")
+	tokenStr, err := jwtService.GenerateAccessToken(uuid.New(), "ADMIN")
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	repo := &stubOrganizerApplicationRepo{}
+	router := setupAdminApplicationTestRouter(repo, nil, jwtService)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/organizer-applications/invalid-uuid/reject", strings.NewReader(`{"reason":"invalid"}`))
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
+	}
+}
+
+func TestAdminRejectApplication_MissingReason(t *testing.T) {
+	jwtService := token.NewJWTService("01234567890123456789012345678901")
+	tokenStr, err := jwtService.GenerateAccessToken(uuid.New(), "ADMIN")
+	if err != nil {
+		t.Fatalf("failed to generate token: %v", err)
+	}
+
+	repo := &stubOrganizerApplicationRepo{}
+	router := setupAdminApplicationTestRouter(repo, nil, jwtService)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/organizer-applications/"+uuid.New().String()+"/reject", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", rec.Code)
 	}
 }

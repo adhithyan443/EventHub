@@ -208,7 +208,15 @@ func (u *AdminApplicationUsecase) GetApplication(
 	return application, nil
 }
 
-func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
+func (u *AdminApplicationUsecase) ApproveApplication(
+	ctx context.Context,
+	id uuid.UUID,
+	adminID uuid.UUID,
+) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	return u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
 
 		application, err := tx.OrganizerApplicationRepository().FindByID(id)
@@ -217,6 +225,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 				u.logger.Warn(
 					"admin_organizer_application_approval_failed",
 					"application_id", id,
+					"admin_id", adminID,
 					"reason", "application_not_found",
 				)
 				return appErrors.NewNotFoundError("organizer application not found")
@@ -225,6 +234,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 			u.logger.Error(
 				"admin_organizer_application_approval_find_failed",
 				"application_id", id,
+				"admin_id", adminID,
 				"error", err,
 			)
 			return fmt.Errorf("failed to retrieve organizer application")
@@ -235,6 +245,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 			u.logger.Warn(
 				"admin_organizer_application_approval_failed",
 				"application_id", id,
+				"admin_id", adminID,
 				"reason", "application_not_pending",
 				"status", application.Status,
 			)
@@ -250,6 +261,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 				u.logger.Warn(
 					"admin_organizer_application_approval_failed",
 					"application_id", id,
+					"admin_id", adminID,
 					"user_id", application.UserID,
 					"reason", "user_not_found",
 				)
@@ -259,6 +271,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 			u.logger.Error(
 				"admin_organizer_application_user_find_failed",
 				"application_id", id,
+				"admin_id", adminID,
 				"user_id", application.UserID,
 				"error", err,
 			)
@@ -380,6 +393,7 @@ func (u *AdminApplicationUsecase) ApproveApplication(id uuid.UUID) error {
 			"application_id", id,
 			"user_id", application.UserID,
 			"organizer_id", organizer.ID,
+			"admin_id", adminID,
 		)
 
 		return nil

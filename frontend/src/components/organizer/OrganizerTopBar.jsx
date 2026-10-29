@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
 import { LogoutIcon } from "../layout/icons";
+import LogoutConfirmationModal from "../layout/LogoutConfirmationModal";
 import { logout } from "../../api/authApi";
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
@@ -16,6 +17,7 @@ export default function OrganizerTopBar({ showCreateButton = true, onMenuToggle 
   const resetEventForm = useEventCreationStore((state) => state.resetForm);
   const profile = useOrganizerStore((state) => state.profile);
 
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   async function handleLogout() {
@@ -28,6 +30,7 @@ export default function OrganizerTopBar({ showCreateButton = true, onMenuToggle 
       clearAuth();
       resetEventForm();
       setIsLoggingOut(false);
+      setShowLogoutModal(false);
       notify.info("Signed out successfully.");
       navigate("/login", { replace: true });
     }
@@ -116,13 +119,13 @@ export default function OrganizerTopBar({ showCreateButton = true, onMenuToggle 
         {/* Logout Action */}
         <button
           type="button"
-          onClick={handleLogout}
+          onClick={() => setShowLogoutModal(true)}
           disabled={isLoggingOut}
           className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
           title="Sign out of Organizer Portal"
         >
           <LogoutIcon className="w-3.5 h-3.5 text-[#ba1a1a]" />
-          <span className="hidden sm:inline">{isLoggingOut ? "..." : "Logout"}</span>
+          <span className="hidden sm:inline">Logout</span>
         </button>
 
         {/* Create Event Primary CTA */}
@@ -150,6 +153,15 @@ export default function OrganizerTopBar({ showCreateButton = true, onMenuToggle 
           </button>
         )}
       </div>
+
+      <LogoutConfirmationModal
+        isOpen={showLogoutModal}
+        loading={isLoggingOut}
+        onClose={() => {
+          if (!isLoggingOut) setShowLogoutModal(false);
+        }}
+        onConfirm={handleLogout}
+      />
     </header>
   );
 }

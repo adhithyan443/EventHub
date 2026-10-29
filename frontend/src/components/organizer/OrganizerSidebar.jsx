@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { ORGANIZER_ROUTES } from "../../constants/eventConstants";
 import { LogoutIcon } from "../layout/icons";
+import LogoutConfirmationModal from "../layout/LogoutConfirmationModal";
 import { logout } from "../../api/authApi";
 import imgUserAvatar from "../../assets/organizer/77afb3678a691019904dbffccf7db02c242ed0f3.png";
 import useAuthStore from "../../store/authStore";
@@ -17,6 +18,7 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
 
   const clearAuth = useAuthStore((state) => state.clearAuth);
   const resetEventForm = useEventCreationStore((state) => state.resetForm);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   async function handleLogout() {
@@ -29,6 +31,7 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
       clearAuth();
       resetEventForm();
       setIsLoggingOut(false);
+      setShowLogoutModal(false);
       notify.info("Signed out successfully.");
       navigate("/login", { replace: true });
     }
@@ -234,16 +237,25 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
 
           <button
             type="button"
-            onClick={handleLogout}
+            onClick={() => setShowLogoutModal(true)}
             disabled={isLoggingOut}
             className="w-full flex items-center justify-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 transition-colors cursor-pointer disabled:opacity-50"
             title="Sign out of Organizer Portal"
           >
             <LogoutIcon className="w-4 h-4 text-[#ba1a1a]" />
-            <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
+            <span>Logout</span>
           </button>
         </div>
       </aside>
+
+      <LogoutConfirmationModal
+        isOpen={showLogoutModal}
+        loading={isLoggingOut}
+        onClose={() => {
+          if (!isLoggingOut) setShowLogoutModal(false);
+        }}
+        onConfirm={handleLogout}
+      />
     </>
   );
 }
