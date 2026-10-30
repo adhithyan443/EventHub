@@ -78,37 +78,41 @@ const useAuthStore = create((set, get) => ({
   isAuthenticated: Boolean(initialStored.accessToken && initialStored.user),
   // If tokens exist in storage, start in initializing state until verified
   isInitializing: Boolean(initialStored.accessToken || initialStored.refreshToken),
+  sessionVersion: 0,
 
   setAuth: (user, accessToken, refreshToken) => {
     setStoredAuth(user, accessToken, refreshToken);
-    set({
+    set((state) => ({
       user,
       accessToken,
       refreshToken,
       isAuthenticated: true,
       isInitializing: false,
-    });
+      sessionVersion: state.sessionVersion + 1,
+    }));
   },
 
   setTokens: (accessToken, refreshToken) => {
     const currentUser = get().user;
     setStoredAuth(currentUser, accessToken, refreshToken);
-    set({
+    set((state) => ({
       accessToken,
-      refreshToken: refreshToken || get().refreshToken,
+      refreshToken: refreshToken || state.refreshToken,
       isAuthenticated: true,
-    });
+      sessionVersion: state.sessionVersion + 1,
+    }));
   },
 
   clearAuth: () => {
     clearStoredAuth();
-    set({
+    set((state) => ({
       user: null,
       accessToken: null,
       refreshToken: null,
       isAuthenticated: false,
       isInitializing: false,
-    });
+      sessionVersion: state.sessionVersion + 1,
+    }));
   },
 
   // Asynchronously hydrate and validate the stored session on application startup
@@ -123,7 +127,8 @@ const useAuthStore = create((set, get) => ({
 
     try {
       // Dynamically import API helpers to prevent circular module dependencies
-      const { getCurrentUser, refreshToken: refreshApi } = await import("../api/authApi");
+      const { getCurrentUser } = await import("../api/authApi.js");
+      const { requestTokenRefresh } = await import("../api/client.js");
 
       // 2. If access token is present and not expired, verify with backend /auth/me
       if (stored.accessToken && !isTokenExpired(stored.accessToken)) {
@@ -146,15 +151,10 @@ const useAuthStore = create((set, get) => ({
       // 3. If access token is expired or returned 401, attempt refresh token exchange
       if (stored.refreshToken) {
         try {
-          const refreshResponse = await refreshApi(stored.refreshToken);
-          const newAccessToken =
-            refreshResponse?.access_token || refreshResponse?.accessToken;
-          const newRefreshToken =
-            refreshResponse?.refresh_token || refreshResponse?.refreshToken || stored.refreshToken;
-
+          const newAccessToken = await requestTokenRefresh();
           if (newAccessToken) {
             // Verify new user profile with refreshed access token
-            let user = stored.user;
+            let user = get().user || stored.user;
             try {
               const userRes = await getCurrentUser(newAccessToken);
               if (userRes?.user) user = userRes.user;
@@ -162,10 +162,21 @@ const useAuthStore = create((set, get) => ({
               // Keep cached user if /me temporarily fails
             }
 
-            get().setAuth(user, newAccessToken, newRefreshToken);
+            const currentStore = get();
+            get().setAuth(
+              user,
+              currentStore.accessToken || newAccessToken,
+              currentStore.refreshToken || stored.refreshToken
+            );
             return;
           }
-        } catch {
+        } catch (refreshErr) {
+          // Distinguish transient vs definitive failure
+          if (refreshErr?.isTransientError) {
+            // Temporary network/server issue: keep stored tokens intact
+            set({ isInitializing: false });
+            return;
+          }
           // Refresh token is expired or revoked by backend
           get().clearAuth();
           return;

@@ -30,6 +30,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
+	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/joho/godotenv"
 )
@@ -321,6 +322,13 @@ func main() {
 		logger,
 	)
 
+	// Admin users and organizers dependencies.
+	adminUserUsecase := userUC.NewAdminUserUsecase(userRepo, logger)
+	adminUserHandler := handler.NewAdminUserHandler(adminUserUsecase, logger)
+
+	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(organizerRepo, logger)
+	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -336,6 +344,8 @@ func main() {
 		paymentHandler,
 		ticketHandler,
 		adminPricingTaxHandler,
+		adminUserHandler,
+		adminOrganizerHandler,
 		jwtService,
 	)
 

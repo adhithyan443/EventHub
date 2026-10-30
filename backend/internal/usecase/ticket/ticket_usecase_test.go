@@ -105,6 +105,7 @@ func (m *mockScheduleRepo) Update(schedule *domain.EventSchedule) error { return
 func (m *mockScheduleRepo) DeleteByEventID(eventID uuid.UUID) error     { return m.err }
 
 type mockUserRepo struct {
+	domain.UserRepository
 	users map[uuid.UUID]*domain.User
 	err   error
 }

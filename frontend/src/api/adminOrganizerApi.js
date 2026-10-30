@@ -55,3 +55,33 @@ export const rejectOrganizerApplication = async (applicationId, reason) => {
 
     return response.data;
 };
+
+// Get approved organizers with pagination and search.
+export const getOrganizers = async ({
+    page = 1,
+    limit = 10,
+    search = "",
+    status = "",
+} = {}) => {
+    const params = {
+        page,
+        limit,
+    };
+
+    if (search && search.trim() !== "") {
+        params.search = search.trim();
+    }
+
+    if (status && status.trim() !== "") {
+        params.status = status.trim();
+    }
+
+    const response = await apiClient.get(
+        "/admin/organizers",
+        {
+            params,
+        }
+    );
+
+    return response.data;
+};

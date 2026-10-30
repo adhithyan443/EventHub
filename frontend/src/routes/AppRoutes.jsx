@@ -23,6 +23,7 @@ import AdminLayout from "../components/admin/AdminLayout";
 import AdminDashboardPage from "../pages/admin/AdminDashboardPage";
 import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
+import AdminUsersPage from "../pages/admin/AdminUsersPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
 import AdminPricingTaxPage from "../pages/admin/AdminPricingTaxPage";
 import VenueDemoPage from "../pages/venue/VenueDemoPage";
@@ -102,7 +103,7 @@ export default function AppRoutes() {
                     <Route path="dashboard" element={<AdminDashboardPage />} />
                     <Route path="applications" element={<AdminApplicationsPage />} />
                     <Route path="organizers" element={<AdminOrganizersPage />} />
-                    <Route path="users" element={<AdminPlaceholderPage title="Users" />} />
+                    <Route path="users" element={<AdminUsersPage />} />
                     <Route path="events" element={<AdminPlaceholderPage title="Events" />} />
                     <Route path="bookings" element={<AdminPlaceholderPage title="Bookings" />} />
                     <Route path="payments" element={<AdminPlaceholderPage title="Payments & Refunds" />} />

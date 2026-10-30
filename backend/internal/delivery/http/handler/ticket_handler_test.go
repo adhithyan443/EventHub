@@ -99,6 +99,7 @@ func (s *stubScheduleRepo) Update(schedule *domain.EventSchedule) error { return
 func (s *stubScheduleRepo) DeleteByEventID(eventID uuid.UUID) error     { return s.err }
 
 type stubUserRepo struct {
+	domain.UserRepository
 	user *domain.User
 	err  error
 }

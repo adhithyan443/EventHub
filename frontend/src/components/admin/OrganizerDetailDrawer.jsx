@@ -1,9 +1,25 @@
 export default function OrganizerDetailDrawer({
   organizer,
   onClose,
-  onOpenSuspend,
 }) {
   if (!organizer) return null;
+
+  const joinedDate = organizer.created_at
+    ? new Date(organizer.created_at).toLocaleDateString("en-IN", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : organizer.joined || "—";
+
+  const displayName = organizer.business_name || organizer.name || "Organizer";
+  const initial = displayName.trim()[0]?.toUpperCase() || "O";
+  const website = organizer.website || "";
+  const websiteHref = website
+    ? website.startsWith("http://") || website.startsWith("https://")
+      ? website
+      : `https://${website}`
+    : null;
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end animate-in fade-in duration-200">
@@ -18,13 +34,21 @@ export default function OrganizerDetailDrawer({
         {/* Header */}
         <div className="px-4 sm:px-6 py-4 sm:py-5 border-b border-[#dce2f7] flex items-start justify-between bg-white shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0">
-              {organizer.name[0]}
-            </div>
+            {organizer.logo_url ? (
+              <img
+                src={organizer.logo_url}
+                alt={displayName}
+                className="w-12 h-12 rounded-full object-cover border border-[#bcc9c6] shrink-0"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-base font-bold text-[#5c6bc0] shrink-0">
+                {initial}
+              </div>
+            )}
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-[#141b2b] text-base sm:text-lg font-bold">
-                  {organizer.name}
+                  {displayName}
                 </h2>
                 <span
                   className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
@@ -33,11 +57,11 @@ export default function OrganizerDetailDrawer({
                       : "bg-[#ffdad6] text-[#93000a]"
                   }`}
                 >
-                  {organizer.status}
+                  {organizer.status || "ACTIVE"}
                 </span>
               </div>
               <p className="text-[#6d7a77] text-xs font-mono mt-0.5">
-                {organizer.id} • Joined {organizer.joined}
+                {organizer.id} • Registered {joinedDate}
               </p>
             </div>
           </div>
@@ -59,33 +83,6 @@ export default function OrganizerDetailDrawer({
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 sm:space-y-5 bg-[#fafbff]">
-          {/* Quick Metrics */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white border border-[#dce2f7] rounded-xl p-4 shadow-sm">
-              <div className="text-[#6d7a77] text-xs font-medium uppercase tracking-wider">
-                Total Events
-              </div>
-              <div className="text-[#141b2b] text-2xl font-bold mt-1">
-                {organizer.events}
-              </div>
-              <div className="text-[#00685f] text-xs mt-1 font-medium">
-                4 currently active
-              </div>
-            </div>
-
-            <div className="bg-white border border-[#dce2f7] rounded-xl p-4 shadow-sm">
-              <div className="text-[#6d7a77] text-xs font-medium uppercase tracking-wider">
-                Gross Revenue
-              </div>
-              <div className="text-[#141b2b] text-2xl font-bold mt-1">
-                {organizer.revenue}
-              </div>
-              <div className="text-[#00685f] text-xs mt-1 font-medium">
-                8% platform fee
-              </div>
-            </div>
-          </div>
-
           {/* Organization Information */}
           <section className="bg-white border border-[#dce2f7] rounded-xl overflow-hidden shadow-sm">
             <div className="bg-[#f1f3ff] px-4 py-3 border-b border-[#dce2f7]">
@@ -96,47 +93,126 @@ export default function OrganizerDetailDrawer({
             <div className="p-4 space-y-3.5">
               <div>
                 <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
-                  Organization Name
+                  Business / Organization Name
                 </div>
                 <div className="text-[#141b2b] text-sm font-semibold">
-                  {organizer.org}
+                  {organizer.business_name || displayName}
                 </div>
               </div>
+
+              <div>
+                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                  Business Type
+                </div>
+                <div className="text-[#141b2b] text-sm">
+                  {organizer.business_type || "—"}
+                </div>
+              </div>
+
+              {organizer.business_description && (
+                <div>
+                  <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                    Description
+                  </div>
+                  <p className="text-[#3d4947] text-xs leading-relaxed">
+                    {organizer.business_description}
+                  </p>
+                </div>
+              )}
+
               <div>
                 <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
                   Official Email
                 </div>
                 <div className="text-[#00685f] text-sm font-medium">
-                  {organizer.email}
+                  {organizer.business_email || organizer.user_email || organizer.email || "—"}
                 </div>
               </div>
-              <div>
-                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
-                  Website
-                </div>
-                <a
-                  href={`https://${organizer.org.toLowerCase().replace(/\s+/g, "")}.in`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-[#00685f] text-sm font-medium hover:underline"
-                >
-                  {organizer.org.toLowerCase().replace(/\s+/g, "")}.in
-                </a>
-              </div>
+
               <div>
                 <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
                   Phone Number
                 </div>
-                <div className="text-[#141b2b] text-sm">+91 98450 11223</div>
+                <div className="text-[#141b2b] text-sm">
+                  {organizer.business_phone || organizer.user_phone || "—"}
+                </div>
+              </div>
+
+              {websiteHref ? (
+                <div>
+                  <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                    Website
+                  </div>
+                  <a
+                    href={websiteHref}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[#00685f] text-sm font-medium hover:underline inline-flex items-center gap-1"
+                  >
+                    {website}
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none">
+                      <path
+                        d="M2.5 1.5H6V2.5H2.5V9.5H9.5V6H10.5V9.5C10.5 10.05 10.05 10.5 9.5 10.5H2.5C1.95 10.5 1.5 10.05 1.5 9.5V2.5C1.5 1.95 1.95 1.5 2.5 1.5ZM7.5 1.5V2.5H9.29L4.89 6.89L5.61 7.61L10 3.21V5H11V1.5H7.5Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </a>
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          {/* Associated Account Owner */}
+          <section className="bg-white border border-[#dce2f7] rounded-xl overflow-hidden shadow-sm">
+            <div className="bg-[#f1f3ff] px-4 py-3 border-b border-[#dce2f7]">
+              <h3 className="text-[#3d4947] text-xs font-semibold uppercase tracking-wider">
+                Associated User Account
+              </h3>
+            </div>
+            <div className="p-4 space-y-3">
+              <div>
+                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                  Account Owner Name
+                </div>
+                <div className="text-[#141b2b] text-sm font-semibold">
+                  {organizer.user_name || organizer.name || "—"}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                  User Email
+                </div>
+                <div className="text-[#3d4947] text-sm">
+                  {organizer.user_email || organizer.email || "—"}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                  User Phone
+                </div>
+                <div className="text-[#3d4947] text-sm">
+                  {organizer.user_phone || "—"}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
+                  User ID
+                </div>
+                <div className="text-[#6d7a77] text-xs font-mono">
+                  {organizer.user_id || "—"}
+                </div>
               </div>
             </div>
           </section>
 
-          {/* Compliance & Bank Account */}
+          {/* Compliance & Registration */}
           <section className="bg-white border border-[#dce2f7] rounded-xl overflow-hidden shadow-sm">
             <div className="bg-[#f1f3ff] px-4 py-3 border-b border-[#dce2f7]">
               <h3 className="text-[#3d4947] text-xs font-semibold uppercase tracking-wider">
-                Compliance & Payout
+                Compliance & Verification
               </h3>
             </div>
             <div className="p-4 space-y-3">
@@ -146,7 +222,7 @@ export default function OrganizerDetailDrawer({
                     PAN Card
                   </div>
                   <div className="text-[#141b2b] text-sm font-mono font-semibold">
-                    AAACT2948K
+                    {organizer.pan_number || "—"}
                   </div>
                 </div>
                 <div>
@@ -154,58 +230,23 @@ export default function OrganizerDetailDrawer({
                     GSTIN
                   </div>
                   <div className="text-[#141b2b] text-sm font-mono font-semibold">
-                    29AAACT2948K1Z3
+                    {organizer.gst_number || "—"}
                   </div>
-                </div>
-              </div>
-
-              <div className="border-t border-[#f1f3ff] pt-3">
-                <div className="text-[#6d7a77] text-xs uppercase tracking-wide mb-1 font-medium">
-                  Verified Payout Bank
-                </div>
-                <div className="text-[#141b2b] text-sm font-semibold">
-                  HDFC Bank • Account •••• 8831
-                </div>
-                <div className="text-[#6d7a77] text-xs mt-0.5">
-                  IFSC: HDFC0001824 • Verified KYC
                 </div>
               </div>
             </div>
           </section>
         </div>
 
-        {/* Footer Actions */}
-        <div className="border-t border-[#dce2f7] px-6 py-4 flex items-center justify-between bg-white shrink-0">
+        {/* Footer */}
+        <div className="border-t border-[#dce2f7] px-6 py-4 flex items-center justify-end bg-white shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="text-[#3d4947] text-sm font-medium hover:text-[#141b2b] px-3 py-2 rounded-lg hover:bg-[#f1f3ff] transition-colors cursor-pointer"
+            className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-5 py-2 rounded-lg hover:bg-[#eef0fb] transition-colors cursor-pointer"
           >
             Close
           </button>
-
-          {organizer.status === "ACTIVE" ? (
-            <button
-              type="button"
-              onClick={() => onOpenSuspend(organizer)}
-              className="border border-[#ba1a1a] text-[#ba1a1a] hover:bg-[#ffdad6] text-sm font-semibold px-4 py-2 rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
-            >
-              <svg width="14" height="14" viewBox="0 0 20 20" fill="none">
-                <path
-                  d="M10 1.5L1 18H19L10 1.5Z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  fill="none"
-                />
-                <circle cx="10" cy="15" r="0.75" fill="currentColor" />
-              </svg>
-              Suspend Organizer
-            </button>
-          ) : (
-            <span className="text-[#ba1a1a] text-xs font-semibold bg-[#ffdad6] px-3 py-1.5 rounded-lg">
-              Account Suspended
-            </span>
-          )}
         </div>
       </div>
     </div>

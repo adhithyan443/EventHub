@@ -26,6 +26,8 @@ func setupRouter(
 	paymentHandler *handler.PaymentHandler,
 	ticketHandler *handler.TicketHandler,
 	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
+	adminUserHandler *handler.AdminUserHandler,
+	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	jwtService *token.JWTService,
 ) *gin.Engine {
 	router := gin.New()
@@ -72,7 +74,14 @@ func setupRouter(
 		jwtService,
 	)
 
-	registerAdminRoutes(router, organizerApplicationHandler, adminPricingTaxHandler, jwtService)
+	registerAdminRoutes(
+		router,
+		organizerApplicationHandler,
+		adminPricingTaxHandler,
+		adminUserHandler,
+		adminOrganizerHandler,
+		jwtService,
+	)
 	registerCategoryRoutes(router, categoryHandler)
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService)
@@ -251,6 +260,8 @@ func registerAdminRoutes(
 	router *gin.Engine,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
+	adminUserHandler *handler.AdminUserHandler,
+	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	jwtService *token.JWTService,
 ) {
 	api := router.Group("/api/v1")
@@ -260,6 +271,12 @@ func registerAdminRoutes(
 		middleware.Auth(jwtService),
 		middleware.RequireRole("ADMIN"),
 	)
+
+	// User management endpoints
+	admin.GET("/users", adminUserHandler.ListUsers)
+
+	// Organizer management endpoints
+	admin.GET("/organizers", adminOrganizerHandler.ListOrganizers)
 
 	admin.GET(
 		"/organizer-applications",
