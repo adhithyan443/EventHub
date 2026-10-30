@@ -29,6 +29,7 @@ func setupRouter(
 	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
+	adminEventHandler *handler.AdminEventHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) *gin.Engine {
@@ -83,6 +84,7 @@ func setupRouter(
 		adminPricingTaxHandler,
 		adminUserHandler,
 		adminOrganizerHandler,
+		adminEventHandler,
 		jwtService,
 		userRepo,
 	)
@@ -268,6 +270,7 @@ func registerAdminRoutes(
 	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
+	adminEventHandler *handler.AdminEventHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -315,6 +318,13 @@ func registerAdminRoutes(
 	admin.POST("/pricing-tax/publish", adminPricingTaxHandler.PublishImmediate)
 	admin.POST("/pricing-tax/schedule", adminPricingTaxHandler.ScheduleFuture)
 	admin.POST("/pricing-tax/scheduled/:id/cancel", adminPricingTaxHandler.CancelScheduled)
+
+	// Event management endpoints
+	admin.GET("/events", adminEventHandler.ListEvents)
+	admin.GET("/events/:id", adminEventHandler.GetEventDetails)
+	admin.PUT("/events/:id", adminEventHandler.UpdateEvent)
+	admin.PATCH("/events/:id/publish", adminEventHandler.PublishEvent)
+	admin.DELETE("/events/:id", adminEventHandler.DeleteEvent)
 }
 
 func registerCategoryRoutes(

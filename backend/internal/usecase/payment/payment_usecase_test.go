@@ -307,6 +307,34 @@ func (m *mockBookingRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (
 	return &copied, items, nil
 }
 
+func (m *mockBookingRepo) CountConfirmedByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, b := range m.bookings {
+		if b.EventID == eventID && b.Status == domain.BookingStatusConfirmed {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockBookingRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, b := range m.bookings {
+		if b.EventID == eventID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockBookingRepo) GetBookingStatsByEventID(ctx context.Context, eventID uuid.UUID) (domain.AdminEventBookingStats, error) {
+	return domain.AdminEventBookingStats{}, nil
+}
+
 type mockCheckoutRepo struct {
 	mu        sync.Mutex
 	checkouts map[uuid.UUID]*domain.Checkout
@@ -443,6 +471,18 @@ func (m *mockSeatReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID
 		return nil
 	}
 	return domain.ErrSeatReservationNotFound
+}
+
+func (m *mockSeatReservationRepo) CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, r := range m.reservations {
+		if r.EventID == eventID && r.Status == domain.ReservationStatusActive && now.Before(r.ExpiresAt) {
+			count++
+		}
+	}
+	return count, nil
 }
 
 type mockTicketRepo struct {

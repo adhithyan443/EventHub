@@ -330,6 +330,9 @@ func main() {
 	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(organizerRepo, logger)
 	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
 
+	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)
+	adminEventHandler := handler.NewAdminEventHandler(adminEventUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -347,6 +350,7 @@ func main() {
 		adminPricingTaxHandler,
 		adminUserHandler,
 		adminOrganizerHandler,
+		adminEventHandler,
 		jwtService,
 		userRepo,
 	)

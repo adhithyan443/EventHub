@@ -55,6 +55,9 @@ func (s *stubTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status 
 func (s *stubTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
 	return s.err
 }
+func (s *stubTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	return 0, s.err
+}
 
 type stubEventRepo struct {
 	event *domain.Event
@@ -73,11 +76,20 @@ func (s *stubEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
 	}
 	return nil, domain.ErrEventNotFound
 }
+func (s *stubEventRepo) FindByIDForUpdate(id uuid.UUID) (*domain.Event, error) {
+	return s.FindByID(id)
+}
 func (s *stubEventRepo) FindByOrganizerID(organizerID uuid.UUID, page int, limit int, status string, search string) ([]*domain.OrganizerEvent, int64, error) {
 	return nil, 0, nil
 }
 func (s *stubEventRepo) FindPublicEvents(filter domain.PublicEventFilter) ([]*domain.PublicEvent, int64, error) {
 	return nil, 0, nil
+}
+func (s *stubEventRepo) FindAllEvents(filter domain.AdminEventFilter) ([]*domain.AdminEventListItem, int64, error) {
+	return nil, 0, nil
+}
+func (s *stubEventRepo) GetAdminStatusCounts() (domain.AdminEventStatusCounts, error) {
+	return domain.AdminEventStatusCounts{}, nil
 }
 
 type stubScheduleRepo struct {

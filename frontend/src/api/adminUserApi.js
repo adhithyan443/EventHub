@@ -1,4 +1,4 @@
-import apiClient from "./client";
+import apiClient from "./client.js";
 
 /**
  * Fetch registered users with pagination, search, role, and status filtering.

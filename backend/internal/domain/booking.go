@@ -123,4 +123,19 @@ type BookingRepository interface {
 		ctx context.Context,
 		bookingIDs []uuid.UUID,
 	) (map[uuid.UUID][]BookingItem, error)
+
+	CountConfirmedByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (int64, error)
+
+	CountByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (int64, error)
+
+	GetBookingStatsByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (AdminEventBookingStats, error)
 }

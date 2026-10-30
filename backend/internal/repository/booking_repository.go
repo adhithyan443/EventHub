@@ -9,6 +9,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -366,6 +367,87 @@ func (r *bookingRepository) FindItemsByBookingIDs(
 	}
 
 	return result, nil
+}
+
+func (r *bookingRepository) CountConfirmedByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.BookingModel{}).
+		Where("event_id = ? AND status = ?", eventID, domain.BookingStatusConfirmed).
+		Count(&count).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to count confirmed bookings by event id", "event_id", eventID, "error", err)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *bookingRepository) CountByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.BookingModel{}).
+		Where("event_id = ?", eventID).
+		Count(&count).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to count bookings by event id", "event_id", eventID, "error", err)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *bookingRepository) GetBookingStatsByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (domain.AdminEventBookingStats, error) {
+	var stats domain.AdminEventBookingStats
+	db := r.db.WithContext(ctx)
+
+	type bookingAgg struct {
+		TotalBookings     int64           `gorm:"column:total_bookings"`
+		ConfirmedBookings int64           `gorm:"column:confirmed_bookings"`
+		CancelledBookings int64           `gorm:"column:cancelled_bookings"`
+		TotalRevenue      decimal.Decimal `gorm:"column:total_revenue"`
+	}
+
+	var agg bookingAgg
+	err := db.Model(&models.BookingModel{}).
+		Select(`
+			COUNT(*) as total_bookings,
+			COUNT(CASE WHEN status = 'CONFIRMED' THEN 1 END) as confirmed_bookings,
+			COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled_bookings,
+			COALESCE(SUM(CASE WHEN status = 'CONFIRMED' THEN total ELSE 0 END), 0) as total_revenue
+		`).
+		Where("event_id = ?", eventID).
+		Scan(&agg).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to get booking stats for event", "event_id", eventID, "error", err)
+		return stats, err
+	}
+
+	var ticketsSold int64
+	err = db.Table("booking_items bi").
+		Joins("JOIN bookings b ON b.id = bi.booking_id").
+		Where("b.event_id = ? AND b.status = ? AND b.deleted_at IS NULL", eventID, domain.BookingStatusConfirmed).
+		Select("COALESCE(SUM(bi.quantity), 0)").
+		Scan(&ticketsSold).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to get tickets sold for event", "event_id", eventID, "error", err)
+		return stats, err
+	}
+
+	stats.TotalBookings = agg.TotalBookings
+	stats.ConfirmedBookings = agg.ConfirmedBookings
+	stats.CancelledBookings = agg.CancelledBookings
+	stats.TotalRevenue = agg.TotalRevenue
+	stats.TicketsSold = ticketsSold
+
+	return stats, nil
 }
 
 func bookingToModel(booking *domain.Booking) *models.BookingModel {

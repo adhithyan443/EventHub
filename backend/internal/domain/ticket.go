@@ -72,4 +72,9 @@ type TicketRepository interface {
 		bookingID uuid.UUID,
 		status string,
 	) error
+
+	CountByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (int64, error)
 }

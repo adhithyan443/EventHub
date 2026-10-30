@@ -146,6 +146,16 @@ func (m *mockBookingRepo) FindItemsByBookingID(ctx context.Context, bookingID uu
 	return items, nil
 }
 
+func (m *mockBookingRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	var count int64
+	for _, b := range m.bookingsByID {
+		if b.EventID == eventID {
+			count++
+		}
+	}
+	return count, nil
+}
+
 type mockCheckoutRepo struct {
 	domain.CheckoutRepository
 	checkouts map[uuid.UUID]*domain.Checkout
@@ -291,6 +301,10 @@ func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
 		return e, nil
 	}
 	return nil, domain.ErrEventNotFound
+}
+
+func (m *mockEventRepo) FindByIDForUpdate(id uuid.UUID) (*domain.Event, error) {
+	return m.FindByID(id)
 }
 
 type mockScheduleRepo struct {

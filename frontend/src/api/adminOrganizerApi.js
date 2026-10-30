@@ -1,4 +1,4 @@
-import apiClient from "./client";
+import apiClient from "./client.js";
 
 // Get organizer applications with pagination/status filtering.
 export const getOrganizerApplications = async ({

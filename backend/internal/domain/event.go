@@ -89,6 +89,7 @@ type EventCancellation struct {
 type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)
+	FindByIDForUpdate(id uuid.UUID) (*Event, error)
 	Update(event *Event) error
 	Delete(id uuid.UUID) error
 
@@ -103,6 +104,12 @@ type EventRepository interface {
 	FindPublicEvents(
 		filter PublicEventFilter,
 	) ([]*PublicEvent, int64, error)
+
+	FindAllEvents(
+		filter AdminEventFilter,
+	) ([]*AdminEventListItem, int64, error)
+
+	GetAdminStatusCounts() (AdminEventStatusCounts, error)
 }
 
 type EventScheduleRepository interface {

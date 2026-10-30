@@ -59,6 +59,9 @@ func (m *mockReservationRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUI
 	}
 	return m.reservation, nil
 }
+func (m *mockReservationRepo) CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error) {
+	return 0, nil
+}
 
 type mockCheckoutRepo struct {
 	checkout   *domain.Checkout

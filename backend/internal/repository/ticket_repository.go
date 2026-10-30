@@ -247,6 +247,22 @@ func (r *ticketRepository) UpdateStatusByBookingID(
 	return nil
 }
 
+func (r *ticketRepository) CountByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.TicketModel{}).
+		Where("event_id = ?", eventID).
+		Count(&count).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to count tickets by event id", "event_id", eventID, "error", err)
+		return 0, err
+	}
+	return count, nil
+}
+
 func toTicketModel(ticket *domain.Ticket) *models.TicketModel {
 	return &models.TicketModel{
 		ID:              ticket.ID,
