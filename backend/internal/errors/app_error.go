@@ -57,3 +57,11 @@ func NewBadGatewayError(message string) *AppError {
 		HTTPStatus: 502,
 	}
 }
+
+func NewInternalError(message string) *AppError {
+	return &AppError{
+		Code:       "INTERNAL_SERVER_ERROR",
+		Message:    message,
+		HTTPStatus: 500,
+	}
+}

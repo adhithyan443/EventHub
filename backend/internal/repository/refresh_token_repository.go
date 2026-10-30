@@ -50,6 +50,14 @@ func (r *RefreshTokenRepository) Revoke(id uuid.UUID) error {
 		Error
 }
 
+func (r *RefreshTokenRepository) RevokeAllByUserID(userID uuid.UUID) error {
+	return r.db.
+		Model(&models.RefreshTokenModel{}).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Update("revoked_at", gorm.Expr("NOW()")).
+		Error
+}
+
 func refreshTokenToModel(token *domain.RefreshToken) models.RefreshTokenModel {
 	return models.RefreshTokenModel{
 		ID:        token.ID,

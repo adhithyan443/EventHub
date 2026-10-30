@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import AppHeader from "../../components/layout/AppHeader";
 import Footer from "../../components/layout/Footer";
@@ -9,6 +9,7 @@ import Step3BankDetails from "./Step3BankDetails";
 import Step4ReviewSubmit from "./Step4ReviewSubmit";
 import useOrganizerStore from "../../store/organizerStore";
 import useAuthStore from "../../store/authStore";
+import notify from "../../utils/toast";
 
 export default function BecomeOrganizerPage() {
   const navigate = useNavigate();
@@ -39,8 +40,6 @@ export default function BecomeOrganizerPage() {
   const cleanupObjectUrls = useOrganizerStore(
     (state) => state.cleanupObjectUrls
   );
-
-  const [toastMessage, setToastMessage] = useState("");
 
   // Revoke any created browser object URLs when the page unmounts
   useEffect(() => {
@@ -75,22 +74,14 @@ export default function BecomeOrganizerPage() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, [currentStep]);
 
-  function showToast(msg) {
-    setToastMessage(msg);
-
-    setTimeout(() => {
-      setToastMessage("");
-    }, 4500);
-  }
-
   function handleSaveLater() {
     const success = saveDraft();
     if (success) {
-      showToast(
-        "Draft saved successfully! Non-sensitive information has been preserved. Sensitive details remain protected."
+      notify.success(
+        "Draft saved successfully! Non-sensitive information has been preserved."
       );
     } else {
-      showToast("Unable to save draft locally. Please ensure storage permissions are enabled.");
+      notify.error("Unable to save draft locally. Please ensure storage permissions are enabled.");
     }
   }
 
@@ -109,6 +100,7 @@ export default function BecomeOrganizerPage() {
   async function handleSubmit() {
     try {
       await submitApplication();
+      notify.success("Application submitted successfully! Your application is now under review.");
       navigate("/become-organizer/status");
     } catch {
       // Step 4 will display submitError from the store and user stays on Step 4
@@ -178,31 +170,6 @@ export default function BecomeOrganizerPage() {
   return (
     <div className="min-h-screen bg-[#F9F9FF] flex flex-col justify-between">
       <AppHeader />
-
-      {/* Floating Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-20 right-4 sm:right-8 z-50 max-w-md bg-slate-900 text-white px-5 py-3.5 rounded-xl shadow-xl flex items-start gap-3 border border-slate-700 animate-slide-in">
-          <div className="text-emerald-400 shrink-0 mt-0.5">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-          </div>
-          <div className="flex-1 text-xs sm:text-sm leading-snug">
-            {toastMessage}
-          </div>
-          <button
-            type="button"
-            onClick={() => setToastMessage("")}
-            className="text-slate-400 hover:text-white shrink-0 -mr-1 -mt-1 p-1"
-            aria-label="Dismiss notification"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      )}
 
       <main className="flex-1 max-w-3xl mx-auto w-full px-4 sm:px-6 py-8 sm:py-10">
         {/* Prominent Rejection Banner for Rejected Applications */}

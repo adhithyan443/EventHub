@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { useParams, useLocation, Link } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { useParams, useLocation, useNavigate, Link } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import StepsProgress from "../components/StepsProgress";
@@ -7,8 +7,10 @@ import OrderPriceSummary from "../components/OrderPriceSummary";
 import { getPublicEventById } from "../../../api/eventApi";
 import { createCheckout } from "../../../api/checkoutApi";
 import { createPayment, verifyPayment } from "../../../api/paymentApi";
+import { cancelReservation, clearStoredReservation } from "../../../api/reservationApi";
 import { loadRazorpay } from "../../../utils/loadRazorpay";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 const formatDate = (dateStr) => {
   if (!dateStr) return "Date TBA";
@@ -35,6 +37,7 @@ const formatVenueLocation = (ev) => {
 export default function CheckoutPage() {
   const { eventId } = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const user = useAuthStore((state) => state.user);
 
@@ -84,8 +87,50 @@ export default function CheckoutPage() {
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [isChangingSelection, setIsChangingSelection] = useState(false);
+  const changingRef = useRef(false);
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [confirmedPayment, setConfirmedPayment] = useState(null);
+
+  const handleChangeSelection = async (e) => {
+    if (e?.preventDefault) e.preventDefault();
+    if (changingRef.current) return;
+    changingRef.current = true;
+    setIsChangingSelection(true);
+    setPaymentError(null);
+
+    const targetPath =
+      selectedSeats && selectedSeats.length > 0
+        ? `/events/${eventId}/seats`
+        : `/events/${eventId}`;
+
+    const currentResId = reservation?.ID || reservation?.id;
+
+    try {
+      if (currentResId) {
+        console.info("[Checkout] User chose change selection; cancelling reservation before navigation", {
+          event_id: eventId,
+          reservation_id: currentResId,
+        });
+        await cancelReservation(currentResId);
+      }
+      clearStoredReservation(eventId);
+      navigate(targetPath, {
+        replace: true,
+        state: { reservationCancelled: true },
+      });
+    } catch (err) {
+      console.error("[Checkout] Failed to cancel reservation on change selection:", err);
+      const msg =
+        err?.response?.data?.message ||
+        err?.message ||
+        "Could not release current reservation. Please check your connection.";
+      setPaymentError(msg);
+    } finally {
+      changingRef.current = false;
+      setIsChangingSelection(false);
+    }
+  };
 
   // Customer info form fields initialized from authenticated user
   const [customerInfo, setCustomerInfo] = useState({
@@ -146,16 +191,14 @@ export default function CheckoutPage() {
       setTimeLeft(remaining);
       if (remaining <= 0) {
         setIsExpired(true);
-        if (cacheKey) {
-          sessionStorage.removeItem(cacheKey);
-        }
+        clearStoredReservation(eventId);
       }
     };
 
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [reservation, cacheKey]);
+  }, [reservation, cacheKey, eventId]);
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -187,14 +230,16 @@ export default function CheckoutPage() {
       const status = err?.response?.status;
       if (status === 409 || status === 400) {
         setIsExpired(true);
-        setPaymentError(
-          "Your ticket reservation has expired or is no longer valid. Please select tickets again."
-        );
+        const expMsg =
+          "Your ticket reservation has expired or is no longer valid. Please select tickets again.";
+        setPaymentError(expMsg);
+        notify.error(expMsg);
       } else {
-        setPaymentError(
+        const errMsg =
           err?.response?.data?.message ||
-          "Failed to initialize checkout. Please try again."
-        );
+          "Failed to initialize checkout. Please try again.";
+        setPaymentError(errMsg);
+        notify.error(errMsg);
       }
     } finally {
       setIsCheckingOut(false);
@@ -215,9 +260,10 @@ export default function CheckoutPage() {
 
     const sdkLoaded = await loadRazorpay();
     if (!sdkLoaded || !window.Razorpay) {
-      setPaymentError(
-        "Could not load the secure Razorpay Checkout SDK. Please check your network connection and try again."
-      );
+      const sdkMsg =
+        "Could not load the secure Razorpay Checkout SDK. Please check your network connection and try again.";
+      setPaymentError(sdkMsg);
+      notify.error(sdkMsg);
       setIsPaying(false);
       return;
     }
@@ -330,19 +376,19 @@ export default function CheckoutPage() {
               razorpaySignature: razorpayResponse.razorpay_signature,
             });
 
-            if (cacheKey) {
-              sessionStorage.removeItem(cacheKey);
-            }
+            clearStoredReservation(eventId);
 
             setConfirmedBooking(verifyRes?.data?.booking || null);
             setConfirmedPayment(verifyRes?.data?.payment || null);
+            notify.success("Payment successful! Your tickets are confirmed.");
             setCurrentStep(4);
             window.scrollTo({ top: 0, behavior: "smooth" });
           } catch (err) {
-            setPaymentError(
+            const verifyErrMsg =
               err?.response?.data?.message ||
-              "Payment verification failed. If your account was debited, your booking will be confirmed via webhook shortly."
-            );
+              "Payment verification failed. If your account was debited, your booking will be confirmed via webhook shortly.";
+            setPaymentError(verifyErrMsg);
+            notify.error(verifyErrMsg);
           } finally {
             setIsPaying(false);
           }
@@ -356,6 +402,7 @@ export default function CheckoutPage() {
           failResponse?.error?.description ||
           "Payment authorization failed at the gateway. Please try again or choose another method.";
         setPaymentError(errorDesc);
+        notify.error(errorDesc);
         setIsPaying(false);
       });
 
@@ -366,6 +413,7 @@ export default function CheckoutPage() {
         err?.message ||
         "Failed to initiate payment. Please try again.";
       setPaymentError(errorMsg);
+      notify.error(errorMsg);
       setIsPaying(false);
     }
   };
@@ -541,12 +589,18 @@ export default function CheckoutPage() {
                     <h2 className="font-display text-lg sm:text-xl font-bold text-ink">
                       {selectedSeats && selectedSeats.length > 0 ? "Selected Seats" : "Selected Tickets"}
                     </h2>
-                    <Link
-                      to={selectedSeats && selectedSeats.length > 0 ? `/events/${eventId}/seats` : `/events/${eventId}`}
-                      className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline"
+                    <button
+                      type="button"
+                      onClick={handleChangeSelection}
+                      disabled={isChangingSelection}
+                      className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline cursor-pointer disabled:opacity-50"
                     >
-                      {selectedSeats && selectedSeats.length > 0 ? "Change Seats" : "Change Tickets"}
-                    </Link>
+                      {isChangingSelection
+                        ? "Releasing..."
+                        : selectedSeats && selectedSeats.length > 0
+                        ? "Change Seats"
+                        : "Change Tickets"}
+                    </button>
                   </div>
 
                   {selectedSeatObjects && selectedSeatObjects.length > 0 ? (
@@ -1111,10 +1165,33 @@ export default function CheckoutPage() {
               </div>
 
               {/* Action Buttons */}
-              <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3 flex-wrap">
+                {confirmedBooking?.ID || confirmedBooking?.id ? (
+                  <>
+                    <Link
+                      to={`/bookings/${confirmedBooking.ID || confirmedBooking.id}/ticket`}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-[#00796d] px-6 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+                    >
+                      View Tickets
+                    </Link>
+                    <Link
+                      to={`/bookings/${confirmedBooking.ID || confirmedBooking.id}`}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#00796d] bg-white px-6 py-3 text-sm font-bold text-[#00796d] hover:bg-[#e6f4f2] transition-colors"
+                    >
+                      Booking Details
+                    </Link>
+                  </>
+                ) : (
+                  <Link
+                    to="/my-bookings"
+                    className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-[#00796d] px-6 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+                  >
+                    My Bookings
+                  </Link>
+                )}
                 <Link
                   to="/events"
-                  className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg bg-[#00796d] px-6 py-3 text-sm font-bold text-white shadow-xs hover:bg-[#00685f] transition-colors"
+                  className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#bcc9c6] bg-white px-6 py-3 text-sm font-bold text-ink hover:bg-slate-50 transition-colors"
                 >
                   Browse More Events
                 </Link>

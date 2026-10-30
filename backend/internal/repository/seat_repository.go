@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
@@ -181,6 +182,56 @@ func (r *SeatRepository) FindByID(seatID uuid.UUID) (*domain.Seat, error) {
 	return toSeatDomain(&seatModel), nil
 }
 
+type seatDetailRow struct {
+	ID          uuid.UUID `gorm:"column:id"`
+	SeatNumber  int       `gorm:"column:seat_number"`
+	RowName     string    `gorm:"column:row_name"`
+	SectionName string    `gorm:"column:section_name"`
+}
+
+func (r *SeatRepository) FindDetailsBySeatIDs(
+	ctx context.Context,
+	seatIDs []uuid.UUID,
+) (map[uuid.UUID]domain.SeatDetail, error) {
+	result := make(map[uuid.UUID]domain.SeatDetail)
+	if len(seatIDs) == 0 {
+		return result, nil
+	}
+
+	var rows []seatDetailRow
+	query := `
+		SELECT s.id, s.seat_number, sr.row_name, ss.name AS section_name
+		FROM seats s
+		INNER JOIN seat_rows sr ON sr.id = s.row_id
+		INNER JOIN seat_sections ss ON ss.id = sr.section_id
+		WHERE s.id IN ?
+	`
+
+	if err := r.db.WithContext(ctx).Raw(query, seatIDs).Scan(&rows).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find seat details by IDs",
+			slog.Int("seat_count", len(seatIDs)),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	for _, row := range rows {
+		label := fmt.Sprintf("%s • Row %s, Seat %d", row.SectionName, row.RowName, row.SeatNumber)
+		if row.SectionName == "" {
+			label = fmt.Sprintf("Row %s, Seat %d", row.RowName, row.SeatNumber)
+		}
+		result[row.ID] = domain.SeatDetail{
+			SeatID:      row.ID,
+			SeatNumber:  row.SeatNumber,
+			RowName:     row.RowName,
+			SectionName: row.SectionName,
+			Label:       label,
+		}
+	}
+
+	return result, nil
+}
+
 func (r *SeatRepository) ReserveIfAvailable(
 	ctx context.Context,
 	seatID uuid.UUID,
@@ -273,6 +324,38 @@ func (r *SeatRepository) BookReservedSeat(
 	}
 
 	r.logger.InfoContext(ctx, "reserved seat booked",
+		slog.String("seat_id", seatID.String()),
+	)
+
+	return nil
+}
+
+func (r *SeatRepository) ReleaseBookedSeat(
+	ctx context.Context,
+	seatID uuid.UUID,
+) error {
+	result := r.db.WithContext(ctx).
+		Model(&models.SeatModel{}).
+		Where(
+			"id = ? AND status = ?",
+			seatID,
+			domain.SeatStatusBooked,
+		).
+		Update("status", domain.SeatStatusAvailable)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to release booked seat",
+			slog.String("seat_id", seatID.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return domain.ErrSeatNotAvailable
+	}
+
+	r.logger.InfoContext(ctx, "booked seat released",
 		slog.String("seat_id", seatID.String()),
 	)
 

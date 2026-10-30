@@ -23,7 +23,10 @@ import AdminLayout from "../components/admin/AdminLayout";
 import AdminDashboardPage from "../pages/admin/AdminDashboardPage";
 import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
+import AdminUsersPage from "../pages/admin/AdminUsersPage";
+import AdminEventsPage from "../pages/admin/AdminEventsPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
+import AdminPricingTaxPage from "../pages/admin/AdminPricingTaxPage";
 import VenueDemoPage from "../pages/venue/VenueDemoPage";
 
 // Organizer UI Components
@@ -67,14 +70,16 @@ export default function AppRoutes() {
             <Route path="/users" element={<DiscoverEventsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
 
-            {/* Customer Bookings & Tickets (Responsive UI Flow) */}
-            <Route path="/my-bookings" element={<MyBookingsPage />} />
-            <Route path="/my-tickets" element={<MyBookingsPage />} />
-            <Route path="/bookings" element={<Navigate to="/my-bookings" replace />} />
-            <Route path="/tickets" element={<Navigate to="/my-tickets" replace />} />
-            <Route path="/bookings/:bookingId" element={<BookingDetailsPage />} />
-            <Route path="/bookings/:bookingId/ticket" element={<TicketPage />} />
-            <Route path="/my-tickets/:ticketId" element={<TicketPage />} />
+            {/* Customer Bookings & Tickets (Protected Customer Flow) */}
+            <Route element={<ProtectedRoute />}>
+                <Route path="/my-bookings" element={<MyBookingsPage />} />
+                <Route path="/my-tickets" element={<MyBookingsPage />} />
+                <Route path="/bookings" element={<Navigate to="/my-bookings" replace />} />
+                <Route path="/tickets" element={<Navigate to="/my-tickets" replace />} />
+                <Route path="/bookings/:bookingId" element={<BookingDetailsPage />} />
+                <Route path="/bookings/:bookingId/ticket" element={<TicketPage />} />
+                <Route path="/my-tickets/:ticketId" element={<TicketPage />} />
+            </Route>
 
             {/* Customer Event Details → Seat Selection */}
             <Route path="/events/:eventId" element={<CustomerEventDetailsPage />} />
@@ -99,10 +104,11 @@ export default function AppRoutes() {
                     <Route path="dashboard" element={<AdminDashboardPage />} />
                     <Route path="applications" element={<AdminApplicationsPage />} />
                     <Route path="organizers" element={<AdminOrganizersPage />} />
-                    <Route path="users" element={<AdminPlaceholderPage title="Users" />} />
-                    <Route path="events" element={<AdminPlaceholderPage title="Events" />} />
+                    <Route path="users" element={<AdminUsersPage />} />
+                    <Route path="events" element={<AdminEventsPage />} />
                     <Route path="bookings" element={<AdminPlaceholderPage title="Bookings" />} />
                     <Route path="payments" element={<AdminPlaceholderPage title="Payments & Refunds" />} />
+                    <Route path="pricing-tax" element={<AdminPricingTaxPage />} />
                     <Route path="categories" element={<AdminPlaceholderPage title="Categories" />} />
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />
                 </Route>

@@ -16,6 +16,7 @@ type transactionRepositories struct {
 	userRepo                 *UserRepository
 	pendingRegistrationRepo  *PendingRegistrationRepository
 	passwordResetTokenRepo   domain.PasswordResetTokenRepository
+	refreshTokenRepo         domain.RefreshTokenRepository
 	organizerApplicationRepo domain.OrganizerApplicationRepository
 
 	organizerRepo            domain.OrganizerRepository
@@ -44,7 +45,9 @@ type transactionRepositories struct {
 	checkoutRepo             domain.CheckoutRepository
 	bookingRepo              domain.BookingRepository
 	paymentRepo              domain.PaymentRepository
+	refundRepo               domain.RefundRepository
 	razorpayWebhookEventRepo domain.RazorpayWebhookEventRepository
+	pricingTaxRepo           domain.PricingTaxConfigurationRepository
 }
 
 func NewTransactionManager(
@@ -65,6 +68,7 @@ func (m *TransactionManager) WithinTransaction(
 			userRepo:                NewUserRepository(txDB, m.logger),
 			pendingRegistrationRepo: NewPendingRegistrationRepository(txDB),
 			passwordResetTokenRepo:  NewPasswordResetTokenRepository(txDB),
+			refreshTokenRepo:        NewRefreshTokenRepository(txDB),
 			organizerApplicationRepo: NewOrganizerApplicationRepository(
 				txDB,
 				m.logger,
@@ -137,7 +141,9 @@ func (m *TransactionManager) WithinTransaction(
 			checkoutRepo:             NewCheckoutRepository(txDB, m.logger),
 			bookingRepo:              NewBookingRepository(txDB, m.logger),
 			paymentRepo:              NewPaymentRepository(txDB, m.logger),
+			refundRepo:               NewRefundRepository(txDB, m.logger),
 			razorpayWebhookEventRepo: NewRazorpayWebhookEventRepository(txDB, m.logger),
+			pricingTaxRepo:           NewPricingTaxRepository(txDB, m.logger),
 		}
 
 		return fn(txRepos)
@@ -154,6 +160,10 @@ func (r *transactionRepositories) PendingRegistrationRepository() domain.Pending
 
 func (r *transactionRepositories) PasswordResetTokenRepository() domain.PasswordResetTokenRepository {
 	return r.passwordResetTokenRepo
+}
+
+func (r *transactionRepositories) RefreshTokenRepository() domain.RefreshTokenRepository {
+	return r.refreshTokenRepo
 }
 
 func (r *transactionRepositories) OrganizerApplicationRepository() domain.OrganizerApplicationRepository {
@@ -240,10 +250,18 @@ func (r *transactionRepositories) PaymentRepository() domain.PaymentRepository {
 	return r.paymentRepo
 }
 
+func (r *transactionRepositories) RefundRepository() domain.RefundRepository {
+	return r.refundRepo
+}
+
 func (r *transactionRepositories) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {
 	return r.razorpayWebhookEventRepo
 }
 
 func (r *transactionRepositories) TicketRepository() domain.TicketRepository {
 	return r.ticketRepo
+}
+
+func (r *transactionRepositories) PricingTaxConfigurationRepository() domain.PricingTaxConfigurationRepository {
+	return r.pricingTaxRepo
 }

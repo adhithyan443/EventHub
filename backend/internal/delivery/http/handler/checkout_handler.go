@@ -76,6 +76,13 @@ func (h *CheckoutHandler) CreateCheckout(c *gin.Context) {
 			errors.Is(err, domain.ErrCheckoutNotFound):
 			c.Error(appErrors.NewNotFoundError("reservation not found"))
 
+		case errors.Is(err, domain.ErrPricingConfigurationUnavailable):
+			h.logger.ErrorContext(ctx, "checkout creation halted: pricing configuration unavailable",
+				slog.String("user_id", userID.String()),
+				slog.String("reservation_id", reservationID.String()),
+			)
+			c.Error(appErrors.NewInternalError("pricing configuration is temporarily unavailable"))
+
 		default:
 			h.logger.ErrorContext(ctx, "checkout creation failed",
 				slog.String("user_id", userID.String()),

@@ -9,6 +9,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -249,6 +250,54 @@ func (r *bookingRepository) ConfirmPending(
 	return nil
 }
 
+func (r *bookingRepository) FindByUserID(
+	ctx context.Context,
+	userID uuid.UUID,
+) ([]domain.Booking, error) {
+	var bookingModels []models.BookingModel
+
+	err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("created_at DESC").
+		Find(&bookingModels).Error
+
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to find bookings by user ID",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	bookings := make([]domain.Booking, 0, len(bookingModels))
+	for _, m := range bookingModels {
+		bookings = append(bookings, *bookingFromModel(&m))
+	}
+
+	return bookings, nil
+}
+
+func (r *bookingRepository) FindWithItemsByID(
+	ctx context.Context,
+	id uuid.UUID,
+) (*domain.Booking, []domain.BookingItem, error) {
+	booking, err := r.FindByID(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	items, err := r.FindItemsByBookingID(ctx, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if items == nil {
+		items = []domain.BookingItem{}
+	}
+
+	return booking, items, nil
+}
+
 func (r *bookingRepository) FindItemsByBookingID(
 	ctx context.Context,
 	bookingID uuid.UUID,
@@ -283,39 +332,165 @@ func (r *bookingRepository) FindItemsByBookingID(
 	return items, nil
 }
 
+func (r *bookingRepository) FindItemsByBookingIDs(
+	ctx context.Context,
+	bookingIDs []uuid.UUID,
+) (map[uuid.UUID][]domain.BookingItem, error) {
+	result := make(map[uuid.UUID][]domain.BookingItem)
+	if len(bookingIDs) == 0 {
+		return result, nil
+	}
+
+	var itemModels []models.BookingItemModel
+	if err := r.db.WithContext(ctx).
+		Where("booking_id IN ?", bookingIDs).
+		Find(&itemModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find booking items by booking IDs",
+			slog.Int("booking_count", len(bookingIDs)),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	for _, item := range itemModels {
+		result[item.BookingID] = append(result[item.BookingID], domain.BookingItem{
+			ID:           item.ID,
+			BookingID:    item.BookingID,
+			SeatID:       item.SeatID,
+			TicketTypeID: item.TicketTypeID,
+			Quantity:     item.Quantity,
+			UnitPrice:    item.UnitPrice,
+			TotalPrice:   item.TotalPrice,
+			CreatedAt:    item.CreatedAt,
+			UpdatedAt:    item.UpdatedAt,
+		})
+	}
+
+	return result, nil
+}
+
+func (r *bookingRepository) CountConfirmedByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.BookingModel{}).
+		Where("event_id = ? AND status = ?", eventID, domain.BookingStatusConfirmed).
+		Count(&count).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to count confirmed bookings by event id", "event_id", eventID, "error", err)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *bookingRepository) CountByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.BookingModel{}).
+		Where("event_id = ?", eventID).
+		Count(&count).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to count bookings by event id", "event_id", eventID, "error", err)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *bookingRepository) GetBookingStatsByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (domain.AdminEventBookingStats, error) {
+	var stats domain.AdminEventBookingStats
+	db := r.db.WithContext(ctx)
+
+	type bookingAgg struct {
+		TotalBookings     int64           `gorm:"column:total_bookings"`
+		ConfirmedBookings int64           `gorm:"column:confirmed_bookings"`
+		CancelledBookings int64           `gorm:"column:cancelled_bookings"`
+		TotalRevenue      decimal.Decimal `gorm:"column:total_revenue"`
+	}
+
+	var agg bookingAgg
+	err := db.Model(&models.BookingModel{}).
+		Select(`
+			COUNT(*) as total_bookings,
+			COUNT(CASE WHEN status = 'CONFIRMED' THEN 1 END) as confirmed_bookings,
+			COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END) as cancelled_bookings,
+			COALESCE(SUM(CASE WHEN status = 'CONFIRMED' THEN total ELSE 0 END), 0) as total_revenue
+		`).
+		Where("event_id = ?", eventID).
+		Scan(&agg).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to get booking stats for event", "event_id", eventID, "error", err)
+		return stats, err
+	}
+
+	var ticketsSold int64
+	err = db.Table("booking_items bi").
+		Joins("JOIN bookings b ON b.id = bi.booking_id").
+		Where("b.event_id = ? AND b.status = ? AND b.deleted_at IS NULL", eventID, domain.BookingStatusConfirmed).
+		Select("COALESCE(SUM(bi.quantity), 0)").
+		Scan(&ticketsSold).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to get tickets sold for event", "event_id", eventID, "error", err)
+		return stats, err
+	}
+
+	stats.TotalBookings = agg.TotalBookings
+	stats.ConfirmedBookings = agg.ConfirmedBookings
+	stats.CancelledBookings = agg.CancelledBookings
+	stats.TotalRevenue = agg.TotalRevenue
+	stats.TicketsSold = ticketsSold
+
+	return stats, nil
+}
+
 func bookingToModel(booking *domain.Booking) *models.BookingModel {
 	return &models.BookingModel{
-		ID:            booking.ID,
-		BookingNumber: booking.BookingNumber,
-		UserID:        booking.UserID,
-		EventID:       booking.EventID,
-		ReservationID: booking.ReservationID,
-		Subtotal:      booking.Subtotal,
-		PlatformFee:   booking.PlatformFee,
-		Tax:           booking.Tax,
-		Discount:      booking.Discount,
-		Total:         booking.Total,
-		Status:        booking.Status,
-		CreatedAt:     booking.CreatedAt,
-		UpdatedAt:     booking.UpdatedAt,
+		ID:                        booking.ID,
+		BookingNumber:             booking.BookingNumber,
+		UserID:                    booking.UserID,
+		EventID:                   booking.EventID,
+		ReservationID:             booking.ReservationID,
+		Subtotal:                  booking.Subtotal,
+		PlatformFee:               booking.PlatformFee,
+		Tax:                       booking.Tax,
+		Discount:                  booking.Discount,
+		Total:                     booking.Total,
+		CancellationAllowed:       booking.CancellationAllowed,
+		CancellationDeadlineHours: booking.CancellationDeadlineHours,
+		RefundPolicy:              booking.RefundPolicy,
+		RefundPercentage:          booking.RefundPercentage,
+		Status:                    booking.Status,
+		CreatedAt:                 booking.CreatedAt,
+		UpdatedAt:                 booking.UpdatedAt,
 	}
 }
 
 func bookingFromModel(model *models.BookingModel) *domain.Booking {
 	return &domain.Booking{
-		ID:            model.ID,
-		BookingNumber: model.BookingNumber,
-		UserID:        model.UserID,
-		EventID:       model.EventID,
-		ReservationID: model.ReservationID,
-		Subtotal:      model.Subtotal,
-		PlatformFee:   model.PlatformFee,
-		Tax:           model.Tax,
-		Discount:      model.Discount,
-		Total:         model.Total,
-		Status:        model.Status,
-		CreatedAt:     model.CreatedAt,
-		UpdatedAt:     model.UpdatedAt,
+		ID:                        model.ID,
+		BookingNumber:             model.BookingNumber,
+		UserID:                    model.UserID,
+		EventID:                   model.EventID,
+		ReservationID:             model.ReservationID,
+		Subtotal:                  model.Subtotal,
+		PlatformFee:               model.PlatformFee,
+		Tax:                       model.Tax,
+		Discount:                  model.Discount,
+		Total:                     model.Total,
+		CancellationAllowed:       model.CancellationAllowed,
+		CancellationDeadlineHours: model.CancellationDeadlineHours,
+		RefundPolicy:              model.RefundPolicy,
+		RefundPercentage:          model.RefundPercentage,
+		Status:                    model.Status,
+		CreatedAt:                 model.CreatedAt,
+		UpdatedAt:                 model.UpdatedAt,
 	}
 }
 

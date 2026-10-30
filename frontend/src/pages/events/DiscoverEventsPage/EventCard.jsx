@@ -29,7 +29,7 @@ export default function EventCard({ event }) {
         </div>
 
         <div className="mt-auto flex items-center justify-between border-t border-border pt-3">
-          <span className="text-sm font-semibold text-ink">From ${event.price}</span>
+          <span className="text-sm font-semibold text-ink">From ₹{event.price}</span>
           <Link
             to={`/events/${eventTargetId}`}
             className="rounded-md border border-border px-4 py-1.5 text-xs font-medium text-ink/70 hover:bg-background hover:text-ink transition-colors"

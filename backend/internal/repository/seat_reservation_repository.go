@@ -328,3 +328,20 @@ func (r *seatReservationRepository) FindExpiredActive(
 
 	return reservations, nil
 }
+
+func (r *seatReservationRepository) CountActiveByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+	now time.Time,
+) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).
+		Model(&models.SeatReservationModel{}).
+		Where("event_id = ? AND status = ? AND expires_at > ?", eventID, domain.ReservationStatusActive, now).
+		Count(&count).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to count active reservations by event id", "event_id", eventID, "error", err)
+		return 0, err
+	}
+	return count, nil
+}

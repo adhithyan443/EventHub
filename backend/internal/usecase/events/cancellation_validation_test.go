@@ -638,6 +638,13 @@ func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
 	return m.event, nil
 }
 
+func (m *mockEventRepo) FindByIDForUpdate(id uuid.UUID) (*domain.Event, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	return m.event, nil
+}
+
 func (m *mockEventRepo) Update(event *domain.Event) error {
 	m.updated = event
 	return nil

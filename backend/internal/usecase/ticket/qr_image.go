@@ -27,3 +27,22 @@ func (s *QRService) GenerateQRImage(ticketID uuid.UUID) ([]byte, error) {
 
 	return png, nil
 }
+
+// GenerateBookingQRImage creates a PNG QR code containing a signed booking payload.
+func (s *QRService) GenerateBookingQRImage(bookingID uuid.UUID) ([]byte, error) {
+	payload, err := s.GenerateBookingPayload(bookingID)
+	if err != nil {
+		return nil, err
+	}
+
+	png, err := qrcode.Encode(
+		payload,
+		qrcode.Medium,
+		256,
+	)
+	if err != nil {
+		return nil, ErrQRGenerationFailed
+	}
+
+	return png, nil
+}

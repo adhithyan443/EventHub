@@ -65,9 +65,48 @@ func (s *QRService) VerifyPayload(payload string) (uuid.UUID, error) {
 	return ticketID, nil
 }
 
-func (s *QRService) sign(ticketID string) string {
+const bookingQRPrefix = "EVH:BK:"
+
+// GenerateBookingPayload produces a signed payload for a booking ID.
+func (s *QRService) GenerateBookingPayload(bookingID uuid.UUID) (string, error) {
+	if bookingID == uuid.Nil {
+		return "", ErrInvalidQRPayload
+	}
+
+	raw := bookingQRPrefix + bookingID.String()
+	signature := s.sign(raw)
+
+	return raw + "." + signature, nil
+}
+
+// VerifyBookingPayload validates a booking QR payload and its HMAC signature, returning the booking ID.
+func (s *QRService) VerifyBookingPayload(payload string) (uuid.UUID, error) {
+	raw, signature, ok := strings.Cut(payload, ".")
+	if !ok || raw == "" || signature == "" {
+		return uuid.Nil, ErrInvalidQRPayload
+	}
+
+	if !strings.HasPrefix(raw, bookingQRPrefix) {
+		return uuid.Nil, ErrInvalidQRPayload
+	}
+
+	idStr := strings.TrimPrefix(raw, bookingQRPrefix)
+	bookingID, err := uuid.Parse(idStr)
+	if err != nil || bookingID == uuid.Nil {
+		return uuid.Nil, ErrInvalidQRPayload
+	}
+
+	expected := s.sign(raw)
+	if !hmac.Equal([]byte(signature), []byte(expected)) {
+		return uuid.Nil, ErrInvalidQRPayload
+	}
+
+	return bookingID, nil
+}
+
+func (s *QRService) sign(raw string) string {
 	mac := hmac.New(sha256.New, s.secret)
-	_, _ = mac.Write([]byte(ticketID))
+	_, _ = mac.Write([]byte(raw))
 
 	return hex.EncodeToString(mac.Sum(nil))
 }

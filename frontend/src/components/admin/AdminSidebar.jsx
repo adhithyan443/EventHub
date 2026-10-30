@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { LogoutIcon } from "../layout/icons";
+import LogoutConfirmationModal from "../layout/LogoutConfirmationModal";
 import { logout } from "../../api/authApi";
 import useAuthStore from "../../store/authStore";
+import notify from "../../utils/toast";
 
 const navItems = [
   {
@@ -90,6 +92,18 @@ const navItems = [
     ),
   },
   {
+    path: "/admin/pricing-tax",
+    label: "Pricing & Taxes",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <path
+          d="M8 0C3.58 0 0 3.58 0 8C0 12.42 3.58 16 8 16C12.42 16 16 12.42 16 8C16 3.58 12.42 0 8 0ZM8.75 12H7.25V10.5H8.75V12ZM9.07 7.75L8.4 8.44C7.86 8.98 7.5 9.5 7.5 10.5H6.5V10.25C6.5 9.42 6.84 8.67 7.38 8.13L8.31 7.19C8.58 6.92 8.75 6.54 8.75 6.12C8.75 5.29 8.08 4.62 7.25 4.62C6.42 4.62 5.75 5.29 5.75 6.12H4.25C4.25 4.46 5.59 3.12 7.25 3.12C8.91 3.12 10.25 4.46 10.25 6.12C10.25 6.78 9.98 7.37 9.07 7.75Z"
+          fill="currentColor"
+        />
+      </svg>
+    ),
+  },
+  {
     path: "/admin/categories",
     label: "Categories",
     icon: (
@@ -119,6 +133,7 @@ export default function AdminSidebar({ className = "", isOpen = false, onClose }
   const location = useLocation();
   const navigate = useNavigate();
   const clearAuth = useAuthStore((state) => state.clearAuth);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   async function handleLogout() {
@@ -131,6 +146,8 @@ export default function AdminSidebar({ className = "", isOpen = false, onClose }
     } finally {
       clearAuth();
       setIsLoggingOut(false);
+      setShowLogoutModal(false);
+      notify.info("Signed out successfully.");
       navigate("/login", { replace: true });
     }
   }
@@ -225,16 +242,25 @@ export default function AdminSidebar({ className = "", isOpen = false, onClose }
 
           <button
             type="button"
-            onClick={handleLogout}
+            onClick={() => setShowLogoutModal(true)}
             disabled={isLoggingOut}
             className="w-full flex items-center justify-center gap-2.5 px-4 py-2 rounded-lg text-sm font-semibold text-[#ba1a1a] hover:bg-[#ffdad6]/60 border border-[#bcc9c6]/40 hover:border-[#ba1a1a]/30 transition-colors cursor-pointer disabled:opacity-50"
             title="Sign out of Admin Console"
           >
             <LogoutIcon className="w-4 h-4 text-[#ba1a1a]" />
-            <span>{isLoggingOut ? "Logging out..." : "Logout"}</span>
+            <span>Logout</span>
           </button>
         </div>
       </aside>
+
+      <LogoutConfirmationModal
+        isOpen={showLogoutModal}
+        loading={isLoggingOut}
+        onClose={() => {
+          if (!isLoggingOut) setShowLogoutModal(false);
+        }}
+        onConfirm={handleLogout}
+      />
     </>
   );
 }

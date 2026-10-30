@@ -1,84 +1,72 @@
-import { useState } from "react";
-import SuspendModal from "../../components/admin/SuspendModal";
+import { useState, useEffect } from "react";
 import OrganizerDetailDrawer from "../../components/admin/OrganizerDetailDrawer";
+import { getOrganizers } from "../../api/adminOrganizerApi";
+import notify from "../../utils/toast";
 
-const initialOrganizers = [
-  {
-    id: "ORG001",
-    name: "Rahul Kumar",
-    email: "rahul@eventmasters.in",
-    org: "Event Masters",
-    events: 12,
-    revenue: "₹3,10,000",
-    status: "ACTIVE",
-    joined: "10 Jun 2026",
-  },
-  {
-    id: "ORG002",
-    name: "Anjali S",
-    email: "anjali@techev.in",
-    org: "Tech Events India",
-    events: 8,
-    revenue: "₹1,85,000",
-    status: "ACTIVE",
-    joined: "15 Jun 2026",
-  },
-  {
-    id: "ORG003",
-    name: "Arjun P",
-    email: "arjun@creativehub.in",
-    org: "Creative Hub",
-    events: 4,
-    revenue: "₹2,10,000",
-    status: "SUSPENDED",
-    joined: "20 Jul 2026",
-  },
-  {
-    id: "ORG004",
-    name: "Priya M",
-    email: "priya@spark.in",
-    org: "Spark Conferences",
-    events: 6,
-    revenue: "₹95,000",
-    status: "ACTIVE",
-    joined: "1 Jul 2026",
-  },
-  {
-    id: "ORG005",
-    name: "Sneha R",
-    email: "sneha@innovate.in",
-    org: "Innovate India",
-    events: 3,
-    revenue: "₹42,000",
-    status: "ACTIVE",
-    joined: "5 Aug 2026",
-  },
-];
+const PER_PAGE = 10;
 
 export default function AdminOrganizersPage() {
-  const [orgs, setOrgs] = useState(initialOrganizers);
+  const [orgs, setOrgs] = useState([]);
+  const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [activeDrawerOrg, setActiveDrawerOrg] = useState(null);
-  const [suspendTarget, setSuspendTarget] = useState(null);
-  const [currentPage, setCurrentPage] = useState(1);
 
-  const filtered = orgs.filter(
-    (o) =>
-      search === "" ||
-      o.name.toLowerCase().includes(search.toLowerCase()) ||
-      o.org.toLowerCase().includes(search.toLowerCase()) ||
-      o.email.toLowerCase().includes(search.toLowerCase())
-  );
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
-  const handleConfirmSuspend = (id) => {
-    setOrgs((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, status: "SUSPENDED" } : o))
-    );
-    if (activeDrawerOrg?.id === id) {
-      setActiveDrawerOrg((prev) => (prev ? { ...prev, status: "SUSPENDED" } : null));
-    }
-    setSuspendTarget(null);
-  };
+  // Fetch organizers when page or debounced search changes
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchOrganizers = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const res = await getOrganizers({
+          page,
+          limit: PER_PAGE,
+          search: debouncedSearch,
+        });
+
+        if (cancelled) return;
+
+        if (res?.data) {
+          setOrgs(res.data.organizers || []);
+          setTotal(res.data.total || 0);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to fetch organizers:", err);
+        const msg = err.response?.data?.message || err.message || "Failed to load organizers.";
+        setError(msg);
+        setOrgs([]);
+        setTotal(0);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchOrganizers();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, debouncedSearch]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-white w-full">
@@ -89,12 +77,12 @@ export default function AdminOrganizersPage() {
             Organizers
           </h1>
           <p className="text-[#3d4947] text-xs sm:text-sm">
-            Manage approved organizers and monitor their event activity.
+            Manage approved platform organizers and view organization details.
           </p>
         </div>
         <button
           type="button"
-          onClick={() => alert("Exporting organizers list...")}
+          onClick={() => notify.info("Exporting organizers list...")}
           className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-[#eef0fb] transition-colors cursor-pointer self-start sm:self-auto shrink-0"
         >
           <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -109,56 +97,52 @@ export default function AdminOrganizersPage() {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
-        {/* Metric Cards (1 x 4) */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[
-            {
-              label: "Total Organizers",
-              value: "428",
-              sub: "↑ 12% from last month",
-              subColor: "text-[#00685f]",
-            },
-            {
-              label: "Active",
-              value: "402",
-              sub: "94% health score",
-              subColor: "text-[#00685f]",
-            },
-            {
-              label: "Suspended",
-              value: "18",
-              sub: "4 pending appeals",
-              subColor: "text-[#92400e]",
-            },
-            {
-              label: "New",
-              value: "24",
-              sub: "Since last week",
-              subColor: "text-[#00685f]",
-            },
-          ].map((card, i) => (
-            <div
-              key={i}
-              className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]"
+        {/* Error Alert */}
+        {error && (
+          <div className="flex items-center justify-between rounded-lg border border-[#ffdad6] bg-[#fff5f4] px-4 py-3">
+            <span className="text-[#93000a] text-sm font-medium">{error}</span>
+            <button
+              type="button"
+              onClick={() => setError("")}
+              className="text-[#93000a] text-xs font-semibold cursor-pointer hover:underline"
             >
-              <div className="text-[#3d4947] text-sm font-medium mb-2">
-                {card.label}
-              </div>
-              <div className="text-[#141b2b] text-2xl font-bold tracking-tight">
-                {card.value}
-              </div>
-              <div className={`text-xs mt-1 font-medium ${card.subColor}`}>
-                {card.sub}
-              </div>
+              Dismiss
+            </button>
+          </div>
+        )}
+
+        {/* Aggregate Metric Cards (Accurate backend totals) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg">
+          <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
+            <div className="text-[#3d4947] text-sm font-medium mb-1">
+              Total Approved Organizers
             </div>
-          ))}
+            <div className="text-[#141b2b] text-2xl font-bold tracking-tight">
+              {total}
+            </div>
+            <div className="text-xs mt-1 font-medium text-[#00685f]">
+              Platform-wide verified accounts
+            </div>
+          </div>
+
+          <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
+            <div className="text-[#3d4947] text-sm font-medium mb-1">
+              Active Status
+            </div>
+            <div className="text-[#141b2b] text-2xl font-bold tracking-tight">
+              {total}
+            </div>
+            <div className="text-xs mt-1 font-medium text-[#00685f]">
+              Authorized to host events
+            </div>
+          </div>
         </div>
 
         {/* Organizers Table Card */}
         <div className="bg-white border border-[#bcc9c6] rounded-xl overflow-hidden shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
           {/* Table Search & Filter Bar */}
           <div className="px-4 py-3 border-b border-[#dce2f7] flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-[#f1f3ff]">
-            <div className="relative flex-1 max-w-full sm:max-w-xs">
+            <div className="relative flex-1 max-w-full sm:max-w-sm">
               <svg
                 className="absolute left-3 top-1/2 -translate-y-1/2"
                 width="13"
@@ -173,116 +157,179 @@ export default function AdminOrganizersPage() {
               </svg>
               <input
                 type="text"
-                placeholder="Search organizers..."
+                placeholder="Search by business, name, or email..."
                 value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setCurrentPage(1);
-                }}
+                onChange={(e) => setSearch(e.target.value)}
                 className="w-full bg-white border border-[#bcc9c6] rounded-lg pl-9 pr-3 py-1.5 text-sm text-[#141b2b] placeholder:text-[#6d7a77] focus:outline-none focus:ring-1 focus:ring-[#00685f]/40"
               />
             </div>
             <span className="text-xs text-[#6d7a77] font-medium">
-              {filtered.length} organizers found
+              {total} {total === 1 ? "organizer" : "organizers"} found
             </span>
           </div>
 
           {/* Table */}
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table className="w-full text-left text-xs">
               <thead className="bg-[#f9f9ff] text-[#6d7a77] uppercase tracking-wide border-b border-[#bcc9c6]">
                 <tr>
-                  <th className="text-left px-4 py-3 font-semibold">Organizer</th>
-                  <th className="text-left px-4 py-3 font-semibold">Email</th>
-                  <th className="text-left px-4 py-3 font-semibold">Organization</th>
-                  <th className="text-left px-4 py-3 font-semibold">Events</th>
-                  <th className="text-left px-4 py-3 font-semibold">Revenue</th>
-                  <th className="text-left px-4 py-3 font-semibold">Status</th>
-                  <th className="text-left px-4 py-3 font-semibold">Joined</th>
-                  <th className="text-left px-4 py-3 font-semibold">Actions</th>
+                  <th className="px-4 py-3 font-semibold">Organizer / Business</th>
+                  <th className="px-4 py-3 font-semibold">Account Owner</th>
+                  <th className="px-4 py-3 font-semibold">Phone</th>
+                  <th className="px-4 py-3 font-semibold">Business Type</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 font-semibold">Registered</th>
+                  <th className="px-4 py-3 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[rgba(188,201,198,0.25)]">
-                {filtered.map((org) => (
-                  <tr
-                    key={org.id}
-                    className="hover:bg-[#f9f9ff]/70 transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-xs font-bold text-[#5c6bc0]">
-                          {org.name[0]}
-                        </div>
-                        <div>
-                          <div className="font-semibold text-[#141b2b]">
-                            {org.name}
-                          </div>
-                          <div className="text-[10px] text-[#6d7a77] font-mono">
-                            {org.id}
-                          </div>
-                        </div>
+                {loading ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-10 text-center text-[#6d7a77] text-sm">
+                      <div className="flex items-center justify-center gap-2">
+                        <div className="w-5 h-5 border-2 border-[#00685f]/30 border-t-[#00685f] rounded-full animate-spin" />
+                        <span>Loading organizers...</span>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-[#3d4947]">{org.email}</td>
-                    <td className="px-4 py-3 font-medium text-[#141b2b]">
-                      {org.org}
-                    </td>
-                    <td className="px-4 py-3 text-[#141b2b] font-semibold">
-                      {org.events}
-                    </td>
-                    <td className="px-4 py-3 text-[#141b2b] font-semibold">
-                      {org.revenue}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          org.status === "ACTIVE"
-                            ? "bg-[#dcfce7] text-[#166534]"
-                            : "bg-[#ffdad6] text-[#93000a]"
-                        }`}
-                      >
-                        {org.status}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-[#6d7a77]">{org.joined}</td>
-                    <td className="px-4 py-3">
-                      <button
-                        type="button"
-                        onClick={() => setActiveDrawerOrg(org)}
-                        className="text-sm text-[#00685f] font-semibold hover:underline cursor-pointer"
-                      >
-                        View
-                      </button>
+                  </tr>
+                ) : orgs.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-4 py-10 text-center text-[#6d7a77] text-sm">
+                      No organizers found matching your search.
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  orgs.map((org, i) => {
+                    const displayName = org.business_name || org.user_name || "Organizer";
+                    const initial = displayName.trim()[0]?.toUpperCase() || "O";
+                    const joinedFormatted = org.created_at
+                      ? new Date(org.created_at).toLocaleDateString("en-IN", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })
+                      : "—";
+
+                    return (
+                      <tr
+                        key={org.id}
+                        className={`hover:bg-[#f1f3ff] transition-colors ${
+                          i % 2 === 0 ? "bg-white" : "bg-[#fafbff]"
+                        }`}
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-2.5">
+                            {org.logo_url ? (
+                              <img
+                                src={org.logo_url}
+                                alt={displayName}
+                                className="w-8 h-8 rounded-full object-cover border border-[#bcc9c6] shrink-0"
+                              />
+                            ) : (
+                              <div className="w-8 h-8 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-xs font-bold text-[#5c6bc0] shrink-0">
+                                {initial}
+                              </div>
+                            )}
+                            <div>
+                              <div className="font-semibold text-[#141b2b] text-sm">
+                                {displayName}
+                              </div>
+                              <div className="text-[10px] text-[#6d7a77] font-mono">
+                                {org.id}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="font-medium text-[#141b2b]">
+                            {org.user_name || "—"}
+                          </div>
+                          <div className="text-[#6d7a77] text-[11px]">
+                            {org.user_email}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-[#3d4947]">
+                          {org.business_phone || org.user_phone || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-[#141b2b]">
+                          {org.business_type || "—"}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              org.status === "ACTIVE"
+                                ? "bg-[#dcfce7] text-[#166534]"
+                                : "bg-[#ffdad6] text-[#93000a]"
+                            }`}
+                          >
+                            {org.status || "ACTIVE"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-[#6d7a77]">
+                          {joinedFormatted}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setActiveDrawerOrg(org)}
+                            className="text-xs text-[#00685f] font-semibold hover:underline cursor-pointer bg-[#f1f3ff] hover:bg-[#e1e8fd] px-2.5 py-1 rounded transition-colors"
+                          >
+                            View Details
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Pagination Footer */}
           <div className="flex flex-col sm:flex-row items-center justify-between px-4 py-3 border-t border-[rgba(188,201,198,0.3)] bg-white gap-3">
-            <span className="text-[#3d4947] text-sm text-center sm:text-left">
-              Showing 1 to {filtered.length} of 428 organizers
+            <span className="text-[#3d4947] text-xs text-center sm:text-left">
+              Showing {total === 0 ? 0 : (page - 1) * PER_PAGE + 1} to{" "}
+              {Math.min(page * PER_PAGE, total)} of {total} organizers
             </span>
             <div className="flex items-center gap-1">
-              {[1, 2, 3].map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => setCurrentPage(p)}
-                  className={`w-8 h-8 rounded text-sm font-medium transition-colors cursor-pointer ${
-                    currentPage === p
-                      ? "bg-[#00685f] text-white"
-                      : "bg-[#f9f9ff] border border-[#bcc9c6] text-[#3d4947] hover:bg-[#eef0fb]"
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
               <button
                 type="button"
-                className="w-8 h-8 rounded bg-[#f9f9ff] border border-[#bcc9c6] text-[#3d4947] hover:bg-[#eef0fb] cursor-pointer"
+                disabled={page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="w-8 h-8 rounded bg-[#f9f9ff] border border-[#bcc9c6] text-[#3d4947] hover:bg-[#eef0fb] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center text-xs"
+              >
+                ‹
+              </button>
+
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                .map((p, idx, arr) => {
+                  const prev = arr[idx - 1];
+                  const hasGap = prev && p - prev > 1;
+
+                  return (
+                    <div key={p} className="flex items-center gap-1">
+                      {hasGap && <span className="text-xs text-[#6d7a77]">…</span>}
+                      <button
+                        type="button"
+                        onClick={() => setPage(p)}
+                        className={`w-8 h-8 rounded text-xs font-medium transition-colors cursor-pointer ${
+                          page === p
+                            ? "bg-[#00685f] text-white"
+                            : "bg-[#f9f9ff] border border-[#bcc9c6] text-[#3d4947] hover:bg-[#eef0fb]"
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    </div>
+                  );
+                })}
+
+              <button
+                type="button"
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                className="w-8 h-8 rounded bg-[#f9f9ff] border border-[#bcc9c6] text-[#3d4947] hover:bg-[#eef0fb] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center text-xs"
               >
                 ›
               </button>
@@ -296,16 +343,6 @@ export default function AdminOrganizersPage() {
         <OrganizerDetailDrawer
           organizer={activeDrawerOrg}
           onClose={() => setActiveDrawerOrg(null)}
-          onOpenSuspend={(org) => setSuspendTarget(org)}
-        />
-      )}
-
-      {/* Suspend Confirmation Modal */}
-      {suspendTarget && (
-        <SuspendModal
-          organizer={suspendTarget}
-          onConfirm={handleConfirmSuspend}
-          onCancel={() => setSuspendTarget(null)}
         />
       )}
     </div>

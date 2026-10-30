@@ -8,6 +8,7 @@ type TransactionRepositories interface {
 	UserRepository() UserRepository
 	PendingRegistrationRepository() PendingRegistrationRepository
 	PasswordResetTokenRepository() PasswordResetTokenRepository
+	RefreshTokenRepository() RefreshTokenRepository
 
 	OrganizerApplicationRepository() OrganizerApplicationRepository
 	OrganizerRepository() OrganizerRepository
@@ -36,5 +37,7 @@ type TransactionRepositories interface {
 	CheckoutRepository() CheckoutRepository
 	BookingRepository() BookingRepository
 	PaymentRepository() PaymentRepository
+	RefundRepository() RefundRepository
 	RazorpayWebhookEventRepository() RazorpayWebhookEventRepository
+	PricingTaxConfigurationRepository() PricingTaxConfigurationRepository
 }

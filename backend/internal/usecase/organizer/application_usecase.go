@@ -607,9 +607,14 @@ func (u *ApplicationUsecase) GetApplication(
 }
 
 func (u *AdminApplicationUsecase) RejectApplication(
+	ctx context.Context,
 	id uuid.UUID,
 	reason string,
+	adminID uuid.UUID,
 ) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	reason = strings.TrimSpace(reason)
 
@@ -617,6 +622,7 @@ func (u *AdminApplicationUsecase) RejectApplication(
 		u.logger.Warn(
 			"admin_organizer_application_rejection_failed",
 			"application_id", id,
+			"admin_id", adminID,
 			"reason", "empty_rejection_reason",
 		)
 		return appErrors.NewValidationError(
@@ -630,6 +636,7 @@ func (u *AdminApplicationUsecase) RejectApplication(
 			u.logger.Warn(
 				"admin_organizer_application_rejection_failed",
 				"application_id", id,
+				"admin_id", adminID,
 				"reason", "application_not_found",
 			)
 			return appErrors.NewNotFoundError(
@@ -640,6 +647,7 @@ func (u *AdminApplicationUsecase) RejectApplication(
 		u.logger.Error(
 			"admin_organizer_application_rejection_find_failed",
 			"application_id", id,
+			"admin_id", adminID,
 			"error", err,
 		)
 
@@ -652,6 +660,7 @@ func (u *AdminApplicationUsecase) RejectApplication(
 		u.logger.Warn(
 			"admin_organizer_application_rejection_failed",
 			"application_id", id,
+			"admin_id", adminID,
 			"reason", "application_not_pending",
 			"status", application.Status,
 		)
@@ -668,6 +677,7 @@ func (u *AdminApplicationUsecase) RejectApplication(
 		u.logger.Error(
 			"admin_organizer_application_rejection_update_failed",
 			"application_id", id,
+			"admin_id", adminID,
 			"error", err,
 		)
 
@@ -680,6 +690,7 @@ func (u *AdminApplicationUsecase) RejectApplication(
 		"admin_organizer_application_rejected",
 		"application_id", id,
 		"user_id", application.UserID,
+		"admin_id", adminID,
 	)
 
 	return nil

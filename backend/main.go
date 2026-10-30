@@ -13,6 +13,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/config"
 	"github.com/adhithyan443/EventHub/backend/internal/database"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
+	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
@@ -27,8 +28,10 @@ import (
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
+	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/joho/godotenv"
 )
@@ -153,13 +156,7 @@ func main() {
 		logger,
 	)
 
-	// Booking dependencies.
-	bookingUsecase := booking.NewBookingUsecase(
-		txManager,
-		logger,
-	)
-
-	// Payment dependencies.
+	// Payment provider.
 	razorpayProvider, err := payment.NewRazorpayProvider(
 		cfg.RazorpayKeyID,
 		cfg.RazorpayKeySecret,
@@ -171,6 +168,20 @@ func main() {
 		return
 	}
 
+	// Booking dependencies.
+	bookingUsecase := booking.NewBookingUsecase(
+		txManager,
+		razorpayProvider,
+		logger,
+	)
+
+	bookingHandler := handler.NewBookingHandler(
+		bookingUsecase,
+		qrService,
+		logger,
+	)
+
+	// Payment dependencies.
 	paymentUsecase := payment.NewPaymentUsecase(
 		txManager,
 		bookingUsecase,
@@ -301,6 +312,27 @@ func main() {
 		logger,
 	)
 
+	// Pricing and Tax configuration dependencies.
+	pricingTaxUsecase := pricingtax.NewPricingTaxUsecase(
+		txManager,
+		logger,
+	)
+
+	adminPricingTaxHandler := handler.NewAdminPricingTaxHandler(
+		pricingTaxUsecase,
+		logger,
+	)
+
+	// Admin users and organizers dependencies.
+	adminUserUsecase := userUC.NewAdminUserUsecase(userRepo, refreshTokenRepo, txManager, logger)
+	adminUserHandler := handler.NewAdminUserHandler(adminUserUsecase, logger)
+
+	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(organizerRepo, logger)
+	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
+
+	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)
+	adminEventHandler := handler.NewAdminEventHandler(adminEventUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -312,9 +344,15 @@ func main() {
 		seatLayoutHandler,
 		reservationHandler,
 		checkoutHandler,
+		bookingHandler,
 		paymentHandler,
 		ticketHandler,
+		adminPricingTaxHandler,
+		adminUserHandler,
+		adminOrganizerHandler,
+		adminEventHandler,
 		jwtService,
+		userRepo,
 	)
 
 	logger.Info(
@@ -343,6 +381,8 @@ func main() {
 		defer workerWG.Done()
 		reservationExpiryWorker.Run(ctx)
 	}()
+
+	middleware.StartUserStatusCacheCleaner(ctx, 1*time.Minute)
 
 	go func() {
 		logger.Info("HTTP server starting", "port", cfg.ServerPort)

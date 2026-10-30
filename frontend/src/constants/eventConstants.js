@@ -95,3 +95,37 @@ export const getEventCreationSteps = (locationType, ticketMode) => {
   ];
 };
 
+/**
+ * Parses user-facing age restriction selections into the standard integer representation.
+ * 0 indicates all ages / family friendly (no age restriction).
+ * e.g., "All Ages (Family Friendly)" -> 0, "13+" -> 13, "16+" -> 16, "18+" -> 18, "21+" -> 21.
+ */
+export const parseAgeRestriction = (val) => {
+  if (val === null || val === undefined || val === "") return 0;
+  if (typeof val === "number") {
+    return Number.isInteger(val) && val >= 0 && val <= 99 ? val : 0;
+  }
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if (/all\s*ages/i.test(trimmed)) return 0;
+    const match = trimmed.match(/^(\d+)\+?$/);
+    if (match) {
+      const num = parseInt(match[1], 10);
+      if (!Number.isNaN(num) && num >= 0 && num <= 99) {
+        return num;
+      }
+      return 0;
+    }
+    const fallbackMatch = trimmed.match(/(\d+)/);
+    if (fallbackMatch) {
+      const num = parseInt(fallbackMatch[1], 10);
+      if (!Number.isNaN(num) && num >= 0 && num <= 99) {
+        return num;
+      }
+      return 0;
+    }
+  }
+  return 0;
+};
+
+

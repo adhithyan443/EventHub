@@ -54,7 +54,7 @@ func (u *ReservationUsecase) CreateReservation(
 
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
-			event, err := tx.EventRepository().FindByID(req.EventID)
+			event, err := tx.EventRepository().FindByIDForUpdate(req.EventID)
 			if err != nil {
 				return err
 			}

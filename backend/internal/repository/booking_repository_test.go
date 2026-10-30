@@ -37,6 +37,10 @@ func TestBookingModel_GORMColumnMapping(t *testing.T) {
 	assert.Equal(t, "event_id", fieldDBNames["EventID"])
 	assert.Equal(t, "reservation_id", fieldDBNames["ReservationID"])
 	assert.Equal(t, "status", fieldDBNames["Status"])
+	assert.Equal(t, "cancellation_allowed", fieldDBNames["CancellationAllowed"])
+	assert.Equal(t, "cancellation_deadline_hours", fieldDBNames["CancellationDeadlineHours"])
+	assert.Equal(t, "cancellation_refund_policy", fieldDBNames["RefundPolicy"])
+	assert.Equal(t, "cancellation_refund_percentage", fieldDBNames["RefundPercentage"])
 
 	// Ensure no obsolete _amount column names exist in the schema
 	for name, dbName := range fieldDBNames {
@@ -58,12 +62,16 @@ func TestBookingModel_MappingRoundtrip(t *testing.T) {
 		ReservationID: &reservationID,
 		Subtotal:      decimal.NewFromInt(1000),
 		PlatformFee:   decimal.NewFromInt(50),
-		Tax:           decimal.NewFromInt(180),
-		Discount:      decimal.NewFromInt(100),
-		Total:         decimal.NewFromInt(1130),
-		Status:        domain.BookingStatusPending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		Tax:                       decimal.NewFromInt(180),
+		Discount:                  decimal.NewFromInt(100),
+		Total:                     decimal.NewFromInt(1130),
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 48,
+		RefundPolicy:              domain.RefundPolicyPartial,
+		RefundPercentage:          75,
+		Status:                    domain.BookingStatusPending,
+		CreatedAt:                 now,
+		UpdatedAt:                 now,
 	}
 
 	model := bookingToModel(original)
@@ -79,6 +87,10 @@ func TestBookingModel_MappingRoundtrip(t *testing.T) {
 	assert.True(t, original.Tax.Equal(model.Tax))
 	assert.True(t, original.Discount.Equal(model.Discount))
 	assert.True(t, original.Total.Equal(model.Total))
+	assert.Equal(t, original.CancellationAllowed, model.CancellationAllowed)
+	assert.Equal(t, original.CancellationDeadlineHours, model.CancellationDeadlineHours)
+	assert.Equal(t, original.RefundPolicy, model.RefundPolicy)
+	assert.Equal(t, original.RefundPercentage, model.RefundPercentage)
 	assert.Equal(t, original.Status, model.Status)
 
 	restored := bookingFromModel(model)
@@ -94,5 +106,9 @@ func TestBookingModel_MappingRoundtrip(t *testing.T) {
 	assert.True(t, original.Tax.Equal(restored.Tax))
 	assert.True(t, original.Discount.Equal(restored.Discount))
 	assert.True(t, original.Total.Equal(restored.Total))
+	assert.Equal(t, original.CancellationAllowed, restored.CancellationAllowed)
+	assert.Equal(t, original.CancellationDeadlineHours, restored.CancellationDeadlineHours)
+	assert.Equal(t, original.RefundPolicy, restored.RefundPolicy)
+	assert.Equal(t, original.RefundPercentage, restored.RefundPercentage)
 	assert.Equal(t, original.Status, restored.Status)
 }

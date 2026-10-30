@@ -56,6 +56,8 @@ type SeatReservationRepository interface {
 	CancelIfActive(ctx context.Context, id uuid.UUID, userID uuid.UUID) (bool, error)
 
 	FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*SeatReservation, error)
+
+	CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error)
 }
 
 // SeatReservationItem represents either a specific seat or

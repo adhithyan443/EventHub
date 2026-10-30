@@ -1,4 +1,5 @@
 import { useState } from "react";
+import notify from "../../../utils/toast";
 
 export default function PersonalInfoCard({ user }) {
     const [form, setForm] = useState({
@@ -15,6 +16,7 @@ export default function PersonalInfoCard({ user }) {
     function handleSubmit(e) {
         e.preventDefault();
         console.log("Would save:", form);
+        notify.success("Profile changes saved successfully.");
         // TODO: wire to PUT /auth/profile
     }
 

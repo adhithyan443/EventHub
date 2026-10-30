@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 
 import { getCurrentUser } from "../../api/authApi";
 import useAuthStore from "../../store/authStore";
+import notify from "../../utils/toast";
 
 export default function OAuthCallbackPage() {
     const navigate = useNavigate();
@@ -32,6 +33,8 @@ export default function OAuthCallbackPage() {
                 // Store user and tokens in Zustand.
                 setAuth(user, accessToken, refreshToken);
 
+                notify.success("Signed in with Google successfully!");
+
                 // Navigate according to the user's role.
                 switch (user.role) {
                     case "ADMIN":
@@ -52,11 +55,13 @@ export default function OAuthCallbackPage() {
             } catch (error) {
                 console.error("Google authentication failed:", error);
 
-                setError(
+                const errorMsg =
                     error.response?.data?.message ||
                     error.message ||
-                    "Google authentication failed. Please try again."
-                );
+                    "Google authentication failed. Please try again.";
+
+                setError(errorMsg);
+                notify.error(errorMsg);
             }
         }
 

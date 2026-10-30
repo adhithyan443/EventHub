@@ -20,6 +20,7 @@ import {
 } from "../../components/organizer/events/OrganizerEventsIcons";
 
 import { getOrganizerEvents, deleteOrganizerEvent } from "../../api/organizerApi";
+import notify from "../../utils/toast";
 
 const ITEMS_PER_PAGE = 10;
 
@@ -61,24 +62,15 @@ export default function MyEventsPage() {
 
   const [deleteModalEvent, setDeleteModalEvent] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
 
   const dropdownRef = useRef(null);
 
   useEffect(() => {
     if (location.state?.successMessage) {
-      setToastMessage(location.state.successMessage);
+      notify.success(location.state.successMessage);
       window.history.replaceState({}, document.title);
     }
   }, [location.state]);
-
-  useEffect(() => {
-    if (!toastMessage) return;
-    const timer = setTimeout(() => {
-      setToastMessage("");
-    }, 4000);
-    return () => clearTimeout(timer);
-  }, [toastMessage]);
 
   const handleDeleteConfirm = async () => {
     const targetId = deleteModalEvent?.id || deleteModalEvent?.ID;
@@ -97,7 +89,7 @@ export default function MyEventsPage() {
 
       const title =
         deleteModalEvent?.title || deleteModalEvent?.Title || "Draft event";
-      setToastMessage(`Event "${title}" was deleted successfully.`);
+      notify.success(`Event "${title}" was deleted successfully.`);
       setDeleteModalEvent(null);
     } catch (err) {
       console.error("Failed to delete organizer event:", err);
@@ -107,6 +99,7 @@ export default function MyEventsPage() {
         err?.message ||
         "Failed to delete event. Please try again.";
       setError(errMsg);
+      notify.error(errMsg);
       setDeleteModalEvent(null);
     } finally {
       setIsDeleting(false);
@@ -255,8 +248,10 @@ export default function MyEventsPage() {
       await navigator.clipboard?.writeText(
         `${window.location.origin}${eventPath}`
       );
+      notify.success("Event link copied to clipboard!");
     } catch (err) {
       console.error("Failed to copy event link:", err);
+      notify.error("Failed to copy event link.");
     }
 
     setActiveActionMenuId(null);
@@ -1135,48 +1130,6 @@ export default function MyEventsPage() {
         eventTitle={deleteModalEvent?.title || deleteModalEvent?.Title}
         loading={isDeleting}
       />
-
-      {/* Floating Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-20 right-4 sm:right-8 z-50 max-w-md bg-slate-900 text-white px-5 py-3.5 rounded-xl shadow-xl flex items-start gap-3 border border-slate-700 animate-slide-in">
-          <div className="text-emerald-400 shrink-0 mt-0.5">
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M20 6L9 17l-5-5" />
-            </svg>
-          </div>
-
-          <div className="flex-1 text-sm font-medium">{toastMessage}</div>
-
-          <button
-            type="button"
-            onClick={() => setToastMessage("")}
-            className="text-slate-400 hover:text-white transition-colors cursor-pointer ml-1"
-            aria-label="Close notification"
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -271,6 +271,70 @@ func (m *mockBookingRepo) FindItemsByBookingID(ctx context.Context, bookingID uu
 	return m.items[bookingID], nil
 }
 
+func (m *mockBookingRepo) FindItemsByBookingIDs(ctx context.Context, bookingIDs []uuid.UUID) (map[uuid.UUID][]domain.BookingItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	res := make(map[uuid.UUID][]domain.BookingItem)
+	for _, id := range bookingIDs {
+		if items, ok := m.items[id]; ok {
+			res[id] = items
+		}
+	}
+	return res, nil
+}
+
+func (m *mockBookingRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.Booking
+	for _, b := range m.bookings {
+		if b.UserID == userID {
+			res = append(res, *b)
+		}
+	}
+	return res, nil
+}
+
+func (m *mockBookingRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.bookings[id]
+	if !ok {
+		return nil, nil, domain.ErrBookingNotFound
+	}
+	items := m.items[id]
+	copied := *b
+	return &copied, items, nil
+}
+
+func (m *mockBookingRepo) CountConfirmedByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, b := range m.bookings {
+		if b.EventID == eventID && b.Status == domain.BookingStatusConfirmed {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockBookingRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, b := range m.bookings {
+		if b.EventID == eventID {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (m *mockBookingRepo) GetBookingStatsByEventID(ctx context.Context, eventID uuid.UUID) (domain.AdminEventBookingStats, error) {
+	return domain.AdminEventBookingStats{}, nil
+}
+
 type mockCheckoutRepo struct {
 	mu        sync.Mutex
 	checkouts map[uuid.UUID]*domain.Checkout
@@ -409,6 +473,18 @@ func (m *mockSeatReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID
 	return domain.ErrSeatReservationNotFound
 }
 
+func (m *mockSeatReservationRepo) CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, r := range m.reservations {
+		if r.EventID == eventID && r.Status == domain.ReservationStatusActive && now.Before(r.ExpiresAt) {
+			count++
+		}
+	}
+	return count, nil
+}
+
 type mockTicketRepo struct {
 	mu      sync.Mutex
 	tickets []domain.Ticket
@@ -451,6 +527,16 @@ func (m *mockTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]
 func (m *mockTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return nil
 }
+func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.tickets {
+		if m.tickets[i].BookingID == bookingID {
+			m.tickets[i].Status = status
+		}
+	}
+	return nil
+}
 func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
 	return 0, nil
 }
@@ -478,15 +564,30 @@ func (m *mockRazorpayWebhookEventRepo) Create(ctx context.Context, eventID strin
 	return nil
 }
 
+type mockEventCancellationRepo struct {
+	domain.EventCancellationRepository
+	cancellations map[uuid.UUID]*domain.EventCancellation
+}
+
+func (m *mockEventCancellationRepo) FindByEventID(eventID uuid.UUID) (*domain.EventCancellation, error) {
+	if m.cancellations != nil {
+		if c, ok := m.cancellations[eventID]; ok {
+			return c, nil
+		}
+	}
+	return nil, domain.ErrEventNotFound
+}
+
 type mockTxRepos struct {
 	domain.TransactionRepositories
-	paymentRepo         *mockPaymentRepo
-	bookingRepo         *mockBookingRepo
-	checkoutRepo        *mockCheckoutRepo
-	seatReservationRepo *mockSeatReservationRepo
-	ticketRepo          *mockTicketRepo
-	seatRepo            *mockSeatRepo
-	webhookEventRepo    *mockRazorpayWebhookEventRepo
+	paymentRepo           *mockPaymentRepo
+	bookingRepo           *mockBookingRepo
+	checkoutRepo          *mockCheckoutRepo
+	seatReservationRepo   *mockSeatReservationRepo
+	ticketRepo            *mockTicketRepo
+	seatRepo              *mockSeatRepo
+	webhookEventRepo      *mockRazorpayWebhookEventRepo
+	eventCancellationRepo *mockEventCancellationRepo
 }
 
 func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository {
@@ -509,6 +610,16 @@ func (m *mockTxRepos) SeatRepository() domain.SeatRepository {
 }
 func (m *mockTxRepos) RazorpayWebhookEventRepository() domain.RazorpayWebhookEventRepository {
 	return m.webhookEventRepo
+}
+func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepository {
+	return m.eventCancellationRepo
+}
+func (m *mockTxRepos) RefundRepository() domain.RefundRepository {
+	return &mockRefundRepo{}
+}
+
+type mockRefundRepo struct {
+	domain.RefundRepository
 }
 
 type mockTransactionManager struct {
@@ -584,21 +695,33 @@ func (m *mockPaymentProvider) CheckOrderStatus(ctx context.Context, providerOrde
 	return nil, errors.New("order not found")
 }
 
+func (m *mockPaymentProvider) Refund(ctx context.Context, gatewayPaymentID string, amount decimal.Decimal, currency string, idempotencyKey string) (*domain.RefundResult, error) {
+	return &domain.RefundResult{
+		RefundID: "rfnd_" + uuid.NewString()[:8],
+		Amount:   amount,
+		Status:   domain.RefundStatusSuccess,
+	}, nil
+}
+
+func (m *mockPaymentProvider) FetchRefunds(ctx context.Context, gatewayPaymentID string) ([]domain.RefundResult, error) {
+	return []domain.RefundResult{}, nil
+}
+
 // --- Test Fixture Setup ---
 
 type testFixture struct {
-	usecase        *payment.PaymentUsecase
-	paymentRepo    *mockPaymentRepo
-	bookingRepo    *mockBookingRepo
-	checkoutRepo   *mockCheckoutRepo
+	usecase         *payment.PaymentUsecase
+	paymentRepo     *mockPaymentRepo
+	bookingRepo     *mockBookingRepo
+	checkoutRepo    *mockCheckoutRepo
 	reservationRepo *mockSeatReservationRepo
-	ticketRepo     *mockTicketRepo
-	provider       *mockPaymentProvider
-	userID         uuid.UUID
-	checkoutID     uuid.UUID
-	reservationID  uuid.UUID
-	eventID        uuid.UUID
-	totalAmount    decimal.Decimal
+	ticketRepo      *mockTicketRepo
+	provider        *mockPaymentProvider
+	userID          uuid.UUID
+	checkoutID      uuid.UUID
+	reservationID   uuid.UUID
+	eventID         uuid.UUID
+	totalAmount     decimal.Decimal
 }
 
 func setupFixture(t *testing.T) *testFixture {
@@ -613,18 +736,19 @@ func setupFixture(t *testing.T) *testFixture {
 	webhookEventRepo := &mockRazorpayWebhookEventRepo{events: make(map[string]string)}
 
 	txRepos := &mockTxRepos{
-		paymentRepo:         paymentRepo,
-		bookingRepo:         bookingRepo,
-		checkoutRepo:        checkoutRepo,
-		seatReservationRepo: reservationRepo,
-		ticketRepo:          ticketRepo,
-		seatRepo:            seatRepo,
-		webhookEventRepo:    webhookEventRepo,
+		paymentRepo:           paymentRepo,
+		bookingRepo:           bookingRepo,
+		checkoutRepo:          checkoutRepo,
+		seatReservationRepo:   reservationRepo,
+		ticketRepo:            ticketRepo,
+		seatRepo:              seatRepo,
+		webhookEventRepo:      webhookEventRepo,
+		eventCancellationRepo: &mockEventCancellationRepo{cancellations: make(map[uuid.UUID]*domain.EventCancellation)},
 	}
 	tm := &mockTransactionManager{repos: txRepos}
 
-	bookingUC := bookinguc.NewBookingUsecase(tm, logger)
 	provider := newMockPaymentProvider()
+	bookingUC := bookinguc.NewBookingUsecase(tm, provider, logger)
 	paymentUC := payment.NewPaymentUsecase(tm, bookingUC, provider, logger)
 
 	userID := uuid.New()

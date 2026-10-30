@@ -28,4 +28,28 @@ type UserRepository interface {
 	FindByEmail(email string) (*User, error)
 	FindByPhone(phone string) (*User, error)
 	Update(user *User) error
+	List(filter UserListFilter) (*UserList, error)
+}
+
+type UserListFilter struct {
+	Page   int
+	Limit  int
+	Search string
+	Role   string
+	Status string
+}
+
+type UserRoleCounts struct {
+	Total      int64
+	Customers  int64
+	Organizers int64
+	Admins     int64
+}
+
+type UserList struct {
+	Users      []*User
+	Total      int64
+	Page       int
+	Limit      int
+	RoleCounts UserRoleCounts
 }

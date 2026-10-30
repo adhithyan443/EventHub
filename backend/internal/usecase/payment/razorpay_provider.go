@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/razorpay/razorpay-go"
 	"github.com/shopspring/decimal"
 )
@@ -511,4 +512,178 @@ func isDuplicateReceiptError(err error) bool {
 		(strings.Contains(errStr, "already") || strings.Contains(errStr, "duplicate") || strings.Contains(errStr, "exist"))
 }
 
+func (p *RazorpayProvider) Refund(
+	ctx context.Context,
+	gatewayPaymentID string,
+	amount decimal.Decimal,
+	currency string,
+	idempotencyKey string,
+) (*domain.RefundResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	trimmedPaymentID := strings.TrimSpace(gatewayPaymentID)
+	if trimmedPaymentID == "" {
+		return nil, errors.New("gateway payment ID is required")
+	}
+
+	if !amount.IsPositive() {
+		return nil, errors.New("refund amount must be positive")
+	}
+
+	if currency != "INR" {
+		return nil, errors.New("unsupported razorpay currency")
+	}
+
+	trimmedIdempotencyKey := strings.TrimSpace(idempotencyKey)
+	if trimmedIdempotencyKey == "" {
+		return nil, errors.New("idempotency key is required")
+	}
+
+	paise := amount.Mul(decimal.NewFromInt(100))
+	if !paise.Equal(paise.Truncate(0)) {
+		return nil, errors.New("refund amount cannot have fractional paise")
+	}
+
+	paiseInt := paise.BigInt()
+	if !paiseInt.IsInt64() {
+		return nil, errors.New("refund amount exceeds supported range")
+	}
+
+	data := map[string]interface{}{
+		"amount":  paiseInt.Int64(),
+		"receipt": trimmedIdempotencyKey,
+		"notes": map[string]interface{}{
+			"idempotency_key": trimmedIdempotencyKey,
+		},
+	}
+
+	extraHeaders := map[string]string{
+		"X-Razorpay-Idempotency-Key": trimmedIdempotencyKey,
+	}
+
+	response, err := p.client.Payment.Refund(trimmedPaymentID, int(paiseInt.Int64()), data, extraHeaders)
+	if err != nil {
+		p.logger.ErrorContext(ctx, "razorpay_refund_failed",
+			slog.String("gateway_payment_id", trimmedPaymentID),
+			slog.String("amount", amount.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, fmt.Errorf("gateway refund failed: %w", err)
+	}
+
+	refundID, _ := response["id"].(string)
+	statusStr, _ := response["status"].(string)
+	receiptStr, _ := response["receipt"].(string)
+	if receiptStr == "" {
+		receiptStr = trimmedIdempotencyKey
+	}
+
+	var refundStatus string
+	switch strings.ToLower(statusStr) {
+	case "processed", "success":
+		refundStatus = domain.RefundStatusSuccess
+	case "pending":
+		refundStatus = domain.RefundStatusPending
+	case "failed":
+		refundStatus = domain.RefundStatusFailed
+	default:
+		if refundID != "" {
+			refundStatus = domain.RefundStatusSuccess
+		} else {
+			refundStatus = domain.RefundStatusFailed
+		}
+	}
+
+	actualAmount := amount
+	if amtVal, ok := razorpayAmount(response["amount"]); ok && amtVal > 0 {
+		actualAmount = decimal.NewFromInt(amtVal).Div(decimal.NewFromInt(100))
+	}
+
+	p.logger.InfoContext(ctx, "razorpay_refund_processed",
+		slog.String("refund_id", refundID),
+		slog.String("gateway_payment_id", trimmedPaymentID),
+		slog.String("status", string(refundStatus)),
+		slog.String("amount", actualAmount.String()),
+	)
+
+	return &domain.RefundResult{
+		RefundID: refundID,
+		Amount:   actualAmount,
+		Status:   refundStatus,
+		Receipt:  receiptStr,
+	}, nil
+}
+
+func (p *RazorpayProvider) FetchRefunds(
+	ctx context.Context,
+	gatewayPaymentID string,
+) ([]domain.RefundResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	trimmedPaymentID := strings.TrimSpace(gatewayPaymentID)
+	if trimmedPaymentID == "" {
+		return nil, errors.New("gateway payment ID is required")
+	}
+
+	response, err := p.client.Payment.FetchMultipleRefund(trimmedPaymentID, nil, nil)
+	if err != nil {
+		p.logger.ErrorContext(ctx, "failed to fetch razorpay refunds for payment",
+			slog.String("gateway_payment_id", trimmedPaymentID),
+			slog.Any("error", err),
+		)
+		return nil, fmt.Errorf("failed to fetch refunds from gateway: %w", err)
+	}
+
+	items, ok := response["items"].([]interface{})
+	if !ok || len(items) == 0 {
+		return []domain.RefundResult{}, nil
+	}
+
+	results := make([]domain.RefundResult, 0, len(items))
+	for _, item := range items {
+		itemMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		refundID, _ := itemMap["id"].(string)
+		statusStr, _ := itemMap["status"].(string)
+		receiptStr, _ := itemMap["receipt"].(string)
+
+		var refundStatus string
+		switch strings.ToLower(statusStr) {
+		case "processed", "success":
+			refundStatus = domain.RefundStatusSuccess
+		case "pending":
+			refundStatus = domain.RefundStatusPending
+		case "failed":
+			refundStatus = domain.RefundStatusFailed
+		default:
+			if refundID != "" {
+				refundStatus = domain.RefundStatusSuccess
+			} else {
+				refundStatus = domain.RefundStatusFailed
+			}
+		}
+
+		actualAmount := decimal.Zero
+		if amtVal, ok := razorpayAmount(itemMap["amount"]); ok && amtVal > 0 {
+			actualAmount = decimal.NewFromInt(amtVal).Div(decimal.NewFromInt(100))
+		}
+
+		results = append(results, domain.RefundResult{
+			RefundID: refundID,
+			Amount:   actualAmount,
+			Status:   refundStatus,
+			Receipt:  receiptStr,
+		})
+	}
+
+	return results, nil
+}
+
 var _ PaymentProvider = (*RazorpayProvider)(nil)
+var _ domain.PaymentRefundProvider = (*RazorpayProvider)(nil)

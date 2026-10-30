@@ -38,6 +38,8 @@ type Ticket struct {
 	UsedAt          *time.Time
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+
+	Seat *SeatDetail `json:"seat,omitempty"`
 }
 
 type TicketRepository interface {
@@ -64,4 +66,15 @@ type TicketRepository interface {
 		id uuid.UUID,
 		status string,
 	) error
+
+	UpdateStatusByBookingID(
+		ctx context.Context,
+		bookingID uuid.UUID,
+		status string,
+	) error
+
+	CountByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (int64, error)
 }

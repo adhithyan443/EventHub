@@ -4,6 +4,7 @@ import AuthLayout from "../../components/layout/AuthLayout";
 import Input from "../../components/ui/Input";
 import Button from "../../components/ui/Button";
 import { forgotPassword } from "../../api/authApi";
+import notify from "../../utils/toast";
 
 export default function ForgotPasswordPage() {
     const [email, setEmail] = useState("");
@@ -32,14 +33,17 @@ export default function ForgotPasswordPage() {
             console.log("Forgot password response:", response);
 
             setMessage(response.message);
+            notify.success(response.message || "Password reset instructions sent to your email.");
 
         } catch (error) {
             console.error("Forgot password failed:", error);
 
-            setError(
+            const errorMsg =
                 error.response?.data?.message ||
-                "Unable to process your request. Please try again."
-            );
+                "Unable to process your request. Please try again.";
+
+            setError(errorMsg);
+            notify.error(errorMsg);
         } finally {
             setLoading(false);
         }

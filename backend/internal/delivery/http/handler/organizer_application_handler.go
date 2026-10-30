@@ -252,6 +252,11 @@ func (h *OrganizerApplicationHandler) GetApplication(ctx *gin.Context) {
 }
 
 func (h *OrganizerApplicationHandler) ApproveApplication(ctx *gin.Context) {
+	adminID, err := getAuthenticatedUserID(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
 
 	idParam := ctx.Param("id")
 
@@ -261,7 +266,7 @@ func (h *OrganizerApplicationHandler) ApproveApplication(ctx *gin.Context) {
 		return
 	}
 
-	if err := h.adminApplicationUsecase.ApproveApplication(applicationID); err != nil {
+	if err := h.adminApplicationUsecase.ApproveApplication(ctx.Request.Context(), applicationID, adminID); err != nil {
 		ctx.Error(err)
 		return
 	}
@@ -300,6 +305,12 @@ func (h *OrganizerApplicationHandler) GetMyApplication(ctx *gin.Context) {
 func (h *OrganizerApplicationHandler) RejectApplication(
 	ctx *gin.Context,
 ) {
+	adminID, err := getAuthenticatedUserID(ctx)
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
 	// Read the application UUID from the URL.
 	idParam := ctx.Param("id")
 
@@ -321,6 +332,7 @@ func (h *OrganizerApplicationHandler) RejectApplication(
 		h.logger.Warn(
 			"admin_organizer_application_rejection_validation_failed",
 			"application_id", applicationID,
+			"admin_id", adminID,
 			"error", err,
 		)
 
@@ -334,8 +346,10 @@ func (h *OrganizerApplicationHandler) RejectApplication(
 
 	// Reject the application through the admin usecase.
 	if err := h.adminApplicationUsecase.RejectApplication(
+		ctx.Request.Context(),
 		applicationID,
 		req.Reason,
+		adminID,
 	); err != nil {
 		ctx.Error(err)
 		return

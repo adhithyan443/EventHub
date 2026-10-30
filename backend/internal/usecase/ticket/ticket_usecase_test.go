@@ -56,6 +56,12 @@ func (m *mockTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]
 func (m *mockTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return m.err
 }
+func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return m.err
+}
+func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
+	return 0, m.err
+}
 
 type mockEventRepo struct {
 	events map[uuid.UUID]*domain.Event
@@ -75,11 +81,20 @@ func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
 	}
 	return ev, nil
 }
+func (m *mockEventRepo) FindByIDForUpdate(id uuid.UUID) (*domain.Event, error) {
+	return m.FindByID(id)
+}
 func (m *mockEventRepo) FindByOrganizerID(organizerID uuid.UUID, page int, limit int, status string, search string) ([]*domain.OrganizerEvent, int64, error) {
 	return nil, 0, nil
 }
 func (m *mockEventRepo) FindPublicEvents(filter domain.PublicEventFilter) ([]*domain.PublicEvent, int64, error) {
 	return nil, 0, nil
+}
+func (m *mockEventRepo) FindAllEvents(filter domain.AdminEventFilter) ([]*domain.AdminEventListItem, int64, error) {
+	return nil, 0, nil
+}
+func (m *mockEventRepo) GetAdminStatusCounts() (domain.AdminEventStatusCounts, error) {
+	return domain.AdminEventStatusCounts{}, nil
 }
 
 type mockScheduleRepo struct {
@@ -102,6 +117,7 @@ func (m *mockScheduleRepo) Update(schedule *domain.EventSchedule) error { return
 func (m *mockScheduleRepo) DeleteByEventID(eventID uuid.UUID) error     { return m.err }
 
 type mockUserRepo struct {
+	domain.UserRepository
 	users map[uuid.UUID]*domain.User
 	err   error
 }

@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
+import LogoutConfirmationModal from "../../../components/layout/LogoutConfirmationModal";
 import ProfileSidebar from "./ProfileSidebar";
 import PersonalInfoCard from "./PersonalInfoCard";
 import AccountSettingsCard from "./AccountSettingsCard";
@@ -9,11 +11,15 @@ import OrganizerPromoCard from "./OrganizerPromoCard";
 import { TicketIcon, CalendarIcon, RefreshIcon } from "../../../components/layout/icons";
 import { logout } from "../../../api/authApi";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 export default function ProfilePage() {
     const navigate = useNavigate();
     const user = useAuthStore((state) => state.user);
     const clearAuth = useAuthStore((state) => state.clearAuth);
+
+    const [showLogoutModal, setShowLogoutModal] = useState(false);
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
 
     // TODO: replace with real fields once /auth/profile returns phone/memberSince
     const displayUser = {
@@ -25,12 +31,16 @@ export default function ProfilePage() {
     };
 
     async function handleLogout() {
+        setIsLoggingOut(true);
         try {
             await logout();
         } catch (error) {
             console.error("Logout failed:", error);
         } finally {
             clearAuth();
+            setIsLoggingOut(false);
+            setShowLogoutModal(false);
+            notify.info("Signed out successfully.");
             navigate("/login", { replace: true });
         }
     }
@@ -45,7 +55,7 @@ export default function ProfilePage() {
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 w-full items-start">
                     <div className="lg:col-span-5 flex flex-col gap-6">
                         <PersonalInfoCard user={displayUser} />
-                        <AccountSettingsCard onLogout={handleLogout} />
+                        <AccountSettingsCard onLogout={() => setShowLogoutModal(true)} />
                     </div>
 
                     <div className="lg:col-span-7 flex flex-col gap-6">
@@ -65,6 +75,15 @@ export default function ProfilePage() {
                     </div>
                 </div>
             </main>
+
+            <LogoutConfirmationModal
+                isOpen={showLogoutModal}
+                loading={isLoggingOut}
+                onClose={() => {
+                    if (!isLoggingOut) setShowLogoutModal(false);
+                }}
+                onConfirm={handleLogout}
+            />
 
             <Footer />
         </div>

@@ -3,7 +3,6 @@ import AppHeader from "../../../components/layout/AppHeader";
 import HeroSearch from "./HeroSearch";
 import CategoryPills from "./CategoryPills";
 import FiltersSidebar from "./FiltersSidebar";
-import FeaturedEvents from "./FeaturedEvents";
 import EventCard from "./EventCard";
 import Pagination from "./Pagination";
 import { getPublicEvents } from "../../../api/eventApi";
@@ -148,8 +147,6 @@ export default function DiscoverEventsPage() {
         Math.ceil(total / limit)
     );
 
-    const featuredEvents = events.slice(0, 3);
-
     return (
         <div className="min-h-screen bg-background">
             <AppHeader />
@@ -193,40 +190,32 @@ export default function DiscoverEventsPage() {
                     )}
 
                     {!loading && !error && (
-                        <>
-                            {featuredEvents.length > 0 && (
-                                <FeaturedEvents
-                                    events={featuredEvents}
-                                />
+                        <div className="flex flex-col gap-6">
+                            <h2 className="font-display text-2xl sm:text-3xl font-bold text-ink">
+                                All Events
+                            </h2>
+
+                            {events.length === 0 ? (
+                                <div className="py-12 text-center text-ink/60">
+                                    No events found.
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+                                    {events.map((event) => (
+                                        <EventCard
+                                            key={event.id}
+                                            event={event}
+                                        />
+                                    ))}
+                                </div>
                             )}
 
-                            <div className="border-t border-border pt-8 flex flex-col gap-6">
-                                <h2 className="font-display text-2xl sm:text-3xl font-bold text-ink">
-                                    All Events
-                                </h2>
-
-                                {events.length === 0 ? (
-                                    <div className="py-12 text-center text-ink/60">
-                                        No events found.
-                                    </div>
-                                ) : (
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-                                        {events.map((event) => (
-                                            <EventCard
-                                                key={event.id}
-                                                event={event}
-                                            />
-                                        ))}
-                                    </div>
-                                )}
-
-                                <Pagination
-                                    currentPage={currentPage}
-                                    totalPages={totalPages}
-                                    onPageChange={setCurrentPage}
-                                />
-                            </div>
-                        </>
+                            <Pagination
+                                currentPage={currentPage}
+                                totalPages={totalPages}
+                                onPageChange={setCurrentPage}
+                            />
+                        </div>
                     )}
                 </div>
             </div>

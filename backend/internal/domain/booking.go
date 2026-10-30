@@ -9,9 +9,16 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var ErrBookingNotFound = errors.New("booking not found")
-var ErrDuplicateReservationBooking = errors.New(
-	"booking already exists for reservation",
+var (
+	ErrBookingNotFound             = errors.New("booking not found")
+	ErrDuplicateReservationBooking = errors.New(
+		"booking already exists for reservation",
+	)
+	ErrBookingAlreadyCancelled    = errors.New("booking is already cancelled")
+	ErrBookingCannotBeCancelled   = errors.New("booking cannot be cancelled in its current state")
+	ErrCancellationNotAllowed     = errors.New("cancellation is not allowed for this booking")
+	ErrCancellationDeadlinePassed = errors.New("cancellation deadline has passed")
+	ErrTicketAlreadyUsed          = errors.New("booking tickets have already been used and cannot be cancelled")
 )
 
 const (
@@ -33,9 +40,16 @@ type Booking struct {
 	Discount    decimal.Decimal
 	Total       decimal.Decimal
 
+	CancellationAllowed       bool   `json:"cancellation_allowed"`
+	CancellationDeadlineHours int    `json:"cancellation_deadline_hours"`
+	RefundPolicy              string `json:"refund_policy"`
+	RefundPercentage          int    `json:"refund_percentage"`
+
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	Seats []SeatDetail `json:"seats,omitempty"`
 }
 
 type BookingItem struct {
@@ -48,6 +62,14 @@ type BookingItem struct {
 	TotalPrice   decimal.Decimal
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+
+	Seat *SeatDetail `json:"seat,omitempty"`
+}
+
+type BookingWithItems struct {
+	Booking
+	Items     []BookingItem `json:"items"`
+	QRPayload string        `json:"qr_payload,omitempty"`
 }
 
 type BookingRepository interface {
@@ -71,6 +93,16 @@ type BookingRepository interface {
 		reservationID uuid.UUID,
 	) (*Booking, error)
 
+	FindByUserID(
+		ctx context.Context,
+		userID uuid.UUID,
+	) ([]Booking, error)
+
+	FindWithItemsByID(
+		ctx context.Context,
+		id uuid.UUID,
+	) (*Booking, []BookingItem, error)
+
 	UpdateStatus(
 		ctx context.Context,
 		id uuid.UUID,
@@ -86,4 +118,24 @@ type BookingRepository interface {
 		ctx context.Context,
 		bookingID uuid.UUID,
 	) ([]BookingItem, error)
+
+	FindItemsByBookingIDs(
+		ctx context.Context,
+		bookingIDs []uuid.UUID,
+	) (map[uuid.UUID][]BookingItem, error)
+
+	CountConfirmedByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (int64, error)
+
+	CountByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (int64, error)
+
+	GetBookingStatsByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) (AdminEventBookingStats, error)
 }

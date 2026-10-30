@@ -4,6 +4,7 @@ import AuthLayout from "../../components/layout/AuthLayout";
 import OtpInput from "../../components/ui/OtpInput";
 import Button from "../../components/ui/Button";
 import { verifyOTP, resendOTP } from "../../api/authApi";
+import notify from "../../utils/toast";
 
 function formatTime(s) {
     const m = String(Math.floor(s / 60)).padStart(2, "0");
@@ -76,6 +77,8 @@ export default function OtpPage() {
                 otp: code,
             });
 
+            notify.success("Email verified successfully! You can now sign in.");
+
             navigate("/login", {
                 replace: true,
             });
@@ -87,6 +90,7 @@ export default function OtpPage() {
                 "OTP verification failed. Please try again.";
 
             setError(message);
+            notify.error(message);
         }
     }
 
@@ -105,8 +109,8 @@ export default function OtpPage() {
 
             console.log("OTP resent successfully:", response);
 
-
             setSecondsLeft(45);
+            notify.success("A new verification code has been sent to your email.");
         } catch (error) {
             console.error("Resend OTP failed:", error);
 
@@ -115,6 +119,7 @@ export default function OtpPage() {
                 "Failed to resend OTP. Please try again.";
 
             setResendError(message);
+            notify.error(message);
         } finally {
             setIsResending(false);
         }

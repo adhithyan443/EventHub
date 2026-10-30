@@ -3,6 +3,7 @@ import { useState } from "react";
 export default function RejectModal({
   appId,
   businessName,
+  actionLoading = false,
   onConfirm,
   onCancel,
 }) {
@@ -10,7 +11,7 @@ export default function RejectModal({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (reason.trim()) {
+    if (reason.trim() && !actionLoading) {
       onConfirm(reason.trim());
     }
   };
@@ -20,7 +21,7 @@ export default function RejectModal({
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/40 backdrop-blur-[1px] transition-opacity"
-        onClick={onCancel}
+        onClick={!actionLoading ? onCancel : undefined}
       />
 
       {/* Modal Card */}
@@ -69,7 +70,8 @@ export default function RejectModal({
               placeholder="Provide a reason for the rejection..."
               rows={4}
               required
-              className="w-full border border-[#bcc9c6] rounded-lg px-3 py-2.5 text-sm text-[#141b2b] placeholder:text-[#6d7a77] resize-none focus:outline-none focus:ring-2 focus:ring-[#00685f]/30 focus:border-[#00685f] transition-colors"
+              disabled={actionLoading}
+              className="w-full border border-[#bcc9c6] rounded-lg px-3 py-2.5 text-sm text-[#141b2b] placeholder:text-[#6d7a77] resize-none focus:outline-none focus:ring-2 focus:ring-[#00685f]/30 focus:border-[#00685f] transition-colors disabled:bg-gray-50 disabled:cursor-not-allowed"
             />
           </div>
 
@@ -78,22 +80,35 @@ export default function RejectModal({
             <button
               type="button"
               onClick={onCancel}
-              className="w-full sm:w-auto border border-[#bcc9c6] bg-white text-[#141b2b] text-sm font-medium px-5 py-2.5 sm:py-2 rounded-lg hover:bg-[#f9f9ff] transition-colors cursor-pointer"
+              disabled={actionLoading}
+              className="w-full sm:w-auto border border-[#bcc9c6] bg-white text-[#141b2b] text-sm font-medium px-5 py-2.5 sm:py-2 rounded-lg hover:bg-[#f9f9ff] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={!reason.trim()}
+              disabled={!reason.trim() || actionLoading}
               className="w-full sm:w-auto bg-[#93000a] text-white text-sm font-semibold px-5 py-2.5 sm:py-2 rounded-lg hover:bg-[#7d000a] transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer shadow-sm"
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path
-                  d="M13.5 7.41L12.09 6L7 11.09L1.91 6L0.5 7.41L7 13.91L13.5 7.41Z"
-                  fill="white"
-                />
-              </svg>
-              Confirm Rejection
+              {actionLoading ? (
+                <>
+                  <svg className="animate-spin h-4 w-4 text-white" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Rejecting...
+                </>
+              ) : (
+                <>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path
+                      d="M13.5 7.41L12.09 6L7 11.09L1.91 6L0.5 7.41L7 13.91L13.5 7.41Z"
+                      fill="white"
+                    />
+                  </svg>
+                  Confirm Rejection
+                </>
+              )}
             </button>
           </div>
         </form>

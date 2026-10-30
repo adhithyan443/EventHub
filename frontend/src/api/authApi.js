@@ -1,4 +1,4 @@
-import apiClient from "./client"
+import apiClient, { rawAuthAxios } from "./client.js";
 
 export const register = async (data) => {
     const response = await apiClient.post("/auth/register", data);
@@ -27,7 +27,7 @@ export const refreshToken = async (token) => {
     const activeToken =
         token ||
         localStorage.getItem("eventhub_refresh_token");
-    const response = await apiClient.post("/auth/refresh-token", {
+    const response = await rawAuthAxios.post("/auth/refresh-token", {
         refreshToken: activeToken,
     });
     return response.data;
