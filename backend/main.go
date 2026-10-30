@@ -13,6 +13,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/config"
 	"github.com/adhithyan443/EventHub/backend/internal/database"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
+	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
@@ -323,7 +324,7 @@ func main() {
 	)
 
 	// Admin users and organizers dependencies.
-	adminUserUsecase := userUC.NewAdminUserUsecase(userRepo, logger)
+	adminUserUsecase := userUC.NewAdminUserUsecase(userRepo, refreshTokenRepo, txManager, logger)
 	adminUserHandler := handler.NewAdminUserHandler(adminUserUsecase, logger)
 
 	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(organizerRepo, logger)
@@ -347,6 +348,7 @@ func main() {
 		adminUserHandler,
 		adminOrganizerHandler,
 		jwtService,
+		userRepo,
 	)
 
 	logger.Info(
@@ -375,6 +377,8 @@ func main() {
 		defer workerWG.Done()
 		reservationExpiryWorker.Run(ctx)
 	}()
+
+	middleware.StartUserStatusCacheCleaner(ctx, 1*time.Minute)
 
 	go func() {
 		logger.Info("HTTP server starting", "port", cfg.ServerPort)

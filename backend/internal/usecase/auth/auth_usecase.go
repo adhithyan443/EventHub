@@ -319,14 +319,6 @@ func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, string, err
 		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
 	}
 
-	if user.Status != "ACTIVE" {
-		u.logger.Warn(
-			"user_login_failed",
-			"user_id", user.ID,
-			"reason", "account_inactive",
-		)
-		return nil, "", "", appErrors.NewUnauthorizedError("user account is not active")
-	}
 	if err := bcrypt.CompareHashAndPassword(
 		[]byte(user.PasswordHash),
 		[]byte(input.Password),
@@ -336,6 +328,15 @@ func (u *AuthUsecase) Login(input LoginInput) (*domain.User, string, string, err
 			"reason", "invalid_credentials",
 		)
 		return nil, "", "", appErrors.NewUnauthorizedError("invalid email or password")
+	}
+
+	if user.Status != "ACTIVE" {
+		u.logger.Warn(
+			"user_login_failed",
+			"user_id", user.ID,
+			"reason", "account_inactive",
+		)
+		return nil, "", "", appErrors.NewUnauthorizedError("user account is not active")
 	}
 
 	accessToken, rawRefreshToken, err := u.generateAuthTokens(user)

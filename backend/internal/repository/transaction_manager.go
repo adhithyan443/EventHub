@@ -16,6 +16,7 @@ type transactionRepositories struct {
 	userRepo                 *UserRepository
 	pendingRegistrationRepo  *PendingRegistrationRepository
 	passwordResetTokenRepo   domain.PasswordResetTokenRepository
+	refreshTokenRepo         domain.RefreshTokenRepository
 	organizerApplicationRepo domain.OrganizerApplicationRepository
 
 	organizerRepo            domain.OrganizerRepository
@@ -67,6 +68,7 @@ func (m *TransactionManager) WithinTransaction(
 			userRepo:                NewUserRepository(txDB, m.logger),
 			pendingRegistrationRepo: NewPendingRegistrationRepository(txDB),
 			passwordResetTokenRepo:  NewPasswordResetTokenRepository(txDB),
+			refreshTokenRepo:        NewRefreshTokenRepository(txDB),
 			organizerApplicationRepo: NewOrganizerApplicationRepository(
 				txDB,
 				m.logger,
@@ -158,6 +160,10 @@ func (r *transactionRepositories) PendingRegistrationRepository() domain.Pending
 
 func (r *transactionRepositories) PasswordResetTokenRepository() domain.PasswordResetTokenRepository {
 	return r.passwordResetTokenRepo
+}
+
+func (r *transactionRepositories) RefreshTokenRepository() domain.RefreshTokenRepository {
+	return r.refreshTokenRepo
 }
 
 func (r *transactionRepositories) OrganizerApplicationRepository() domain.OrganizerApplicationRepository {

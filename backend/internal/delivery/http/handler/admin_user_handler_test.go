@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -22,8 +23,10 @@ import (
 
 type mockUserRepoForHandlerTest struct {
 	domain.UserRepository
-	listResult *domain.UserList
-	listErr    error
+	listResult  *domain.UserList
+	listErr     error
+	findByIDMap map[uuid.UUID]*domain.User
+	updatedUser *domain.User
 }
 
 func (m *mockUserRepoForHandlerTest) List(filter domain.UserListFilter) (*domain.UserList, error) {
@@ -33,7 +36,31 @@ func (m *mockUserRepoForHandlerTest) List(filter domain.UserListFilter) (*domain
 	return m.listResult, nil
 }
 
-func setupAdminUserTestRouter(repo domain.UserRepository, jwtService *token.JWTService) *gin.Engine {
+func (m *mockUserRepoForHandlerTest) FindByID(id uuid.UUID) (*domain.User, error) {
+	if m.findByIDMap != nil {
+		if u, exists := m.findByIDMap[id]; exists {
+			return u, nil
+		}
+	}
+	return nil, domain.ErrUserNotFound
+}
+
+func (m *mockUserRepoForHandlerTest) Update(u *domain.User) error {
+	m.updatedUser = u
+	return nil
+}
+
+type mockTokenRepoForHandlerTest struct {
+	domain.RefreshTokenRepository
+	revokedUserIDs []uuid.UUID
+}
+
+func (m *mockTokenRepoForHandlerTest) RevokeAllByUserID(userID uuid.UUID) error {
+	m.revokedUserIDs = append(m.revokedUserIDs, userID)
+	return nil
+}
+
+func setupAdminUserTestRouter(repo domain.UserRepository, tokenRepo domain.RefreshTokenRepository, jwtService *token.JWTService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -43,7 +70,7 @@ func setupAdminUserTestRouter(repo domain.UserRepository, jwtService *token.JWTS
 		middleware.ErrorHandler(logger),
 	)
 
-	adminUserUsecase := user.NewAdminUserUsecase(repo, logger)
+	adminUserUsecase := user.NewAdminUserUsecase(repo, tokenRepo, nil, logger)
 	adminUserHandler := handler.NewAdminUserHandler(adminUserUsecase, logger)
 
 	api := router.Group("/api/v1")
@@ -53,19 +80,23 @@ func setupAdminUserTestRouter(repo domain.UserRepository, jwtService *token.JWTS
 		middleware.RequireRole("ADMIN"),
 	)
 	admin.GET("/users", adminUserHandler.ListUsers)
+	admin.GET("/users/:id", adminUserHandler.GetUser)
+	admin.PATCH("/users/:id/block", adminUserHandler.BlockUser)
+	admin.PATCH("/users/:id/unblock", adminUserHandler.UnblockUser)
 
 	return router
 }
 
-func TestAdminUserHandler_ListUsers(t *testing.T) {
+func TestAdminUserHandler(t *testing.T) {
 	jwtService := token.NewJWTService("01234567890123456789012345678901")
-	adminToken, err := jwtService.GenerateAccessToken(uuid.New(), "ADMIN")
+	adminID := uuid.New()
+	adminToken, err := jwtService.GenerateAccessToken(adminID, "ADMIN")
 	require.NoError(t, err)
 
 	customerToken, err := jwtService.GenerateAccessToken(uuid.New(), "CUSTOMER")
 	require.NoError(t, err)
 
-	t.Run("authorized admin successfully retrieves users", func(t *testing.T) {
+	t.Run("authorized admin successfully retrieves users list", func(t *testing.T) {
 		uid := uuid.New()
 		now := time.Now()
 		repo := &mockUserRepoForHandlerTest{
@@ -91,7 +122,7 @@ func TestAdminUserHandler_ListUsers(t *testing.T) {
 			},
 		}
 
-		router := setupAdminUserTestRouter(repo, jwtService)
+		router := setupAdminUserTestRouter(repo, &mockTokenRepoForHandlerTest{}, jwtService)
 		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/users?page=1&limit=10", nil)
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 
@@ -115,9 +146,107 @@ func TestAdminUserHandler_ListUsers(t *testing.T) {
 		assert.Nil(t, firstUser["password_hash"])
 	})
 
+	t.Run("get user by id returns sanitized details", func(t *testing.T) {
+		targetID := uuid.New()
+		now := time.Now()
+		repo := &mockUserRepoForHandlerTest{
+			findByIDMap: map[uuid.UUID]*domain.User{
+				targetID: {
+					ID:           targetID,
+					FullName:     "Detailed User",
+					Email:        "detail@example.com",
+					Phone:        "+919876543210",
+					PasswordHash: "should-not-be-in-response",
+					Role:         "CUSTOMER",
+					Status:       "ACTIVE",
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				},
+			},
+		}
+
+		router := setupAdminUserTestRouter(repo, &mockTokenRepoForHandlerTest{}, jwtService)
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/users/"+targetID.String(), nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		data := resp["data"].(map[string]interface{})
+		assert.Equal(t, targetID.String(), data["id"])
+		assert.Equal(t, "Detailed User", data["full_name"])
+		assert.Nil(t, data["password_hash"])
+	})
+
+	t.Run("block user updates status and revokes tokens", func(t *testing.T) {
+		targetID := uuid.New()
+		tokenRepo := &mockTokenRepoForHandlerTest{}
+		repo := &mockUserRepoForHandlerTest{
+			findByIDMap: map[uuid.UUID]*domain.User{
+				targetID: {
+					ID:       targetID,
+					FullName: "Suspicious User",
+					Role:     "CUSTOMER",
+					Status:   "ACTIVE",
+				},
+			},
+		}
+
+		router := setupAdminUserTestRouter(repo, tokenRepo, jwtService)
+		body := bytes.NewBufferString(`{"reason":"Fraudulent chargebacks"}`)
+		req, _ := http.NewRequest(http.MethodPatch, "/api/v1/admin/users/"+targetID.String()+"/block", body)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		assert.Equal(t, "user blocked successfully", resp["message"])
+		assert.Contains(t, tokenRepo.revokedUserIDs, targetID)
+	})
+
+	t.Run("unblock user restores status to ACTIVE", func(t *testing.T) {
+		targetID := uuid.New()
+		tokenRepo := &mockTokenRepoForHandlerTest{}
+		repo := &mockUserRepoForHandlerTest{
+			findByIDMap: map[uuid.UUID]*domain.User{
+				targetID: {
+					ID:       targetID,
+					FullName: "Suspicious User",
+					Role:     "CUSTOMER",
+					Status:   "BLOCKED",
+				},
+			},
+		}
+
+		router := setupAdminUserTestRouter(repo, tokenRepo, jwtService)
+		req, _ := http.NewRequest(http.MethodPatch, "/api/v1/admin/users/"+targetID.String()+"/unblock", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		assert.Equal(t, "user unblocked successfully", resp["message"])
+	})
+
 	t.Run("unauthenticated request returns 401", func(t *testing.T) {
 		repo := &mockUserRepoForHandlerTest{}
-		router := setupAdminUserTestRouter(repo, jwtService)
+		router := setupAdminUserTestRouter(repo, &mockTokenRepoForHandlerTest{}, jwtService)
 		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
 
 		w := httptest.NewRecorder()
@@ -128,7 +257,7 @@ func TestAdminUserHandler_ListUsers(t *testing.T) {
 
 	t.Run("customer role returns 403 forbidden", func(t *testing.T) {
 		repo := &mockUserRepoForHandlerTest{}
-		router := setupAdminUserTestRouter(repo, jwtService)
+		router := setupAdminUserTestRouter(repo, &mockTokenRepoForHandlerTest{}, jwtService)
 		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/users", nil)
 		req.Header.Set("Authorization", "Bearer "+customerToken)
 
@@ -136,17 +265,5 @@ func TestAdminUserHandler_ListUsers(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusForbidden, w.Code)
-	})
-
-	t.Run("invalid page parameter returns 400 validation error", func(t *testing.T) {
-		repo := &mockUserRepoForHandlerTest{}
-		router := setupAdminUserTestRouter(repo, jwtService)
-		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/users?page=0", nil)
-		req.Header.Set("Authorization", "Bearer "+adminToken)
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 }

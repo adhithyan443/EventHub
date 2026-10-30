@@ -7,6 +7,7 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
+	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -29,6 +30,7 @@ func setupRouter(
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) *gin.Engine {
 	router := gin.New()
 
@@ -72,6 +74,7 @@ func setupRouter(
 		eventHandler,
 		seatLayoutHandler,
 		jwtService,
+		userRepo,
 	)
 
 	registerAdminRoutes(
@@ -81,14 +84,15 @@ func setupRouter(
 		adminUserHandler,
 		adminOrganizerHandler,
 		jwtService,
+		userRepo,
 	)
 	registerCategoryRoutes(router, categoryHandler)
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
-	registerReservationRoutes(router, reservationHandler, jwtService)
-	registerCheckoutRoutes(router, checkoutHandler, jwtService)
-	registerBookingRoutes(router, bookingHandler, jwtService)
-	registerPaymentRoutes(router, paymentHandler, jwtService)
-	registerTicketRoutes(router, ticketHandler, jwtService)
+	registerReservationRoutes(router, reservationHandler, jwtService, userRepo)
+	registerCheckoutRoutes(router, checkoutHandler, jwtService, userRepo)
+	registerBookingRoutes(router, bookingHandler, jwtService, userRepo)
+	registerPaymentRoutes(router, paymentHandler, jwtService, userRepo)
+	registerTicketRoutes(router, ticketHandler, jwtService, userRepo)
 
 	return router
 }
@@ -189,12 +193,14 @@ func registerOrganizerRoutes(
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	api := router.Group("/api/v1")
 
 	organizer := api.Group("/organizers")
 	organizer.Use(
 		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
 		// middleware.RequireRole("ORGANIZER"),
 	)
 
@@ -263,17 +269,22 @@ func registerAdminRoutes(
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	api := router.Group("/api/v1")
 
 	admin := api.Group("/admin")
 	admin.Use(
 		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
 		middleware.RequireRole("ADMIN"),
 	)
 
 	// User management endpoints
 	admin.GET("/users", adminUserHandler.ListUsers)
+	admin.GET("/users/:id", adminUserHandler.GetUser)
+	admin.PATCH("/users/:id/block", adminUserHandler.BlockUser)
+	admin.PATCH("/users/:id/unblock", adminUserHandler.UnblockUser)
 
 	// Organizer management endpoints
 	admin.GET("/organizers", adminOrganizerHandler.ListOrganizers)
@@ -345,24 +356,28 @@ func registerReservationRoutes(
 	router *gin.Engine,
 	reservationHandler *handler.ReservationHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	api := router.Group("/api/v1")
 
 	api.POST(
 		"/events/:eventId/reservations",
 		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
 		reservationHandler.CreateReservation,
 	)
 
 	api.POST(
 		"/bookings/reserve",
 		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
 		reservationHandler.CreateReservation,
 	)
 
 	api.DELETE(
 		"/reservations/:reservationId",
 		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
 		reservationHandler.CancelReservation,
 	)
 }
@@ -371,9 +386,13 @@ func registerCheckoutRoutes(
 	router *gin.Engine,
 	checkoutHandler *handler.CheckoutHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	api := router.Group("/api/v1")
-	api.Use(middleware.Auth(jwtService))
+	api.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
+	)
 
 	api.POST("/bookings/checkout", checkoutHandler.CreateCheckout)
 }
@@ -382,6 +401,7 @@ func registerPaymentRoutes(
 	router *gin.Engine,
 	paymentHandler *handler.PaymentHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	api := router.Group("/api/v1")
 
@@ -389,7 +409,10 @@ func registerPaymentRoutes(
 	api.POST("/payments/webhook", paymentHandler.RazorpayWebhook)
 
 	payments := api.Group("/payments")
-	payments.Use(middleware.Auth(jwtService))
+	payments.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
+	)
 
 	payments.POST("", paymentHandler.CreatePayment)
 
@@ -400,9 +423,13 @@ func registerTicketRoutes(
 	router *gin.Engine,
 	ticketHandler *handler.TicketHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	tickets := router.Group("/api/v1/tickets")
-	tickets.Use(middleware.Auth(jwtService))
+	tickets.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
+	)
 
 	tickets.GET("", ticketHandler.GetMyTickets)
 	tickets.GET("/:id", ticketHandler.GetMyTicket)
@@ -414,9 +441,13 @@ func registerBookingRoutes(
 	router *gin.Engine,
 	bookingHandler *handler.BookingHandler,
 	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
 ) {
 	bookings := router.Group("/api/v1/bookings")
-	bookings.Use(middleware.Auth(jwtService))
+	bookings.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
+	)
 
 	bookings.GET("", bookingHandler.GetMyBookings)
 	bookings.GET("/:id", bookingHandler.GetBookingByID)

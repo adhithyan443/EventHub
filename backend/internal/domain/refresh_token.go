@@ -22,4 +22,5 @@ type RefreshTokenRepository interface {
 	Create(token *RefreshToken) error
 	FindByTokenHash(hash string) (*RefreshToken, error)
 	Revoke(id uuid.UUID) error
+	RevokeAllByUserID(userID uuid.UUID) error
 }

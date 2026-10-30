@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
-import { getUsers } from "../../api/adminUserApi";
+import { getUsers, blockUser, unblockUser } from "../../api/adminUserApi";
+import UserDetailDrawer from "../../components/admin/UserDetailDrawer";
+import BlockUserModal from "../../components/admin/BlockUserModal";
+import UnblockUserModal from "../../components/admin/UnblockUserModal";
 import notify from "../../utils/toast";
 
 const PER_PAGE = 10;
@@ -25,6 +28,12 @@ export default function AdminUsersPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Modal / Drawer state
+  const [activeDrawerUser, setActiveDrawerUser] = useState(null);
+  const [activeBlockUser, setActiveBlockUser] = useState(null);
+  const [activeUnblockUser, setActiveUnblockUser] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
 
   // Debounce search input by 300ms
   useEffect(() => {
@@ -86,6 +95,64 @@ export default function AdminUsersPage() {
   const handleRoleChange = (role) => {
     setActiveRole(role);
     setPage(1);
+  };
+
+  const handleConfirmBlock = async (userId, reason) => {
+    try {
+      setActionLoading(true);
+      await blockUser(userId, reason);
+      notify.success("User account suspended successfully");
+
+      // Optimistically update local users state
+      setUsers((prev) =>
+        prev.map((item) =>
+          item.id === userId ? { ...item, status: "BLOCKED" } : item
+        )
+      );
+
+      if (activeDrawerUser?.id === userId) {
+        setActiveDrawerUser((prev) =>
+          prev ? { ...prev, status: "BLOCKED" } : null
+        );
+      }
+
+      setActiveBlockUser(null);
+    } catch (err) {
+      console.error("Failed to block user:", err);
+      const msg = err.response?.data?.message || err.message || "Failed to suspend user.";
+      notify.error(msg);
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const handleConfirmUnblock = async (userId) => {
+    try {
+      setActionLoading(true);
+      await unblockUser(userId);
+      notify.success("User account reactivated successfully");
+
+      // Optimistically update local users state
+      setUsers((prev) =>
+        prev.map((item) =>
+          item.id === userId ? { ...item, status: "ACTIVE" } : item
+        )
+      );
+
+      if (activeDrawerUser?.id === userId) {
+        setActiveDrawerUser((prev) =>
+          prev ? { ...prev, status: "ACTIVE" } : null
+        );
+      }
+
+      setActiveUnblockUser(null);
+    } catch (err) {
+      console.error("Failed to unblock user:", err);
+      const msg = err.response?.data?.message || err.message || "Failed to reactivate user.";
+      notify.error(msg);
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
@@ -259,12 +326,13 @@ export default function AdminUsersPage() {
                   <th className="px-4 py-3 font-semibold">Role</th>
                   <th className="px-4 py-3 font-semibold">Status</th>
                   <th className="px-4 py-3 font-semibold">Registered</th>
+                  <th className="px-4 py-3 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[rgba(188,201,198,0.25)]">
                 {loading ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-[#6d7a77] text-sm">
+                    <td colSpan={7} className="px-4 py-10 text-center text-[#6d7a77] text-sm">
                       <div className="flex items-center justify-center gap-2">
                         <div className="w-5 h-5 border-2 border-[#00685f]/30 border-t-[#00685f] rounded-full animate-spin" />
                         <span>Loading users...</span>
@@ -273,7 +341,7 @@ export default function AdminUsersPage() {
                   </tr>
                 ) : users.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-[#6d7a77] text-sm">
+                    <td colSpan={7} className="px-4 py-10 text-center text-[#6d7a77] text-sm">
                       No users found matching your search or filters.
                     </td>
                   </tr>
@@ -290,6 +358,8 @@ export default function AdminUsersPage() {
 
                     const roleBadgeClass =
                       roleBadgeStyles[u.role] || "bg-[#f1f3ff] text-[#141b2b]";
+                    const isBlocked = u.status === "BLOCKED";
+                    const isAdmin = u.role === "ADMIN";
 
                     return (
                       <tr
@@ -337,9 +407,9 @@ export default function AdminUsersPage() {
                         <td className="px-4 py-3">
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                              u.status === "ACTIVE"
-                                ? "bg-[#dcfce7] text-[#166534]"
-                                : "bg-[#ffdad6] text-[#93000a]"
+                              isBlocked
+                                ? "bg-[#ffdad6] text-[#93000a]"
+                                : "bg-[#dcfce7] text-[#166534]"
                             }`}
                           >
                             {u.status || "ACTIVE"}
@@ -347,6 +417,38 @@ export default function AdminUsersPage() {
                         </td>
                         <td className="px-4 py-3 text-[#6d7a77]">
                           {joinedFormatted}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setActiveDrawerUser(u)}
+                              className="text-xs text-[#00685f] font-semibold hover:underline cursor-pointer bg-[#f1f3ff] hover:bg-[#e1e8fd] px-2.5 py-1 rounded transition-colors"
+                            >
+                              View Details
+                            </button>
+                            {!isAdmin && (
+                              isBlocked ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveUnblockUser(u)}
+                                  className="text-xs text-[#00685f] font-semibold hover:bg-[#dcfce7]/60 border border-[#bbf7d0] px-2 py-1 rounded transition-colors cursor-pointer"
+                                  title="Reactivate user account"
+                                >
+                                  Unblock
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setActiveBlockUser(u)}
+                                  className="text-xs text-[#93000a] font-semibold hover:bg-[#ffdad6]/60 border border-[#ffdad6] px-2 py-1 rounded transition-colors cursor-pointer"
+                                  title="Suspend user account"
+                                >
+                                  Block
+                                </button>
+                              )
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -408,6 +510,40 @@ export default function AdminUsersPage() {
           </div>
         </div>
       </div>
+
+      {/* User Details Slide-over Drawer */}
+      {activeDrawerUser && (
+        <UserDetailDrawer
+          user={activeDrawerUser}
+          onClose={() => setActiveDrawerUser(null)}
+          onBlockClick={(u) => setActiveBlockUser(u)}
+          onUnblockClick={(u) => setActiveUnblockUser(u)}
+        />
+      )}
+
+      {/* Block User Confirmation Modal */}
+      {activeBlockUser && (
+        <BlockUserModal
+          user={activeBlockUser}
+          loading={actionLoading}
+          onConfirm={handleConfirmBlock}
+          onCancel={() => {
+            if (!actionLoading) setActiveBlockUser(null);
+          }}
+        />
+      )}
+
+      {/* Unblock User Confirmation Modal */}
+      {activeUnblockUser && (
+        <UnblockUserModal
+          user={activeUnblockUser}
+          loading={actionLoading}
+          onConfirm={handleConfirmUnblock}
+          onCancel={() => {
+            if (!actionLoading) setActiveUnblockUser(null);
+          }}
+        />
+      )}
     </div>
   );
 }

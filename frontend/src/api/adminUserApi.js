@@ -41,3 +41,39 @@ export const getUsers = async ({
 
   return response.data;
 };
+
+/**
+ * Fetch detailed profile information for a single user by ID.
+ *
+ * @param {string} userId
+ * @returns {Promise<Object>} API response data
+ */
+export const getUserById = async (userId) => {
+  const response = await apiClient.get(`/admin/users/${userId}`);
+  return response.data;
+};
+
+/**
+ * Block / suspend a user account.
+ *
+ * @param {string} userId
+ * @param {string} [reason=""]
+ * @returns {Promise<Object>} API response data
+ */
+export const blockUser = async (userId, reason = "") => {
+  const response = await apiClient.patch(`/admin/users/${userId}/block`, {
+    reason,
+  });
+  return response.data;
+};
+
+/**
+ * Unblock / reactivate a user account.
+ *
+ * @param {string} userId
+ * @returns {Promise<Object>} API response data
+ */
+export const unblockUser = async (userId) => {
+  const response = await apiClient.patch(`/admin/users/${userId}/unblock`);
+  return response.data;
+};
