@@ -369,3 +369,149 @@ test("header navigation links: dynamic links update between CUSTOMER and ORGANIZ
     "Organizer must see Organizer Dashboard in header links"
   );
 });
+
+test("ProfileSidebar: 'Become an Organizer' button is hidden for ORGANIZER and shown for eligible CUSTOMER", () => {
+  const getSidebarOrganizerState = (user, authUser, applicationStatus) => {
+    const isOrganizer =
+      user?.role === "ORGANIZER" ||
+      authUser?.role === "ORGANIZER" ||
+      applicationStatus === "APPROVED";
+
+    return {
+      showBecomeOrganizerButton: !isOrganizer,
+      showActiveOrganizerNavigation: isOrganizer,
+    };
+  };
+
+  // 1. Authenticated user with ORGANIZER role
+  const orgResult = getSidebarOrganizerState(
+    { role: "ORGANIZER" },
+    { role: "ORGANIZER" },
+    null
+  );
+  assert.strictEqual(orgResult.showBecomeOrganizerButton, false, "Must hide 'Become an Organizer' button for ORGANIZER");
+  assert.strictEqual(orgResult.showActiveOrganizerNavigation, true, "Must show Active Organizer navigation for ORGANIZER");
+
+  // 2. Authenticated user with CUSTOMER role but APPROVED application status
+  const approvedCustResult = getSidebarOrganizerState(
+    { role: "CUSTOMER" },
+    { role: "CUSTOMER" },
+    "APPROVED"
+  );
+  assert.strictEqual(approvedCustResult.showBecomeOrganizerButton, false, "Must hide 'Become an Organizer' button when application is APPROVED");
+  assert.strictEqual(approvedCustResult.showActiveOrganizerNavigation, true, "Must show Active Organizer navigation when application is APPROVED");
+
+  // 3. Authenticated CUSTOMER with PENDING application
+  const pendingCustResult = getSidebarOrganizerState(
+    { role: "CUSTOMER" },
+    { role: "CUSTOMER" },
+    "PENDING"
+  );
+  assert.strictEqual(pendingCustResult.showBecomeOrganizerButton, true, "Must show button for customer with pending application");
+  assert.strictEqual(pendingCustResult.showActiveOrganizerNavigation, false);
+
+  // 4. Authenticated CUSTOMER with REJECTED application
+  const rejectedCustResult = getSidebarOrganizerState(
+    { role: "CUSTOMER" },
+    { role: "CUSTOMER" },
+    "REJECTED"
+  );
+  assert.strictEqual(rejectedCustResult.showBecomeOrganizerButton, true, "Must show button for customer with rejected application");
+  assert.strictEqual(rejectedCustResult.showActiveOrganizerNavigation, false);
+
+  // 5. Authenticated CUSTOMER with no application
+  const unappliedCustResult = getSidebarOrganizerState(
+    { role: "CUSTOMER" },
+    { role: "CUSTOMER" },
+    null
+  );
+  assert.strictEqual(unappliedCustResult.showBecomeOrganizerButton, true, "Must show button for customer without application");
+  assert.strictEqual(unappliedCustResult.showActiveOrganizerNavigation, false);
+});
+
+test("OrganizerPromoCard: derives correct UI card and navigation across all roles and application states", () => {
+  const getPromoCardState = (userRole, applicationStatus, applicationSubmitted) => {
+    const hasApprovedApplication = userRole === "ORGANIZER" || applicationStatus === "APPROVED";
+    const isPending =
+      applicationStatus === "PENDING" ||
+      applicationStatus === "UNDER_REVIEW" ||
+      (!applicationStatus && applicationSubmitted);
+    const isRejected = applicationStatus === "REJECTED";
+
+    if (hasApprovedApplication) {
+      return {
+        cardType: "APPROVED_ORGANIZER",
+        badgeText: userRole === "ORGANIZER" ? "Active Organizer" : "Application Approved",
+        buttonText: "Go to Organizer Dashboard",
+        buttonTarget: "/organizer/dashboard",
+        showBecomeOrganizerPromo: false,
+      };
+    }
+
+    if (isPending) {
+      return {
+        cardType: "PENDING_REVIEW",
+        badgeText: "Under Review",
+        buttonText: "View Status",
+        buttonTarget: "/become-organizer/status",
+        showBecomeOrganizerPromo: false,
+      };
+    }
+
+    if (isRejected) {
+      return {
+        cardType: "REJECTED_REVISION",
+        badgeText: "Revisions Requested",
+        buttonText: "Edit & Resubmit",
+        buttonTarget: "/become-organizer",
+        showBecomeOrganizerPromo: false,
+      };
+    }
+
+    return {
+      cardType: "DEFAULT_PROMO",
+      badgeText: null,
+      buttonText: "Apply Now",
+      buttonTarget: "/become-organizer",
+      showBecomeOrganizerPromo: true,
+    };
+  };
+
+  // 1. ORGANIZER role -> displays Organizer Status card and dashboard navigation
+  const organizerCard = getPromoCardState("ORGANIZER", null, false);
+  assert.strictEqual(organizerCard.cardType, "APPROVED_ORGANIZER");
+  assert.strictEqual(organizerCard.badgeText, "Active Organizer");
+  assert.strictEqual(organizerCard.buttonText, "Go to Organizer Dashboard");
+  assert.strictEqual(organizerCard.buttonTarget, "/organizer/dashboard");
+  assert.strictEqual(organizerCard.showBecomeOrganizerPromo, false);
+
+  // 2. Approved customer -> displays Organizer Status card and dashboard navigation
+  const approvedCustomerCard = getPromoCardState("CUSTOMER", "APPROVED", true);
+  assert.strictEqual(approvedCustomerCard.cardType, "APPROVED_ORGANIZER");
+  assert.strictEqual(approvedCustomerCard.badgeText, "Application Approved");
+  assert.strictEqual(approvedCustomerCard.buttonText, "Go to Organizer Dashboard");
+  assert.strictEqual(approvedCustomerCard.showBecomeOrganizerPromo, false);
+
+  // 3. Customer with pending application -> displays Under Review card
+  const pendingCard = getPromoCardState("CUSTOMER", "PENDING", true);
+  assert.strictEqual(pendingCard.cardType, "PENDING_REVIEW");
+  assert.strictEqual(pendingCard.badgeText, "Under Review");
+  assert.strictEqual(pendingCard.buttonText, "View Status");
+  assert.strictEqual(pendingCard.buttonTarget, "/become-organizer/status");
+  assert.strictEqual(pendingCard.showBecomeOrganizerPromo, false);
+
+  // 4. Customer with rejected application -> displays Needs Revision card
+  const rejectedCard = getPromoCardState("CUSTOMER", "REJECTED", true);
+  assert.strictEqual(rejectedCard.cardType, "REJECTED_REVISION");
+  assert.strictEqual(rejectedCard.badgeText, "Revisions Requested");
+  assert.strictEqual(rejectedCard.buttonText, "Edit & Resubmit");
+  assert.strictEqual(rejectedCard.buttonTarget, "/become-organizer");
+  assert.strictEqual(rejectedCard.showBecomeOrganizerPromo, false);
+
+  // 5. Customer with no application -> displays Become an Organizer promo card
+  const defaultCustomerCard = getPromoCardState("CUSTOMER", null, false);
+  assert.strictEqual(defaultCustomerCard.cardType, "DEFAULT_PROMO");
+  assert.strictEqual(defaultCustomerCard.buttonText, "Apply Now");
+  assert.strictEqual(defaultCustomerCard.buttonTarget, "/become-organizer");
+  assert.strictEqual(defaultCustomerCard.showBecomeOrganizerPromo, true);
+});

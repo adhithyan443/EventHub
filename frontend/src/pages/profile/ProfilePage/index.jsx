@@ -26,6 +26,7 @@ export default function ProfilePage() {
         fullName: user?.fullName || "Adhithyan R",
         email: user?.email || "customer@example.com",
         phone: user?.phone || "+91 XXXXX XXXXX",
+        role: user?.role,
         memberSince: user?.created_At,
         avatar: user?.avatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
     };
