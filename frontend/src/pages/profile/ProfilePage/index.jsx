@@ -16,6 +16,7 @@ import notify from "../../../utils/toast";
 export default function ProfilePage() {
     const navigate = useNavigate();
     const user = useAuthStore((state) => state.user);
+    // console.log(user)
     const clearAuth = useAuthStore((state) => state.clearAuth);
 
     const [showLogoutModal, setShowLogoutModal] = useState(false);
@@ -23,12 +24,12 @@ export default function ProfilePage() {
 
     // TODO: replace with real fields once /auth/profile returns phone/memberSince
     const displayUser = {
-        fullName: user?.fullName || "Adhithyan R",
+        fullName: user?.fullName || "customer",
         email: user?.email || "customer@example.com",
         phone: user?.phone || "+91 XXXXX XXXXX",
         role: user?.role,
         memberSince: user?.created_At,
-        avatar: user?.avatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80",
+        avatar: user?.ProfileImage || "https://images.rawpixel.com/image_png_800/cHJpdmF0ZS9sci9pbWFnZXMvd2Vic2l0ZS8yMDIzLTAxL3JtNjA5LXNvbGlkaWNvbi13LTAwMi1wLnBuZw.png",
     };
 
     async function handleLogout() {
