@@ -117,7 +117,7 @@ func (h *AuthHandler) RefreshToken(ctx *gin.Context) {
 		return
 	}
 
-	accessToken, refreshToken, err := h.authUsecase.RefreshToken(
+	accessToken, refreshToken, user, err := h.authUsecase.RefreshToken(
 		auth.RefreshTokenInput{
 			RefreshToken: req.RefreshToken,
 		},
@@ -131,6 +131,14 @@ func (h *AuthHandler) RefreshToken(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
+		"user": gin.H{
+			"id":       user.ID,
+			"fullName": user.FullName,
+			"email":    user.Email,
+			"phone":    user.Phone,
+			"role":     user.Role,
+			"status":   user.Status,
+		},
 	})
 }
 
@@ -433,6 +441,7 @@ func (h *AuthHandler) Me(ctx *gin.Context) {
 			"profileImage": user.ProfileImage,
 			"role":         user.Role,
 			"status":       user.Status,
+			"created_At" : user.CreatedAt,
 		},
 	})
 }

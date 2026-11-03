@@ -294,6 +294,9 @@ func main() {
 	// Organizer application dependencies.
 	organizerApplicationUsecase := organizer.NewApplicationUsecase(
 		organizerApplicationRepo,
+		organizerRepo,
+		organizerProfileRepo,
+		organizerAddressRepo,
 		encryptionService,
 		s3Service,
 		logger,

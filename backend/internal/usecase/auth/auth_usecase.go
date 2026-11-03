@@ -362,11 +362,11 @@ type RefreshTokenInput struct {
 	RefreshToken string
 }
 
-func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, error) {
+func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, *domain.User, error) {
 	input.RefreshToken = strings.TrimSpace(input.RefreshToken)
 
 	if input.RefreshToken == "" {
-		return "", "", appErrors.NewValidationError("refresh token is required")
+		return "", "", nil, appErrors.NewValidationError("refresh token is required")
 	}
 
 	tokenHash := hashRefreshToken(input.RefreshToken)
@@ -378,14 +378,14 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 				"refresh_token_failed",
 				"reason", "token_not_found",
 			)
-			return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+			return "", "", nil, appErrors.NewUnauthorizedError("invalid refresh token")
 		}
 
 		u.logger.Error(
 			"refresh_token_failed",
 			"error", err,
 		)
-		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+		return "", "", nil, appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if storedToken.RevokedAt != nil {
@@ -394,7 +394,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", storedToken.UserID,
 			"reason", "token_revoked",
 		)
-		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+		return "", "", nil, appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if time.Now().After(storedToken.ExpiresAt) {
@@ -403,7 +403,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", storedToken.UserID,
 			"reason", "token_expired",
 		)
-		return "", "", appErrors.NewUnauthorizedError("refresh token expired")
+		return "", "", nil, appErrors.NewUnauthorizedError("refresh token expired")
 	}
 
 	user, err := u.userRepo.FindByID(storedToken.UserID)
@@ -414,7 +414,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 				"user_id", storedToken.UserID,
 				"reason", "user_not_found",
 			)
-			return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+			return "", "", nil, appErrors.NewUnauthorizedError("invalid refresh token")
 		}
 
 		u.logger.Error(
@@ -422,7 +422,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", storedToken.UserID,
 			"error", err,
 		)
-		return "", "", appErrors.NewUnauthorizedError("invalid refresh token")
+		return "", "", nil, appErrors.NewUnauthorizedError("invalid refresh token")
 	}
 
 	if user.Status != "ACTIVE" {
@@ -431,7 +431,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", user.ID,
 			"reason", "account_inactive",
 		)
-		return "", "", appErrors.NewUnauthorizedError("user account is not active")
+		return "", "", nil, appErrors.NewUnauthorizedError("user account is not active")
 	}
 
 	accessToken, err := u.jwtService.GenerateAccessToken(
@@ -445,7 +445,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", user.ID,
 			"error", err,
 		)
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	if err := u.refreshTokenRepo.Revoke(storedToken.ID); err != nil {
@@ -454,7 +454,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", user.ID,
 			"error", err,
 		)
-		return "", "", err
+		return "", "", nil, err
 	}
 	newRefreshToken, err := generateRefreshToken()
 	if err != nil {
@@ -463,7 +463,7 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", user.ID,
 			"error", err,
 		)
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	now := time.Now()
@@ -482,15 +482,16 @@ func (u *AuthUsecase) RefreshToken(input RefreshTokenInput) (string, string, err
 			"user_id", user.ID,
 			"error", err,
 		)
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	u.logger.Info(
 		"refresh_token_rotated",
 		"user_id", user.ID,
+		"role", user.Role,
 	)
 
-	return accessToken, newRefreshToken, nil
+	return accessToken, newRefreshToken, user, nil
 }
 
 type LogoutInput struct {

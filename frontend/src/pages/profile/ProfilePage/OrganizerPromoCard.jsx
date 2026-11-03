@@ -1,38 +1,97 @@
-import { useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { MegaphoneIcon } from "../../../components/layout/icons";
 import useOrganizerStore from "../../../store/organizerStore";
 import useAuthStore from "../../../store/authStore";
+import notify from "../../../utils/toast";
 
 export default function OrganizerPromoCard() {
     const navigate = useNavigate();
     const user = useAuthStore((state) => state.user);
+    const [isUpgradingRole, setIsUpgradingRole] = useState(false);
 
     const applicationSubmitted = useOrganizerStore((state) => state.applicationSubmitted);
     const applicationStatus = useOrganizerStore((state) => state.applicationStatus);
     const fetchApplication = useOrganizerStore((state) => state.fetchApplication);
 
-    // Fetch latest application status on mount
+    // Fetch latest application status on mount and synchronize auth if approved
     useEffect(() => {
-        fetchApplication();
-    }, [fetchApplication]);
+        let isMounted = true;
 
-    const isOrganizer = user?.role === "ORGANIZER" || applicationStatus === "APPROVED";
-    const isPending = applicationStatus === "PENDING" || (!applicationStatus && applicationSubmitted);
+        fetchApplication().then(async (result) => {
+            if (!isMounted) return;
+            if (result?.application?.status === "APPROVED" && user?.role !== "ORGANIZER") {
+                await useAuthStore.getState().revalidateSession();
+            }
+        });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [fetchApplication, user?.role]);
+
+    const hasApprovedApplication = user?.role === "ORGANIZER" || applicationStatus === "APPROVED";
+    const isPending =
+        applicationStatus === "PENDING" ||
+        applicationStatus === "UNDER_REVIEW" ||
+        (!applicationStatus && applicationSubmitted);
     const isRejected = applicationStatus === "REJECTED";
 
+    const handleGoToDashboard = async () => {
+        let currentRole = useAuthStore.getState().user?.role;
+
+        // Separate application status from authenticated role: verify role before entering dashboard
+        if (currentRole !== "ORGANIZER") {
+            setIsUpgradingRole(true);
+            try {
+                const revalResult = await useAuthStore.getState().revalidateSession();
+                currentRole = useAuthStore.getState().user?.role;
+
+                if (currentRole !== "ORGANIZER") {
+                    const message =
+                        revalResult?.error?.message ||
+                        "Unable to verify organizer privileges. Please check your connection and try again.";
+                    notify.error(message);
+                    return;
+                }
+            } catch (err) {
+                notify.error(err?.message || "Failed to verify organizer session");
+                return;
+            } finally {
+                setIsUpgradingRole(false);
+            }
+        }
+
+        navigate("/organizer/dashboard");
+    };
+
     // 1. Approved Organizer state
-    if (isOrganizer) {
+    if (hasApprovedApplication) {
         return (
             <div className="rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50/40 to-emerald-50 border border-emerald-200/90 p-6 flex flex-col gap-3.5">
                 <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-emerald-100/80 border border-emerald-200 px-2.5 py-1 text-xs font-bold text-emerald-800">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                    Active Organizer
+                    {user?.role === "ORGANIZER" ? "Active Organizer" : "Application Approved"}
                 </span>
                 <h3 className="font-display text-xl font-bold text-slate-900">EventHub Organizer</h3>
                 <p className="text-sm text-slate-600 leading-relaxed max-w-xl">
                     You are an approved event organizer on EventHub. You can host, publish, and manage your events.
                 </p>
+                <button
+                    type="button"
+                    onClick={handleGoToDashboard}
+                    disabled={isUpgradingRole}
+                    className="w-fit h-10 px-6 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-75 text-white text-sm font-semibold transition-colors cursor-pointer shadow-sm flex items-center gap-2"
+                >
+                    {isUpgradingRole ? (
+                        <>
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            Verifying Session...
+                        </>
+                    ) : (
+                        "Go to Organizer Dashboard"
+                    )}
+                </button>
             </div>
         );
     }

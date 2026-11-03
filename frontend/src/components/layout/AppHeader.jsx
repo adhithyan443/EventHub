@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, NavLink } from "react-router-dom";
 import { SearchIcon, BellIcon } from "./icons";
+import useAuthStore from "../../store/authStore";
 
 const navLinks = [
   { label: "Events", to: "/events" },
@@ -10,6 +11,12 @@ const navLinks = [
 
 export default function AppHeader() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const user = useAuthStore((state) => state.user);
+  const isOrganizer = user?.role === "ORGANIZER";
+
+  const allNavLinks = isOrganizer
+    ? [...navLinks, { label: "Organizer Dashboard", to: "/organizer/dashboard" }]
+    : navLinks;
 
   return (
     <header className="sticky top-0 z-20 bg-background/95 backdrop-blur-sm border-b border-border">
@@ -47,7 +54,7 @@ export default function AppHeader() {
           </div>
 
           <nav className="hidden lg:flex items-center gap-6">
-            {navLinks.map((link) => (
+            {allNavLinks.map((link) => (
               <NavLink
                 key={link.to}
                 to={link.to}
@@ -67,6 +74,15 @@ export default function AppHeader() {
         </div>
 
         <div className="flex items-center gap-3 sm:gap-4">
+          {isOrganizer && (
+            <Link
+              to="/organizer/dashboard"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-800 text-xs font-bold transition-colors shadow-2xs"
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              Organizer Dashboard
+            </Link>
+          )}
           <button className="text-slate-600 hover:text-slate-900 p-1" aria-label="Notifications">
             <BellIcon />
           </button>
@@ -92,7 +108,7 @@ export default function AppHeader() {
             />
           </div>
           <nav className="flex flex-col gap-1">
-            {navLinks.map((link) => (
+            {allNavLinks.map((link) => (
               <NavLink
                 key={link.to}
                 to={link.to}

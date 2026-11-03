@@ -11,7 +11,12 @@ globalThis.localStorage = {
 };
 
 // 2. Import application modules after localStorage is initialized
-const { default: useAuthStore, STORAGE_KEYS } = await import("../../store/authStore.js");
+const {
+  default: useAuthStore,
+  STORAGE_KEYS,
+  decodeTokenPayload,
+  resetActiveRevalidatePromiseForTesting,
+} = await import("../../store/authStore.js");
 const {
   default: apiClient,
   rawAuthAxios,
@@ -34,9 +39,16 @@ const createAxiosError = (status, data, config, message = `Request failed with s
   return err;
 };
 
+const createTestJwt = (payload) => {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.mock-signature`;
+};
+
 beforeEach(() => {
   mockStorage.clear();
   resetActiveRefreshPromiseForTesting();
+  resetActiveRevalidatePromiseForTesting();
   useAuthStore.setState({
     user: null,
     accessToken: null,
@@ -49,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetActiveRefreshPromiseForTesting();
+  resetActiveRevalidatePromiseForTesting();
 });
 
 test("isExcludedAuthEndpoint correctly identifies auth endpoints", () => {
@@ -521,4 +534,301 @@ test("initializeAuth: definitive refresh failure clears storage and auth state",
   assert.strictEqual(useAuthStore.getState().isInitializing, false);
   assert.strictEqual(useAuthStore.getState().isAuthenticated, false);
   assert.strictEqual(localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN), null);
+});
+
+test("decodeTokenPayload: decodes standard JWT payload and returns null for invalid inputs", () => {
+  const payload = { userId: "user-jwt-1", role: "ORGANIZER", exp: 1999999999 };
+  const token = createTestJwt(payload);
+
+  const decoded = decodeTokenPayload(token);
+  assert.strictEqual(decoded.userId, "user-jwt-1");
+  assert.strictEqual(decoded.role, "ORGANIZER");
+  assert.strictEqual(decoded.exp, 1999999999);
+
+  // Invalid inputs
+  assert.strictEqual(decodeTokenPayload(null), null);
+  assert.strictEqual(decodeTokenPayload(""), null);
+  assert.strictEqual(decodeTokenPayload("not-a-jwt"), null);
+  assert.strictEqual(decodeTokenPayload("header.body"), null);
+  assert.strictEqual(decodeTokenPayload("header.invalid-base64!.signature"), null);
+});
+
+test("requestTokenRefresh: updates user object and role when res.data.user is returned by backend", async () => {
+  const initialUser = { id: "user-authoritative", email: "auth@example.com", role: "CUSTOMER" };
+  useAuthStore.getState().setAuth(initialUser, "acc-authoritative", "ref-authoritative");
+
+  rawAuthAxios.defaults.adapter = async (config) => {
+    return {
+      status: 200,
+      statusText: "OK",
+      data: {
+        access_token: "acc-refreshed-authoritative",
+        refresh_token: "ref-refreshed-authoritative",
+        user: {
+          id: "user-authoritative",
+          fullName: "Authoritative Name",
+          email: "auth@example.com",
+          phone: "9876543210",
+          role: "ORGANIZER",
+          status: "ACTIVE",
+        },
+      },
+      headers: {},
+      config,
+    };
+  };
+
+  const newAccess = await requestTokenRefresh();
+
+  assert.strictEqual(newAccess, "acc-refreshed-authoritative");
+  const store = useAuthStore.getState();
+  assert.strictEqual(store.user.role, "ORGANIZER");
+  assert.strictEqual(store.user.fullName, "Authoritative Name");
+  assert.strictEqual(store.accessToken, "acc-refreshed-authoritative");
+  assert.strictEqual(store.refreshToken, "ref-refreshed-authoritative");
+
+  // Verify storage was authoritatively updated
+  const storedUser = JSON.parse(localStorage.getItem(STORAGE_KEYS.USER));
+  assert.strictEqual(storedUser.role, "ORGANIZER");
+  assert.strictEqual(storedUser.fullName, "Authoritative Name");
+  assert.strictEqual(localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN), "acc-refreshed-authoritative");
+  assert.strictEqual(localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN), "ref-refreshed-authoritative");
+});
+
+test("setTokens: updates role from decoded JWT access token if user argument is omitted", () => {
+  const initialUser = { id: "user-jwt-role", role: "CUSTOMER", email: "jwt@example.com" };
+  useAuthStore.getState().setAuth(initialUser, "old-acc", "old-ref");
+
+  const organizerJwt = createTestJwt({ userId: "user-jwt-role", role: "ORGANIZER", exp: 1999999999 });
+  useAuthStore.getState().setTokens(organizerJwt, "rotated-ref");
+
+  const state = useAuthStore.getState();
+  assert.strictEqual(state.user.role, "ORGANIZER");
+  assert.strictEqual(state.accessToken, organizerJwt);
+  assert.strictEqual(state.refreshToken, "rotated-ref");
+
+  const storedUser = JSON.parse(localStorage.getItem(STORAGE_KEYS.USER));
+  assert.strictEqual(storedUser.role, "ORGANIZER");
+});
+
+test("syncFromStorage: synchronizes cross-tab login, role change, and logout", () => {
+  // 1. Initial authenticated state as CUSTOMER
+  useAuthStore.getState().setAuth(
+    { id: "user-sync", role: "CUSTOMER" },
+    "token-sync-1",
+    "refresh-sync-1"
+  );
+
+  // 2. Another tab updates localStorage with new tokens and ORGANIZER role
+  localStorage.setItem(
+    STORAGE_KEYS.USER,
+    JSON.stringify({ id: "user-sync", role: "ORGANIZER" })
+  );
+  localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, "token-sync-2");
+  localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, "refresh-sync-2");
+
+  const syncResult1 = useAuthStore.getState().syncFromStorage();
+  assert.strictEqual(syncResult1.synced, true);
+  assert.strictEqual(syncResult1.roleChanged, true);
+  assert.strictEqual(syncResult1.oldRole, "CUSTOMER");
+  assert.strictEqual(syncResult1.newRole, "ORGANIZER");
+  assert.strictEqual(useAuthStore.getState().user.role, "ORGANIZER");
+  assert.strictEqual(useAuthStore.getState().accessToken, "token-sync-2");
+
+  // 3. Repeated sync with unchanged storage is a no-op
+  const syncResult2 = useAuthStore.getState().syncFromStorage();
+  assert.strictEqual(syncResult2.synced, false);
+
+  // 4. Another tab clears localStorage (remote logout)
+  localStorage.clear();
+  const syncResult3 = useAuthStore.getState().syncFromStorage();
+  assert.strictEqual(syncResult3.synced, true);
+  assert.strictEqual(syncResult3.isAuthenticated, false);
+  assert.strictEqual(useAuthStore.getState().isAuthenticated, false);
+  assert.strictEqual(useAuthStore.getState().user, null);
+});
+
+test("revalidateSession: detects role change via /auth/me and triggers token refresh", async () => {
+  const initialUser = { id: "user-reval-1", role: "CUSTOMER", fullName: "Reval User" };
+  useAuthStore.getState().setAuth(initialUser, "acc-reval-1", "ref-reval-1");
+
+  let refreshCalled = 0;
+  rawAuthAxios.defaults.adapter = async (config) => {
+    refreshCalled++;
+    return {
+      status: 200,
+      data: {
+        access_token: "acc-reval-organizer",
+        refresh_token: "ref-reval-organizer",
+        user: {
+          id: "user-reval-1",
+          role: "ORGANIZER",
+          fullName: "Reval User",
+        },
+      },
+      headers: {},
+      config,
+    };
+  };
+
+  let meCalled = 0;
+  apiClient.defaults.adapter = async (config) => {
+    if (config.url.includes("/auth/me")) {
+      meCalled++;
+      return {
+        status: 200,
+        data: {
+          user: {
+            id: "user-reval-1",
+            role: "ORGANIZER",
+            fullName: "Reval User",
+          },
+        },
+        headers: {},
+        config,
+      };
+    }
+    return { status: 200, data: {}, config };
+  };
+
+  const result = await useAuthStore.getState().revalidateSession();
+
+  assert.strictEqual(result.roleChanged, true);
+  assert.strictEqual(result.oldRole, "CUSTOMER");
+  assert.strictEqual(result.newRole, "ORGANIZER");
+  assert.strictEqual(meCalled, 1);
+  assert.strictEqual(refreshCalled, 1);
+
+  const state = useAuthStore.getState();
+  assert.strictEqual(state.user.role, "ORGANIZER");
+  assert.strictEqual(state.accessToken, "acc-reval-organizer");
+  assert.strictEqual(state.refreshToken, "ref-reval-organizer");
+  assert.strictEqual(JSON.parse(localStorage.getItem(STORAGE_KEYS.USER)).role, "ORGANIZER");
+});
+
+test("revalidateSession: updates user profile fields without token refresh when role is unchanged", async () => {
+  const initialUser = { id: "user-reval-2", role: "ORGANIZER", fullName: "Old Name" };
+  useAuthStore.getState().setAuth(initialUser, "acc-reval-2", "ref-reval-2");
+
+  let refreshCalled = false;
+  rawAuthAxios.defaults.adapter = async (config) => {
+    refreshCalled = true;
+    return { status: 200, data: {}, config };
+  };
+
+  apiClient.defaults.adapter = async (config) => {
+    if (config.url.includes("/auth/me")) {
+      return {
+        status: 200,
+        data: {
+          user: {
+            id: "user-reval-2",
+            role: "ORGANIZER",
+            fullName: "Updated Name",
+          },
+        },
+        headers: {},
+        config,
+      };
+    }
+    return { status: 200, data: {}, config };
+  };
+
+  const result = await useAuthStore.getState().revalidateSession();
+
+  assert.strictEqual(result.roleChanged, false);
+  assert.strictEqual(result.user.fullName, "Updated Name");
+  assert.strictEqual(refreshCalled, false, "Token refresh must NOT be triggered when role is unchanged");
+  assert.strictEqual(useAuthStore.getState().user.fullName, "Updated Name");
+});
+
+test("revalidateSession: handles 500 server error gracefully and preserves session", async () => {
+  const initialUser = { id: "user-reval-err", role: "CUSTOMER" };
+  useAuthStore.getState().setAuth(initialUser, "acc-err", "ref-err");
+
+  apiClient.defaults.adapter = async (config) => {
+    throw createAxiosError(500, { message: "Internal server error" }, config);
+  };
+
+  const result = await useAuthStore.getState().revalidateSession();
+
+  assert.strictEqual(result.roleChanged, false);
+  assert.ok(result.error);
+  assert.strictEqual(useAuthStore.getState().isAuthenticated, true);
+  assert.strictEqual(useAuthStore.getState().user.role, "CUSTOMER");
+});
+
+test("revalidateSession: returns immediately if unauthenticated", async () => {
+  useAuthStore.getState().clearAuth();
+
+  let apiCalled = false;
+  apiClient.defaults.adapter = async (config) => {
+    apiCalled = true;
+    return { status: 200, data: {}, config };
+  };
+
+  const result = await useAuthStore.getState().revalidateSession();
+
+  assert.strictEqual(result.isAuthenticated, false);
+  assert.strictEqual(result.roleChanged, false);
+  assert.strictEqual(apiCalled, false);
+});
+
+test("initializeAuth: refreshes token on startup if access token role differs from backend /auth/me", async () => {
+  const storedJwt = createTestJwt({ userId: "init-role-diff", role: "CUSTOMER", exp: 1999999999 });
+  localStorage.setItem(STORAGE_KEYS.ACCESS_TOKEN, storedJwt);
+  localStorage.setItem(STORAGE_KEYS.REFRESH_TOKEN, "init-refresh-tok");
+  localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify({ id: "init-role-diff", role: "CUSTOMER" }));
+
+  useAuthStore.setState({
+    accessToken: storedJwt,
+    refreshToken: "init-refresh-tok",
+    user: { id: "init-role-diff", role: "CUSTOMER" },
+    isAuthenticated: true,
+    isInitializing: true,
+  });
+
+  let refreshCalled = 0;
+  rawAuthAxios.defaults.adapter = async (config) => {
+    refreshCalled++;
+    return {
+      status: 200,
+      data: {
+        access_token: "refreshed-organizer-jwt",
+        refresh_token: "rotated-init-refresh",
+        user: {
+          id: "init-role-diff",
+          role: "ORGANIZER",
+        },
+      },
+      headers: {},
+      config,
+    };
+  };
+
+  apiClient.defaults.adapter = async (config) => {
+    if (config.url.includes("/auth/me")) {
+      return {
+        status: 200,
+        data: {
+          user: {
+            id: "init-role-diff",
+            role: "ORGANIZER",
+          },
+        },
+        headers: {},
+        config,
+      };
+    }
+    return { status: 200, data: {}, config };
+  };
+
+  await useAuthStore.getState().initializeAuth();
+
+  assert.strictEqual(refreshCalled, 1, "Expected initializeAuth to refresh token on role mismatch");
+  const state = useAuthStore.getState();
+  assert.strictEqual(state.isInitializing, false);
+  assert.strictEqual(state.isAuthenticated, true);
+  assert.strictEqual(state.user.role, "ORGANIZER");
+  assert.strictEqual(state.accessToken, "refreshed-organizer-jwt");
 });

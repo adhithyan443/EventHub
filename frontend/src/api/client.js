@@ -75,6 +75,7 @@ export const requestTokenRefresh = async () => {
         res.data?.access_token || res.data?.accessToken;
       const newRefreshToken =
         res.data?.refresh_token || res.data?.refreshToken || refreshToken;
+      const refreshedUser = res.data?.user || res.data?.data?.user;
 
       if (!newAccessToken) {
         throw new Error("Invalid refresh response: missing access token");
@@ -85,7 +86,7 @@ export const requestTokenRefresh = async () => {
       const currentState = useAuthStore.getState();
       if (
         currentState.sessionVersion !== startVersion ||
-        !currentState.isAuthenticated
+        (!currentState.isAuthenticated && !currentState.isInitializing)
       ) {
         const abortedErr = new Error(
           "Session changed or logged out during token refresh"
@@ -94,7 +95,14 @@ export const requestTokenRefresh = async () => {
         throw abortedErr;
       }
 
-      useAuthStore.getState().setTokens(newAccessToken, newRefreshToken);
+      if (refreshedUser) {
+        const mergedUser = currentState.user
+          ? { ...currentState.user, ...refreshedUser }
+          : refreshedUser;
+        useAuthStore.getState().setAuth(mergedUser, newAccessToken, newRefreshToken);
+      } else {
+        useAuthStore.getState().setTokens(newAccessToken, newRefreshToken);
+      }
       return newAccessToken;
     } catch (err) {
       if (err?.isSessionAborted) {

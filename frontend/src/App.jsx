@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { ToastContainer } from "react-toastify";
 import AppRoutes from "./routes/AppRoutes";
 import useAuthStore from "./store/authStore";
+import useSessionSync from "./hooks/useSessionSync";
 
 function App() {
   const initializeAuth = useAuthStore((state) => state.initializeAuth);
@@ -10,6 +11,9 @@ function App() {
   useEffect(() => {
     initializeAuth();
   }, [initializeAuth]);
+
+  // Synchronize authentication state across browser tabs and revalidate on tab focus/visibility
+  useSessionSync();
 
   return (
     <>

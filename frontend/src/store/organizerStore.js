@@ -4,7 +4,7 @@ import {
   getOrganizerApplication,
   getOrganizerProfile,
   resubmitOrganizerApplication,
-} from "../api/organizerApi";
+} from "../api/organizerApi.js";
 
 const DRAFT_STORAGE_KEY = "eventhub_organizer_draft";
 

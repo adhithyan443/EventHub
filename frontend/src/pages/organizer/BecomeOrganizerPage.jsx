@@ -50,24 +50,36 @@ export default function BecomeOrganizerPage() {
 
   // Check application status from backend on mount
   useEffect(() => {
-    // If user is already an organizer, redirect to profile/organizer area
+    let isMounted = true;
+
+    // If user is already an organizer, redirect to organizer dashboard
     if (user?.role === "ORGANIZER") {
-      navigate("/profile", { replace: true });
+      navigate("/organizer/dashboard", { replace: true });
       return;
     }
 
-    fetchApplication().then((result) => {
+    fetchApplication().then(async (result) => {
+      if (!isMounted) return;
       if (result?.exists && result?.application) {
         const status = result.application.status;
-        if (status === "PENDING") {
+        if (status === "PENDING" || status === "UNDER_REVIEW") {
           navigate("/become-organizer/status", { replace: true });
         } else if (status === "APPROVED") {
-          navigate("/profile", { replace: true });
+          if (user?.role !== "ORGANIZER") {
+            await useAuthStore.getState().revalidateSession();
+          }
+          if (isMounted) {
+            navigate("/become-organizer/status", { replace: true });
+          }
         }
-        // If REJECTED, user stays on /become-organizer with loaded application!
+        // If REJECTED, user stays on /become-organizer with loaded application to edit & resubmit!
       }
     });
-  }, [user, navigate, fetchApplication]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.role, navigate, fetchApplication]);
 
   // Scroll to top on step changes
   useEffect(() => {

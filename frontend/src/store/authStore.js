@@ -46,30 +46,44 @@ export const clearStoredAuth = () => {
   }
 };
 
-// Helper to inspect JWT expiration without external libraries
-export const isTokenExpired = (token) => {
-  if (!token || typeof token !== "string") return true;
+// Helper to decode JWT payload without external libraries
+export const decodeTokenPayload = (token) => {
+  if (!token || typeof token !== "string") return null;
   try {
     const parts = token.split(".");
-    if (parts.length !== 3) return true;
-    const base64Url = parts[1];
-    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+    if (parts.length !== 3) return null;
+    let base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (base64.length % 4 !== 0) {
+      base64 += "=";
+    }
     const jsonPayload = decodeURIComponent(
       atob(base64)
         .split("")
         .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
         .join("")
     );
-    const { exp } = JSON.parse(jsonPayload);
-    if (!exp) return false;
-    // 10-second grace window to refresh before actual expiration
-    return exp * 1000 < Date.now() + 10000;
+    return JSON.parse(jsonPayload);
   } catch {
-    return true;
+    return null;
   }
 };
 
+// Helper to inspect JWT expiration without external libraries
+export const isTokenExpired = (token) => {
+  const payload = decodeTokenPayload(token);
+  if (!payload) return true;
+  if (!payload.exp) return false;
+  // 10-second grace window to refresh before actual expiration
+  return payload.exp * 1000 < Date.now() + 10000;
+};
+
 const initialStored = getStoredAuth();
+
+let activeRevalidatePromise = null;
+
+export const resetActiveRevalidatePromiseForTesting = () => {
+  activeRevalidatePromise = null;
+};
 
 const useAuthStore = create((set, get) => ({
   user: initialStored.user,
@@ -92,13 +106,21 @@ const useAuthStore = create((set, get) => ({
     }));
   },
 
-  setTokens: (accessToken, refreshToken) => {
-    const currentUser = get().user;
+  setTokens: (accessToken, refreshToken, updatedUser) => {
+    let currentUser = updatedUser || get().user;
+    if (!updatedUser && currentUser && accessToken) {
+      const payload = decodeTokenPayload(accessToken);
+      if (payload?.role && payload.role !== currentUser.role) {
+        currentUser = { ...currentUser, role: payload.role };
+      }
+    }
     setStoredAuth(currentUser, accessToken, refreshToken);
     set((state) => ({
+      user: currentUser,
       accessToken,
       refreshToken: refreshToken || state.refreshToken,
       isAuthenticated: true,
+      isInitializing: false,
       sessionVersion: state.sessionVersion + 1,
     }));
   },
@@ -113,6 +135,126 @@ const useAuthStore = create((set, get) => ({
       isInitializing: false,
       sessionVersion: state.sessionVersion + 1,
     }));
+  },
+
+  // Synchronize in-memory auth state with localStorage across browser tabs
+  syncFromStorage: () => {
+    const stored = getStoredAuth();
+    const current = get();
+
+    // 1. If storage has no session, clear current state if authenticated
+    if (!stored.accessToken || !stored.refreshToken || !stored.user) {
+      if (current.isAuthenticated) {
+        get().clearAuth();
+        return { synced: true, isAuthenticated: false };
+      }
+      return { synced: false, isAuthenticated: false };
+    }
+
+    // 2. Storage has tokens and user. Check if anything changed
+    const isTokenChanged =
+      stored.accessToken !== current.accessToken ||
+      stored.refreshToken !== current.refreshToken;
+    const isUserChanged =
+      JSON.stringify(stored.user) !== JSON.stringify(current.user);
+
+    if (isTokenChanged || isUserChanged || !current.isAuthenticated) {
+      const oldRole = current.user?.role;
+      const newRole = stored.user?.role;
+      const roleChanged = Boolean(oldRole && newRole && oldRole !== newRole);
+
+      set((state) => ({
+        user: stored.user,
+        accessToken: stored.accessToken,
+        refreshToken: stored.refreshToken,
+        isAuthenticated: true,
+        isInitializing: false,
+        sessionVersion: state.sessionVersion + 1,
+      }));
+
+      return {
+        synced: true,
+        isAuthenticated: true,
+        roleChanged,
+        oldRole,
+        newRole,
+        user: stored.user,
+        accessToken: stored.accessToken,
+      };
+    }
+
+    return { synced: false, isAuthenticated: true };
+  },
+
+  // Authoritatively revalidate the active session against the backend
+  revalidateSession: async () => {
+    if (activeRevalidatePromise) {
+      return activeRevalidatePromise;
+    }
+
+    const state = get();
+    if (!state.isAuthenticated || !state.accessToken) {
+      return { roleChanged: false, isAuthenticated: false };
+    }
+
+    activeRevalidatePromise = (async () => {
+      try {
+        const { getCurrentUser } = await import("../api/authApi.js");
+        const { requestTokenRefresh } = await import("../api/client.js");
+
+        const meResponse = await getCurrentUser(state.accessToken);
+        const dbUser = meResponse?.user;
+
+        if (!dbUser) {
+          return { roleChanged: false, isAuthenticated: true };
+        }
+
+        // Check if user logged out or switched while /auth/me was in-flight
+        const currentState = get();
+        if (!currentState.isAuthenticated || !currentState.user || currentState.user.id !== state.user?.id) {
+          return { roleChanged: false, isSessionAborted: true };
+        }
+
+        const currentRole = currentState.user?.role;
+        const newRole = dbUser.role;
+
+        if (currentRole && newRole && currentRole !== newRole) {
+          // Role mismatch: request fresh tokens minted with the updated database role
+          const newAccessToken = await requestTokenRefresh();
+          const refreshedState = get();
+
+          return {
+            roleChanged: true,
+            oldRole: currentRole,
+            newRole,
+            user: refreshedState.user || { ...currentState.user, ...dbUser },
+            accessToken: newAccessToken || refreshedState.accessToken,
+          };
+        }
+
+        // Role has not changed; sync any updated user fields (e.g. name, phone, status)
+        const mergedUser = { ...currentState.user, ...dbUser };
+        setStoredAuth(mergedUser, currentState.accessToken, currentState.refreshToken);
+        set({ user: mergedUser });
+
+        return {
+          roleChanged: false,
+          oldRole: currentRole,
+          newRole: currentRole,
+          user: mergedUser,
+          accessToken: currentState.accessToken,
+        };
+      } catch (err) {
+        return {
+          roleChanged: false,
+          error: err,
+        };
+      } finally {
+        activeRevalidatePromise = null;
+      }
+    })();
+
+    return activeRevalidatePromise;
   },
 
   // Asynchronously hydrate and validate the stored session on application startup
@@ -135,6 +277,26 @@ const useAuthStore = create((set, get) => ({
         try {
           const meResponse = await getCurrentUser(stored.accessToken);
           if (meResponse?.user) {
+            // Check if backend role differs from token claims or stored user
+            const tokenClaims = decodeTokenPayload(stored.accessToken);
+            const tokenRole = tokenClaims?.role;
+            const dbRole = meResponse.user?.role;
+            const storedRole = stored.user?.role;
+
+            if (dbRole && ((tokenRole && tokenRole !== dbRole) || (storedRole && storedRole !== dbRole))) {
+              if (stored.refreshToken) {
+                try {
+                  const refreshedToken = await requestTokenRefresh();
+                  if (refreshedToken) {
+                    set({ isInitializing: false });
+                    return;
+                  }
+                } catch {
+                  // Fall back to setting auth with meResponse user if refresh encounters transient error
+                }
+              }
+            }
+
             get().setAuth(meResponse.user, stored.accessToken, stored.refreshToken);
             return;
           }
