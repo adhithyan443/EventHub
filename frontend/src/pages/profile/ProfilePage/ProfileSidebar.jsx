@@ -1,5 +1,7 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { UserIcon, TicketIcon, HeartIcon, SettingsIcon } from "../../../components/layout/icons";
+import useAuthStore from "../../../store/authStore";
+import useOrganizerStore from "../../../store/organizerStore";
 
 const navItems = [
     { label: "Profile", to: "/profile", icon: UserIcon },
@@ -11,6 +13,10 @@ const navItems = [
 export default function ProfileSidebar({ user }) {
     const avatarUrl = user?.avatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80";
     const navigate = useNavigate();
+
+    const authUser = useAuthStore((state) => state.user);
+    const applicationStatus = useOrganizerStore((state) => state.applicationStatus);
+    const isOrganizer = user?.role === "ORGANIZER" || authUser?.role === "ORGANIZER" || applicationStatus === "APPROVED";
 
     return (
         <aside className="w-full lg:w-64 shrink-0 bg-[#f0f4fa] border border-slate-200/70 rounded-2xl p-4 sm:p-5 flex flex-col justify-between self-stretch gap-6">
@@ -48,15 +54,21 @@ export default function ProfileSidebar({ user }) {
             </div>
 
             <div className="pt-2 lg:pt-8">
-                {user?.role === "ORGANIZER" ? (
-                    <div className="w-full py-2.5 px-3 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold text-center border border-emerald-200 flex items-center justify-center gap-1.5 shadow-xs">
+                {isOrganizer ? (
+                    <button
+                        type="button"
+                        onClick={() => navigate("/organizer/dashboard")}
+                        className="w-full py-2.5 px-3 rounded-lg bg-emerald-100 hover:bg-emerald-200/80 text-emerald-800 text-xs font-bold text-center border border-emerald-200 flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                    >
                         <span className="w-2 h-2 rounded-full bg-emerald-500" />
                         Active Organizer
-                    </div>
+                    </button>
                 ) : (
                     <button
+                        type="button"
                         onClick={() => navigate("/become-organizer")}
-                        className="w-full h-10 rounded-lg bg-[#007066] hover:bg-[#005c54] text-white text-sm font-semibold transition-colors cursor-pointer shadow-xs">
+                        className="w-full h-10 rounded-lg bg-[#007066] hover:bg-[#005c54] text-white text-sm font-semibold transition-colors cursor-pointer shadow-xs"
+                    >
                         Become an Organizer
                     </button>
                 )}

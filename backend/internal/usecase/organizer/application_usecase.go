@@ -19,6 +19,9 @@ import (
 
 type ApplicationUsecase struct {
 	repository        domain.OrganizerApplicationRepository
+	organizerRepo     domain.OrganizerRepository
+	profileRepo       domain.OrganizerProfileRepository
+	addressRepo       domain.OrganizerAddressRepository
 	encryptionService *encryption.Service
 	storageService    *storage.S3Service
 	logger            *slog.Logger
@@ -26,6 +29,9 @@ type ApplicationUsecase struct {
 
 func NewApplicationUsecase(
 	repository domain.OrganizerApplicationRepository,
+	organizerRepo domain.OrganizerRepository,
+	profileRepo domain.OrganizerProfileRepository,
+	addressRepo domain.OrganizerAddressRepository,
 	encryptionService *encryption.Service,
 	storageService *storage.S3Service,
 	logger *slog.Logger,
@@ -37,6 +43,9 @@ func NewApplicationUsecase(
 
 	return &ApplicationUsecase{
 		repository:        repository,
+		organizerRepo:     organizerRepo,
+		profileRepo:       profileRepo,
+		addressRepo:       addressRepo,
 		encryptionService: encryptionService,
 		storageService:    storageService,
 		logger:            logger,
@@ -533,11 +542,93 @@ func (u *ApplicationUsecase) GetApplication(
 	ctx context.Context,
 	userID uuid.UUID,
 ) (*OrganizerApplicationResponse, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	application, err := u.repository.FindByUserID(userID)
 	if err != nil {
-
 		if errors.Is(err, domain.ErrOrganizerApplicationNotFound) {
+			// When an application is approved by an administrator, the application record
+			// is deleted from organizer_applications and transferred to permanent organizer records.
+			// Fall back to checking the organizer repository for an existing active organizer.
+			if u.organizerRepo != nil {
+				organizer, orgErr := u.organizerRepo.FindByUserID(userID)
+				if orgErr != nil {
+					if errors.Is(orgErr, domain.ErrOrganizerNotFound) {
+						return nil, appErrors.NewNotFoundError(
+							"organizer application not found",
+						)
+					}
+
+					u.logger.Error(
+						"organizer_application_fallback_check_failed",
+						slog.String("user_id", userID.String()),
+						slog.String("error", orgErr.Error()),
+					)
+					return nil, fmt.Errorf("failed to verify organizer status")
+				}
+
+				if organizer != nil && strings.EqualFold(strings.TrimSpace(organizer.Status), "ACTIVE") {
+					u.logger.Info(
+						"organizer_application_fallback_approved",
+						slog.String("user_id", userID.String()),
+						slog.String("organizer_id", organizer.ID.String()),
+					)
+
+					resp := &OrganizerApplicationResponse{
+						ID:        organizer.ID,
+						Status:    string(domain.ApplicationApproved),
+						CreatedAt: organizer.CreatedAt,
+						UpdatedAt: organizer.UpdatedAt,
+					}
+
+					// Enrich with organizer profile details if available
+					if u.profileRepo != nil {
+						profile, profErr := u.profileRepo.FindByOrganizerID(organizer.ID)
+						if profErr == nil && profile != nil {
+							resp.BusinessName = profile.BusinessName
+							resp.BusinessType = profile.BusinessType
+							resp.BusinessDescription = profile.Description
+							resp.Website = profile.Website
+							resp.ContactPhone = profile.Phone
+							resp.GSTNumber = profile.GSTNumber
+							resp.PANNumber = profile.PANNumber
+
+							if profile.LogoURL != "" && u.storageService != nil {
+								presigned, err := u.storageService.GetPresignedURL(ctx, profile.LogoURL)
+								if err == nil {
+									resp.LogoURL = presigned
+								}
+							}
+						}
+					}
+
+					// Enrich with organizer address details if available
+					if u.addressRepo != nil {
+						address, addrErr := u.addressRepo.FindByOrganizerID(organizer.ID)
+						if addrErr == nil && address != nil {
+							resp.AddressLine = address.AddressLine
+							resp.City = address.City
+							resp.State = address.State
+							resp.Country = address.Country
+							resp.PostalCode = address.PostalCode
+						}
+					}
+
+					return resp, nil
+				}
+
+				if organizer != nil {
+					u.logger.Warn(
+						"organizer_application_fallback_inactive",
+						slog.String("user_id", userID.String()),
+						slog.String("organizer_id", organizer.ID.String()),
+						slog.String("status", organizer.Status),
+					)
+				}
+			}
+
 			return nil, appErrors.NewNotFoundError(
 				"organizer application not found",
 			)

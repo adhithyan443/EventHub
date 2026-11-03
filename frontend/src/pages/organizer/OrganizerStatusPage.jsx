@@ -3,25 +3,86 @@ import { Link, useNavigate } from "react-router-dom";
 import AppHeader from "../../components/layout/AppHeader";
 import Footer from "../../components/layout/Footer";
 import useOrganizerStore from "../../store/organizerStore";
+import useAuthStore from "../../store/authStore";
+import notify from "../../utils/toast";
 import ApplicationDetailsModal from "./ApplicationDetailsModal";
 
 export default function OrganizerStatusPage() {
   const navigate = useNavigate();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isUpgradingRole, setIsUpgradingRole] = useState(false);
+  const [navigationError, setNavigationError] = useState(null);
+
+  const user = useAuthStore((state) => state.user);
 
   const businessName = useOrganizerStore((state) => state.businessName) || "—";
   const businessType = useOrganizerStore((state) => state.businessType) || "—";
   const applicationId = useOrganizerStore((state) => state.applicationId);
-  const applicationStatus = useOrganizerStore((state) => state.applicationStatus) || "PENDING";
+  const rawApplicationStatus = useOrganizerStore((state) => state.applicationStatus);
+  const applicationSubmitted = useOrganizerStore((state) => state.applicationSubmitted);
+  const isCheckingApplication = useOrganizerStore((state) => state.isCheckingApplication);
+  const fetchError = useOrganizerStore((state) => state.fetchError);
   const rejectionReason = useOrganizerStore((state) => state.rejectionReason);
   const rawSubmissionDate = useOrganizerStore((state) => state.submissionDate);
 
   const fetchApplication = useOrganizerStore((state) => state.fetchApplication);
 
-  // Fetch current application from backend on mount
+  // Fetch current application from backend on mount and synchronize auth if approved
   useEffect(() => {
-    fetchApplication();
-  }, [fetchApplication]);
+    let isMounted = true;
+
+    fetchApplication().then(async (result) => {
+      if (!isMounted) return;
+      if (result?.application?.status === "APPROVED" && user?.role !== "ORGANIZER") {
+        await useAuthStore.getState().revalidateSession();
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [fetchApplication, user?.role]);
+
+  // Determine effective status: approved organizers or approved applications take precedence
+  const effectiveStatus =
+    user?.role === "ORGANIZER"
+      ? "APPROVED"
+      : (rawApplicationStatus || (applicationSubmitted ? "PENDING" : null));
+
+  const isRejected = effectiveStatus === "REJECTED";
+  const isApproved = effectiveStatus === "APPROVED";
+
+  const handleGoToDashboard = async () => {
+    setNavigationError(null);
+    let currentRole = useAuthStore.getState().user?.role;
+
+    // Separate application status from authenticated role: verify role before entering dashboard
+    if (currentRole !== "ORGANIZER") {
+      setIsUpgradingRole(true);
+      try {
+        const revalResult = await useAuthStore.getState().revalidateSession();
+        currentRole = useAuthStore.getState().user?.role;
+
+        if (currentRole !== "ORGANIZER") {
+          const message =
+            revalResult?.error?.message ||
+            "Unable to verify organizer privileges. Please check your connection and try again.";
+          setNavigationError(message);
+          notify.error(message);
+          return;
+        }
+      } catch (err) {
+        const message = err?.message || "Failed to verify organizer session";
+        setNavigationError(message);
+        notify.error(message);
+        return;
+      } finally {
+        setIsUpgradingRole(false);
+      }
+    }
+
+    navigate("/organizer/dashboard");
+  };
 
   // Format date cleanly
   const formattedDate = rawSubmissionDate
@@ -41,8 +102,76 @@ export default function OrganizerStatusPage() {
       })()
     : "—";
 
-  const isRejected = applicationStatus === "REJECTED";
-  const isApproved = applicationStatus === "APPROVED";
+  // Loading state
+  if (isCheckingApplication && !effectiveStatus) {
+    return (
+      <div className="min-h-screen bg-[#F9F9FF] flex flex-col justify-between">
+        <AppHeader />
+        <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-16 flex flex-col items-center justify-center text-center">
+          <div className="w-10 h-10 border-3 border-primary/30 border-t-primary rounded-full animate-spin mb-4" />
+          <p className="text-sm font-medium text-slate-600">Retrieving application status...</p>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Error state
+  if (fetchError && !effectiveStatus) {
+    return (
+      <div className="min-h-screen bg-[#F9F9FF] flex flex-col justify-between">
+        <AppHeader />
+        <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-16 flex flex-col items-center justify-center text-center">
+          <div className="w-16 h-16 rounded-full bg-red-50 text-red-600 flex items-center justify-center mb-4">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">Unable to Load Application Status</h2>
+          <p className="text-sm text-slate-600 mb-6 max-w-md">{fetchError}</p>
+          <button
+            type="button"
+            onClick={() => fetchApplication()}
+            className="px-6 py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors shadow-sm cursor-pointer"
+          >
+            Try Again
+          </button>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
+  // Empty state: no application submitted and not an organizer
+  if (!effectiveStatus) {
+    return (
+      <div className="min-h-screen bg-[#F9F9FF] flex flex-col justify-between">
+        <AppHeader />
+        <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-16 flex flex-col items-center justify-center text-center">
+          <div className="w-16 h-16 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-4">
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-slate-900 mb-2">No Application Submitted</h2>
+          <p className="text-sm text-slate-600 mb-6 max-w-md">
+            You have not submitted an organizer application yet. Apply now to start hosting events on EventHub.
+          </p>
+          <button
+            type="button"
+            onClick={() => navigate("/become-organizer")}
+            className="px-6 py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary/90 transition-colors shadow-sm cursor-pointer"
+          >
+            Apply to Become an Organizer
+          </button>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F9F9FF] flex flex-col justify-between">
@@ -110,7 +239,7 @@ export default function OrganizerStatusPage() {
                         : "bg-primary animate-pulse"
                     }`}
                   />
-                  {applicationStatus}
+                  {effectiveStatus}
                 </span>
               </div>
             </div>
@@ -346,18 +475,32 @@ export default function OrganizerStatusPage() {
             ) : isApproved ? (
               <button
                 type="button"
-                onClick={() => navigate("/profile")}
-                className="w-full h-11 px-5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                onClick={handleGoToDashboard}
+                disabled={isUpgradingRole}
+                className="w-full h-11 px-5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-75 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer"
               >
-                Go to Profile
+                {isUpgradingRole ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Verifying Session...
+                  </>
+                ) : (
+                  "Go to Organizer Dashboard"
+                )}
               </button>
             ) : null}
+
+            {navigationError && (
+              <p className="text-xs text-red-600 font-medium bg-red-50 p-2.5 rounded-lg border border-red-200 text-center">
+                {navigationError}
+              </p>
+            )}
 
             <button
               type="button"
               onClick={() => setIsModalOpen(true)}
               className={`w-full h-11 px-5 rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2 shadow-sm cursor-pointer ${
-                isRejected
+                isRejected || isApproved
                   ? "border border-slate-300 bg-white hover:bg-slate-50 text-slate-700"
                   : "bg-primary hover:bg-primary/90 text-white"
               }`}

@@ -1,4 +1,4 @@
-import apiClient from "./client";
+import apiClient from "./client.js";
 
 // Submit an organizer application for the authenticated customer.
 export const applyAsOrganizer = async (applicationData) => {
