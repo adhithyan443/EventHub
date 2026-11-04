@@ -30,8 +30,16 @@ func NewSeatLayoutHandler(
 }
 
 type createSeatLayoutRequest struct {
-	LayoutName string                 `json:"layoutName"`
-	Sections   []createSectionRequest `json:"sections"`
+	LayoutName    string                 `json:"layout_name"`
+	LayoutNameAlt string                 `json:"layoutName"`
+	Columns       []seatColumnRequest    `json:"columns"`
+	Sections      []createSectionRequest `json:"sections"`
+}
+
+type seatColumnRequest struct {
+	ID         *uuid.UUID `json:"id,omitempty"`
+	Label      string     `json:"label"`
+	OrderIndex int        `json:"order_index"`
 }
 
 type createSectionRequest struct {
@@ -41,8 +49,18 @@ type createSectionRequest struct {
 }
 
 type createRowRequest struct {
-	RowName string `json:"rowName"`
-	Seats   int    `json:"seats"`
+	RowName    string                  `json:"row_name"`
+	RowNameAlt string                  `json:"rowName"`
+	Seats      int                     `json:"seats"`
+	SeatsList  []createSeatItemRequest `json:"seats_list,omitempty"`
+}
+
+type createSeatItemRequest struct {
+	ID         *uuid.UUID `json:"id,omitempty"`
+	ColumnID   *uuid.UUID `json:"column_id,omitempty"`
+	GridCol    int        `json:"grid_col"`
+	SeatNumber int        `json:"seat_number"`
+	Status     string     `json:"status,omitempty"`
 }
 
 func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
@@ -81,12 +99,26 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 		return
 	}
 
+	layoutName := strings.TrimSpace(req.LayoutName)
+	if layoutName == "" {
+		layoutName = strings.TrimSpace(req.LayoutNameAlt)
+	}
+
 	h.logger.Info(
 		"creating seat layout",
 		slog.String("user_id", userID.String()),
 		slog.String("event_id", eventID.String()),
-		slog.String("layout_name", req.LayoutName),
+		slog.String("layout_name", layoutName),
 	)
+
+	columns := make([]seatLayoutUsecase.SeatColumnInput, 0, len(req.Columns))
+	for _, col := range req.Columns {
+		columns = append(columns, seatLayoutUsecase.SeatColumnInput{
+			ID:         col.ID,
+			Label:      col.Label,
+			OrderIndex: col.OrderIndex,
+		})
+	}
 
 	sections := make([]seatLayoutUsecase.SeatSectionInput, 0, len(req.Sections))
 
@@ -94,9 +126,31 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 		rows := make([]seatLayoutUsecase.SeatRowInput, 0, len(section.Rows))
 
 		for _, row := range section.Rows {
+			rowName := strings.TrimSpace(row.RowName)
+			if rowName == "" {
+				rowName = strings.TrimSpace(row.RowNameAlt)
+			}
+
+			seatItems := make([]seatLayoutUsecase.SeatItemInput, 0, len(row.SeatsList))
+			for _, seat := range row.SeatsList {
+				seatItems = append(seatItems, seatLayoutUsecase.SeatItemInput{
+					ID:         seat.ID,
+					ColumnID:   seat.ColumnID,
+					GridCol:    seat.GridCol,
+					SeatNumber: seat.SeatNumber,
+					Status:     seat.Status,
+				})
+			}
+
+			seatsCount := row.Seats
+			if seatsCount <= 0 && len(seatItems) > 0 {
+				seatsCount = len(seatItems)
+			}
+
 			rows = append(rows, seatLayoutUsecase.SeatRowInput{
-				RowName: row.RowName,
-				Seats:   row.Seats,
+				RowName:   rowName,
+				Seats:     seatsCount,
+				SeatItems: seatItems,
 			})
 		}
 
@@ -110,20 +164,20 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 	input := seatLayoutUsecase.CreateSeatLayoutInput{
 		UserID:     userID,
 		EventID:    eventID,
-		LayoutName: req.LayoutName,
+		LayoutName: layoutName,
+		Columns:    columns,
 		Sections:   sections,
 	}
 
 	output, err := h.seatLayoutUsecase.CreateSeatLayout(input)
 	if err != nil {
 		switch {
-		case errors.Is(err, seatLayoutUsecase.ErrInvalidSeatLayout):
-			c.Error(appErrors.NewValidationError(err.Error()))
-
-		case errors.Is(err, seatLayoutUsecase.ErrInvalidSeatSection):
-			c.Error(appErrors.NewValidationError(err.Error()))
-
-		case errors.Is(err, seatLayoutUsecase.ErrInvalidSeatRow):
+		case errors.Is(err, seatLayoutUsecase.ErrInvalidSeatLayout),
+			errors.Is(err, seatLayoutUsecase.ErrInvalidSeatSection),
+			errors.Is(err, seatLayoutUsecase.ErrInvalidSeatRow),
+			errors.Is(err, seatLayoutUsecase.ErrInvalidSeatColumn),
+			errors.Is(err, seatLayoutUsecase.ErrSeatColumnDuplicateLabel),
+			errors.Is(err, seatLayoutUsecase.ErrSeatColumnDuplicateOrder):
 			c.Error(appErrors.NewValidationError(err.Error()))
 
 		case errors.Is(err, seatLayoutUsecase.ErrUnauthorizedOrganizer):
@@ -162,6 +216,7 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"layout":   output.Layout,
+			"columns":  output.Columns,
 			"sections": output.Sections,
 			"rows":     output.Rows,
 			"seats":    output.Seats,
@@ -172,6 +227,7 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 type updateSeatLayoutRequest struct {
 	LayoutName    string                 `json:"layout_name"`
 	LayoutNameAlt string                 `json:"layoutName"`
+	Columns       []seatColumnRequest    `json:"columns"`
 	Sections      []updateSectionRequest `json:"sections"`
 }
 
@@ -192,6 +248,8 @@ type updateRowRequest struct {
 
 type updateSeatRequest struct {
 	ID         *uuid.UUID `json:"id,omitempty"`
+	ColumnID   *uuid.UUID `json:"column_id,omitempty"`
+	GridCol    int        `json:"grid_col"`
 	SeatNumber int        `json:"seat_number"`
 	Status     string     `json:"status,omitempty"`
 }
@@ -241,6 +299,15 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		layoutName = strings.TrimSpace(req.LayoutNameAlt)
 	}
 
+	columns := make([]seatLayoutUsecase.UpdateSeatColumnInput, 0, len(req.Columns))
+	for _, col := range req.Columns {
+		columns = append(columns, seatLayoutUsecase.UpdateSeatColumnInput{
+			ID:         col.ID,
+			Label:      col.Label,
+			OrderIndex: col.OrderIndex,
+		})
+	}
+
 	sections := make([]seatLayoutUsecase.UpdateSeatSectionInput, 0, len(req.Sections))
 	for _, sec := range req.Sections {
 		rows := make([]seatLayoutUsecase.UpdateSeatRowInput, 0, len(sec.Rows))
@@ -254,6 +321,8 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 			for _, seat := range row.SeatsList {
 				seatItems = append(seatItems, seatLayoutUsecase.UpdateSeatItemInput{
 					ID:         seat.ID,
+					ColumnID:   seat.ColumnID,
+					GridCol:    seat.GridCol,
 					SeatNumber: seat.SeatNumber,
 					Status:     seat.Status,
 				})
@@ -284,6 +353,7 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		UserID:     userID,
 		EventID:    eventID,
 		LayoutName: layoutName,
+		Columns:    columns,
 		Sections:   sections,
 	}
 
@@ -293,12 +363,18 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		case errors.Is(err, seatLayoutUsecase.ErrInvalidSeatLayout),
 			errors.Is(err, seatLayoutUsecase.ErrInvalidSeatSection),
 			errors.Is(err, seatLayoutUsecase.ErrInvalidSeatRow),
+			errors.Is(err, seatLayoutUsecase.ErrInvalidSeatColumn),
+			errors.Is(err, seatLayoutUsecase.ErrSeatColumnDuplicateLabel),
+			errors.Is(err, seatLayoutUsecase.ErrSeatColumnDuplicateOrder),
 			errors.Is(err, seatLayoutUsecase.ErrSeatLayoutDraftOnly),
 			errors.Is(err, seatLayoutUsecase.ErrSeatLayoutSeatedOnly),
 			errors.Is(err, seatLayoutUsecase.ErrSeatLayoutStructuralChangesNotAllowed),
 			errors.Is(err, seatLayoutUsecase.ErrSeatLayoutDuplicateID),
 			errors.Is(err, seatLayoutUsecase.ErrSeatLayoutInvalidStatus):
 			c.Error(appErrors.NewValidationError(err.Error()))
+
+		case errors.Is(err, seatLayoutUsecase.ErrSeatLayoutBookedSeatCannotBeRemoved):
+			c.Error(appErrors.NewConflictError(err.Error()))
 
 		case errors.Is(err, seatLayoutUsecase.ErrUnauthorizedOrganizer):
 			c.Error(appErrors.NewForbiddenError(err.Error()))
@@ -325,6 +401,7 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		"success": true,
 		"data": gin.H{
 			"layout":   output.Layout,
+			"columns":  output.Columns,
 			"sections": output.Sections,
 			"rows":     output.Rows,
 			"seats":    output.Seats,

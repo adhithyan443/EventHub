@@ -128,6 +128,11 @@ export default function CreateEventReviewPublishPage() {
     const mappedSeatLayout = showSeatedLayout
       ? {
           LayoutName: seatingConfig?.layoutName || "Main Seating Layout",
+          Columns: (seatingConfig?.columns || []).map((col, idx) => ({
+            ID: col.id || `preview-col-${idx}`,
+            Label: col.label,
+            OrderIndex: col.order_index ?? col.orderIndex ?? idx,
+          })),
           Sections: seatingCategories.map((category, cIdx) => ({
             ID: category.id || `preview-section-${cIdx}`,
             Name: category.name || `Section ${cIdx + 1}`,
@@ -137,11 +142,19 @@ export default function CreateEventReviewPublishPage() {
             Rows: (category.rows || []).map((row, rIdx) => ({
               ID: row.id || `preview-row-${cIdx}-${rIdx}`,
               RowName: row.rowLetter || row.name || String.fromCharCode(65 + rIdx),
-              Seats: (row.seats || []).map((seat, sIdx) => ({
-                ID: seat.id || `preview-seat-${cIdx}-${rIdx}-${sIdx}`,
-                SeatNumber: seat.seatNumber || sIdx + 1,
-                Status: seat.status || "AVAILABLE",
-              })),
+              Seats: (row.seats || [])
+                .filter((s) => s.status !== "gap")
+                .map((seat, sIdx) => ({
+                  ID: seat.id || `preview-seat-${cIdx}-${rIdx}-${sIdx}`,
+                  SeatNumber: seat.seatNumber || seat.number || sIdx + 1,
+                  Status: seat.status || "AVAILABLE",
+                  ColumnID: seat.columnId || seat.column_id,
+                  GridCol: seat.gridCol ?? seat.grid_col ?? sIdx,
+                  ColumnLabel:
+                    seat.columnLabel ||
+                    (seatingConfig?.columns && seatingConfig.columns[seat.gridCol]?.label) ||
+                    "",
+                })),
             })),
           })),
         }
@@ -277,14 +290,35 @@ export default function CreateEventReviewPublishPage() {
         showSeatedLayout && {
           seat_layout: {
             layout_name: seatingConfig?.layoutName || "Main Seating Layout",
+            columns: (seatingConfig?.columns || []).map((col, idx) => ({
+              ...(isUUID(col.id) ? { id: col.id } : {}),
+              label: col.label,
+              order_index: col.order_index ?? col.orderIndex ?? idx,
+            })),
             sections: seatingCategories.map((category) => ({
+              ...(isUUID(category.id) ? { id: category.id } : {}),
               name: category.name.trim(),
               price: Number(
                 String(category.price ?? "").replace(/[₹,\s]/g, "")
               ),
               rows: category.rows.map((row) => ({
+                ...(isUUID(row.id) ? { id: row.id } : {}),
                 row_name: row.rowLetter?.trim() || row.name?.trim(),
-                seats: row.seats.length,
+                seats: (row.seats || []).filter((s) => s.status !== "gap").length,
+                seats_list: (row.seats || [])
+                  .filter((s) => s.status !== "gap")
+                  .map((seat) => ({
+                    ...(isUUID(seat.id) ? { id: seat.id } : {}),
+                    ...(isUUID(seat.columnId || seat.column_id)
+                      ? { column_id: seat.columnId || seat.column_id }
+                      : {}),
+                    grid_col: seat.gridCol ?? seat.grid_col ?? 0,
+                    seat_number: seat.number || seat.SeatNumber || seat.seatNumber || 1,
+                    status:
+                      String(seat.status || "AVAILABLE").toUpperCase() === "DISABLED"
+                        ? "DISABLED"
+                        : "AVAILABLE",
+                  })),
               })),
             })),
           },

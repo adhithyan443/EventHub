@@ -34,6 +34,7 @@ type transactionRepositories struct {
 	eventContactRepo      domain.EventContactRepository
 
 	seatLayoutRepository  domain.SeatLayoutRepository
+	seatColumnRepository  domain.SeatColumnRepository
 	seatSectionRepository domain.SeatSectionRepository
 	seatRowRepository     domain.SeatRowRepository
 	seatRepository        domain.SeatRepository
@@ -130,6 +131,7 @@ func (m *TransactionManager) WithinTransaction(
 			),
 
 			seatLayoutRepository:  NewSeatLayoutRepository(txDB, m.logger),
+			seatColumnRepository:  NewSeatColumnRepository(txDB, m.logger),
 			seatSectionRepository: NewSeatSectionRepository(txDB, m.logger),
 			seatRowRepository:     NewSeatRowRepository(txDB, m.logger),
 			seatRepository:        NewSeatRepository(txDB, m.logger),
@@ -212,6 +214,10 @@ func (r *transactionRepositories) EventCancellationRepository() domain.EventCanc
 
 func (r *transactionRepositories) SeatLayoutRepository() domain.SeatLayoutRepository {
 	return r.seatLayoutRepository
+}
+
+func (r *transactionRepositories) SeatColumnRepository() domain.SeatColumnRepository {
+	return r.seatColumnRepository
 }
 
 func (r *transactionRepositories) SeatSectionRepository() domain.SeatSectionRepository {

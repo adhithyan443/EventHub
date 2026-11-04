@@ -1520,7 +1520,14 @@ type EventDetailsSeatLayout struct {
 	ID         uuid.UUID
 	EventID    uuid.UUID
 	LayoutName string
+	Columns    []EventDetailsSeatColumn
 	Sections   []EventDetailsSeatSection
+}
+
+type EventDetailsSeatColumn struct {
+	ID         uuid.UUID `json:"id"`
+	Label      string    `json:"label"`
+	OrderIndex int       `json:"order_index"`
 }
 
 type EventDetailsSeatSection struct {
@@ -1537,9 +1544,12 @@ type EventDetailsSeatRow struct {
 }
 
 type EventDetailsSeat struct {
-	ID         uuid.UUID
-	SeatNumber int
-	Status     string
+	ID          uuid.UUID  `json:"id"`
+	ColumnID    *uuid.UUID `json:"column_id,omitempty"`
+	GridCol     int        `json:"grid_col"`
+	ColumnLabel string     `json:"column_label,omitempty"`
+	SeatNumber  int        `json:"seat_number"`
+	Status      string     `json:"status"`
 }
 
 type EventDetailsStatistics struct {
@@ -2007,6 +2017,22 @@ func (u *EventUsecase) GetEventDetails(
 			}
 
 			if setting.SeatLayoutType == SeatLayoutTypeSeated && seatLayout != nil {
+				cols, err := tx.SeatColumnRepository().FindBySeatLayoutID(seatLayout.ID)
+				if err != nil {
+					return err
+				}
+
+				detailsColumns := make([]EventDetailsSeatColumn, 0, len(cols))
+				colMap := make(map[uuid.UUID]string, len(cols))
+				for _, col := range cols {
+					detailsColumns = append(detailsColumns, EventDetailsSeatColumn{
+						ID:         col.ID,
+						Label:      col.Label,
+						OrderIndex: col.OrderIndex,
+					})
+					colMap[col.ID] = col.Label
+				}
+
 				sections, err := tx.SeatSectionRepository().FindBySeatLayoutID(seatLayout.ID)
 				if err != nil {
 					return err
@@ -2028,10 +2054,17 @@ func (u *EventUsecase) GetEventDetails(
 
 						detailsSeats := make([]EventDetailsSeat, 0, len(seats))
 						for _, seat := range seats {
+							var colLabel string
+							if seat.ColumnID != nil {
+								colLabel = colMap[*seat.ColumnID]
+							}
 							detailsSeats = append(detailsSeats, EventDetailsSeat{
-								ID:         seat.ID,
-								SeatNumber: seat.SeatNumber,
-								Status:     seat.Status,
+								ID:          seat.ID,
+								ColumnID:    seat.ColumnID,
+								GridCol:     seat.GridCol,
+								ColumnLabel: colLabel,
+								SeatNumber:  seat.SeatNumber,
+								Status:      seat.Status,
 							})
 						}
 
@@ -2054,6 +2087,7 @@ func (u *EventUsecase) GetEventDetails(
 					ID:         seatLayout.ID,
 					EventID:    seatLayout.EventID,
 					LayoutName: seatLayout.LayoutName,
+					Columns:    detailsColumns,
 					Sections:   detailsSections,
 				}
 			}

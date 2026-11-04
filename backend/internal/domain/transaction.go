@@ -26,6 +26,7 @@ type TransactionRepositories interface {
 	EventContactRepository() EventContactRepository
 
 	SeatLayoutRepository() SeatLayoutRepository
+	SeatColumnRepository() SeatColumnRepository
 	SeatSectionRepository() SeatSectionRepository
 	SeatRowRepository() SeatRowRepository
 	SeatRepository() SeatRepository

@@ -163,6 +163,15 @@ func (r *SeatLayoutRepository) DeleteByEventID(eventID uuid.UUID) error {
 		}
 	}
 
+	if err := r.db.Where("seat_layout_id = ?", layout.ID).Delete(&models.SeatColumnModel{}).Error; err != nil {
+		r.logger.Error(
+			"seat_columns_delete_failed",
+			"seat_layout_id", layout.ID,
+			"error", err,
+		)
+		return err
+	}
+
 	if err := r.db.Where("id = ?", layout.ID).Delete(&models.SeatLayoutModel{}).Error; err != nil {
 		r.logger.Error(
 			"seat_layout_delete_failed",

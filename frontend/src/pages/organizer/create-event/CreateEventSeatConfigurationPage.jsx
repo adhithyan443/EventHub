@@ -107,6 +107,15 @@ export default function CreateEventSeatConfigurationPage() {
     (state) => state.removeRowFromCategory
   );
 
+  const addColumn = useEventCreationStore((state) => state.addColumn);
+  const removeColumn = useEventCreationStore((state) => state.removeColumn);
+  const renameColumn = useEventCreationStore((state) => state.renameColumn);
+  const reorderColumns = useEventCreationStore((state) => state.reorderColumns);
+  const setColumnLabelType = useEventCreationStore(
+    (state) => state.setColumnLabelType
+  );
+  const toggleSeatGap = useEventCreationStore((state) => state.toggleSeatGap);
+
   const ticketSalesSettings = useEventCreationStore(
     (state) => state.ticketSalesSettings
   );
@@ -131,6 +140,12 @@ export default function CreateEventSeatConfigurationPage() {
   );
 
   const [zoomLevel, setZoomLevel] = useState(100);
+
+  // Column management modal states
+  const [editingColumn, setEditingColumn] = useState(null);
+  const [renameColumnInput, setRenameColumnInput] = useState("");
+  const [renameColumnError, setRenameColumnError] = useState("");
+  const [columnToRemove, setColumnToRemove] = useState(null);
 
   // Modal states
   const [showAddModal, setShowAddModal] = useState(false);
@@ -162,13 +177,17 @@ export default function CreateEventSeatConfigurationPage() {
   const selectedSeatIds = seatingConfig.selectedSeatIds || [];
   const categories = seatingConfig.categories || [];
   const allRows = seatingConfig.rows || [];
+  const columns = seatingConfig.columns || [];
+  const columnLabelType = seatingConfig.columnLabelType || "ALPHA";
 
-  // Calculate actual total seats from the current layout.
+  // Calculate actual total seats from current layout (excluding gaps)
   const totalSeats = categories.reduce(
     (acc, category) =>
       acc +
       (category.rows?.reduce(
-        (rowAcc, row) => rowAcc + (row.seats?.length || 0),
+        (rowAcc, row) =>
+          rowAcc +
+          (row.seats?.filter((s) => s.status !== "gap").length || 0),
         0
       ) || 0),
     0
@@ -294,6 +313,11 @@ export default function CreateEventSeatConfigurationPage() {
 
     const payload = {
       layout_name: seatingConfig.layoutName || "Main Seating Layout",
+      columns: (columns || []).map((col, idx) => ({
+        ...(isUUID(col.id) ? { id: col.id } : {}),
+        label: col.label,
+        order_index: col.order_index ?? col.orderIndex ?? idx,
+      })),
       sections: categories.map((cat) => ({
         ...(isUUID(cat.id) ? { id: cat.id } : {}),
         name: cat.name.trim(),
@@ -301,15 +325,21 @@ export default function CreateEventSeatConfigurationPage() {
         rows: (cat.rows || []).map((row) => ({
           ...(isUUID(row.id) ? { id: row.id } : {}),
           row_name: row.rowLetter?.trim() || row.name?.trim(),
-          seats: row.seats?.length || 0,
-          seats_list: (row.seats || []).map((seat) => ({
-            ...(isUUID(seat.id) ? { id: seat.id } : {}),
-            seat_number: seat.number || seat.SeatNumber || 1,
-            status:
-              String(seat.status || "AVAILABLE").toUpperCase() === "DISABLED"
-                ? "DISABLED"
-                : "AVAILABLE",
-          })),
+          seats: (row.seats || []).filter((s) => s.status !== "gap").length,
+          seats_list: (row.seats || [])
+            .filter((seat) => seat.status !== "gap")
+            .map((seat) => ({
+              ...(isUUID(seat.id) ? { id: seat.id } : {}),
+              ...(isUUID(seat.columnId || seat.column_id)
+                ? { column_id: seat.columnId || seat.column_id }
+                : {}),
+              grid_col: seat.gridCol ?? seat.grid_col ?? 0,
+              seat_number: seat.number || seat.SeatNumber || 1,
+              status:
+                String(seat.status || "AVAILABLE").toUpperCase() === "DISABLED"
+                  ? "DISABLED"
+                  : "AVAILABLE",
+            })),
         })),
       })),
     };
@@ -438,14 +468,15 @@ export default function CreateEventSeatConfigurationPage() {
 
         rowNames.add(normalizedRowName);
 
-        if (!Array.isArray(row.seats) || row.seats.length === 0) {
+        const nonGapSeats = (row.seats || []).filter((s) => s.status !== "gap");
+        if (nonGapSeats.length === 0) {
           setValidationError(
             `Row "${rowName}" in the "${categoryName}" category must contain at least one seat.`
           );
           return;
         }
 
-        for (const seat of row.seats) {
+        for (const seat of nonGapSeats) {
           if (!seat.id || !seat.categoryId) {
             setValidationError(
               `The "${rowName}" row in the "${categoryName}" category contains an invalid seat configuration.`
@@ -470,6 +501,20 @@ export default function CreateEventSeatConfigurationPage() {
           seatIds.add(seat.id);
         }
       }
+    }
+
+    const colLabels = new Set();
+    for (const col of columns) {
+      const clean = (col.label || "").trim().toLowerCase();
+      if (!clean) {
+        setValidationError("All column labels must be non-empty.");
+        return;
+      }
+      if (colLabels.has(clean)) {
+        setValidationError(`Duplicate column label "${col.label}" found.`);
+        return;
+      }
+      colLabels.add(clean);
     }
 
     if (totalSeats <= 0) {
@@ -692,6 +737,40 @@ export default function CreateEventSeatConfigurationPage() {
       removeCategory(categoryToRemove.id);
       setCategoryToRemove(null);
     }
+  };
+
+  const handleRenameColumnSubmit = (e) => {
+    if (e) e.preventDefault();
+    const trimmed = renameColumnInput.trim();
+    if (!trimmed) {
+      setRenameColumnError("Column label cannot be empty.");
+      return;
+    }
+    const duplicate = columns.some(
+      (col) =>
+        col.id !== editingColumn.id &&
+        col.label.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (duplicate) {
+      setRenameColumnError(`Column label "${trimmed}" is already in use.`);
+      return;
+    }
+    renameColumn(editingColumn.id, trimmed);
+    setEditingColumn(null);
+    setRenameColumnInput("");
+    setRenameColumnError("");
+  };
+
+  const handleConfirmRemoveColumn = () => {
+    if (!columnToRemove) return;
+    removeColumn(columnToRemove.id);
+    setSeatsPerRowInput(Math.max(1, columns.length - 1));
+    setColumnToRemove(null);
+  };
+
+  const handleAddColumn = () => {
+    addColumn();
+    setSeatsPerRowInput(columns.length + 1);
   };
 
   if (
@@ -963,6 +1042,89 @@ export default function CreateEventSeatConfigurationPage() {
 
                           {/* Rows */}
                           <div className="flex flex-col gap-[10px] items-center w-full py-1">
+                            {/* Column Headers Track */}
+                            {columns && columns.length > 0 && (
+                              <div className="flex gap-[8px] items-end justify-center w-full pb-2 mb-1 border-b border-[#f1f3ff]">
+                                {/* Spacer matching Row Indicator */}
+                                <div className="w-[24px] text-center font-bold text-[#8b95a5] text-[10px] select-none shrink-0 pb-1">
+                                  COL
+                                </div>
+
+                                {/* Column headers matching Seats container */}
+                                <div className="flex gap-[8px] items-end">
+                                  {columns.map((col, colIndex) => (
+                                    <div
+                                      key={col.id || colIndex}
+                                      className="w-[32px] flex flex-col items-center gap-0.5 group/col"
+                                    >
+                                      {/* Quick Controls: Move Left, Remove, Move Right */}
+                                      <div className="flex items-center justify-center gap-0.5 opacity-40 group-hover/col:opacity-100 transition-opacity">
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            reorderColumns(colIndex, colIndex - 1)
+                                          }
+                                          disabled={colIndex === 0}
+                                          className="text-[10px] font-bold text-gray-500 hover:text-[#00685f] disabled:opacity-15 cursor-pointer disabled:cursor-not-allowed leading-none px-0.5"
+                                          title="Move column left"
+                                        >
+                                          ‹
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setColumnToRemove(col)}
+                                          disabled={columns.length <= 1}
+                                          className="text-[11px] font-bold text-red-500 hover:text-red-700 disabled:opacity-15 cursor-pointer disabled:cursor-not-allowed leading-none px-0.5"
+                                          title="Remove column"
+                                        >
+                                          ×
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            reorderColumns(colIndex, colIndex + 1)
+                                          }
+                                          disabled={
+                                            colIndex === columns.length - 1
+                                          }
+                                          className="text-[10px] font-bold text-gray-500 hover:text-[#00685f] disabled:opacity-15 cursor-pointer disabled:cursor-not-allowed leading-none px-0.5"
+                                          title="Move column right"
+                                        >
+                                          ›
+                                        </button>
+                                      </div>
+
+                                      {/* Column Label Pill */}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingColumn(col);
+                                          setRenameColumnInput(col.label || "");
+                                          setRenameColumnError("");
+                                        }}
+                                        className="w-[32px] h-[24px] bg-[#eef2ff] border border-[#c7d2fe] hover:border-[#6366f1] hover:bg-[#e0e7ff] text-[#4338ca] font-bold text-[11px] rounded flex items-center justify-center transition-all cursor-pointer shadow-2xs"
+                                        title={`Column ${col.label} (Click to rename)`}
+                                      >
+                                        {col.label}
+                                      </button>
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Spacer matching Row Delete button */}
+                                <div className="size-6 shrink-0 ml-1 flex items-end pb-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={handleAddColumn}
+                                    className="size-6 text-[#00685f] hover:text-white hover:bg-[#00685f] border border-dashed border-[#00685f] rounded flex items-center justify-center text-xs font-bold transition-all cursor-pointer"
+                                    title="Add column to right"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
                             {section.rows?.map((row) => (
                               <div
                                 key={
@@ -979,7 +1141,39 @@ export default function CreateEventSeatConfigurationPage() {
                                 {/* Seats */}
                                 <div className="flex gap-[8px] items-center">
                                   {row.seats?.map(
-                                    (seat) => {
+                                    (seat, seatIndex) => {
+                                      if (seat.status === "gap") {
+                                        return (
+                                          <button
+                                            key={seat.id}
+                                            type="button"
+                                            onClick={() =>
+                                              toggleSeatGap(
+                                                row.id,
+                                                seat.gridCol !== undefined
+                                                  ? seat.gridCol
+                                                  : seatIndex
+                                              )
+                                            }
+                                            className="size-[32px] rounded-lg border-2 border-dashed border-gray-300 hover:border-[#00685f] hover:bg-[#00685f]/5 text-gray-400 hover:text-[#00685f] flex items-center justify-center text-xs font-semibold transition-all cursor-pointer select-none"
+                                            title={`Gap/Aisle at Row ${
+                                              row.rowLetter
+                                            }, Column ${
+                                              columns[
+                                                seat.gridCol !== undefined
+                                                  ? seat.gridCol
+                                                  : seatIndex
+                                              ]?.label ||
+                                              (seat.gridCol !== undefined
+                                                ? seat.gridCol + 1
+                                                : seatIndex + 1)
+                                            } (Click to restore seat)`}
+                                          >
+                                            —
+                                          </button>
+                                        );
+                                      }
+
                                       const isSelected =
                                         selectedSeatIds.includes(
                                           seat.id
@@ -1228,6 +1422,64 @@ export default function CreateEventSeatConfigurationPage() {
                 >
                   Generate Layout
                 </button>
+
+                {/* Column Management Controls */}
+                <div className="flex flex-col gap-2 pt-2 border-t border-[#dce2f7]">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[12px] font-medium tracking-[0.6px] text-[#3d4947]">
+                      Column Labeling
+                    </label>
+                    <span className="text-[11px] text-[#565e74] font-medium">
+                      {columns.length} {columns.length === 1 ? "Column" : "Columns"}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#f1f3ff] rounded-lg border border-[#dce2f7]">
+                    <button
+                      type="button"
+                      onClick={() => setColumnLabelType("ALPHA")}
+                      className={`py-1 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                        columnLabelType === "ALPHA"
+                          ? "bg-white text-[#00685f] shadow-xs"
+                          : "text-[#565e74] hover:text-[#141b2b]"
+                      }`}
+                    >
+                      A, B, C (Letters)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setColumnLabelType("NUMERIC")}
+                      className={`py-1 text-xs font-semibold rounded-md transition-all cursor-pointer ${
+                        columnLabelType === "NUMERIC"
+                          ? "bg-white text-[#00685f] shadow-xs"
+                          : "text-[#565e74] hover:text-[#141b2b]"
+                      }`}
+                    >
+                      1, 2, 3 (Numbers)
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAddColumn}
+                    className="w-full mt-1 border border-dashed border-[#00685f] hover:bg-[#00685f]/5 text-[#00685f] rounded-lg py-2 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <svg
+                      className="size-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      strokeWidth="2"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    Add New Column
+                  </button>
+                </div>
               </div>
 
               {/* Selected Seats */}
@@ -1311,6 +1563,34 @@ export default function CreateEventSeatConfigurationPage() {
                       />
                     </svg>
                     Block Selected
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={
+                      selectedSeatIds.length === 0
+                    }
+                    onClick={() =>
+                      setSelectedSeatsStatus(
+                        "gap"
+                      )
+                    }
+                    className="w-full border border-dashed border-gray-400 rounded-[8px] py-[9px] font-semibold text-gray-700 text-[14px] flex items-center justify-center gap-2 hover:bg-gray-100 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <svg
+                      className="size-4 text-gray-600"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      strokeWidth="2"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M18 12H6"
+                      />
+                    </svg>
+                    Convert to Gap (Aisle)
                   </button>
                 </div>
               </div>
@@ -2002,6 +2282,128 @@ export default function CreateEventSeatConfigurationPage() {
                   className="px-5 py-2 rounded-lg text-sm font-semibold text-white bg-[#ba1a1a] hover:bg-red-700 transition-colors shadow-xs cursor-pointer"
                 >
                   Remove Category
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Column Modal */}
+      {editingColumn && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-sm overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-5 flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                <h3 className="text-base font-bold text-[#141b2b]">
+                  Rename Column
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingColumn(null);
+                    setRenameColumnError("");
+                  }}
+                  className="text-gray-400 hover:text-gray-600 cursor-pointer text-lg leading-none p-1"
+                >
+                  ×
+                </button>
+              </div>
+
+              <form onSubmit={handleRenameColumnSubmit} className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-semibold text-[#3d4947]">
+                    Column Label
+                  </label>
+                  <input
+                    type="text"
+                    autoFocus
+                    value={renameColumnInput}
+                    onChange={(e) => {
+                      setRenameColumnInput(e.target.value);
+                      setRenameColumnError("");
+                    }}
+                    placeholder="e.g. A, 1, VIP-1"
+                    maxLength={15}
+                    className="w-full bg-[#f9f9ff] border border-[#bcc9c6] rounded-lg p-2.5 text-sm text-[#141b2b] focus:outline-none focus:border-[#00685f]"
+                  />
+                  {renameColumnError && (
+                    <p className="text-xs text-red-600 font-medium mt-0.5">
+                      {renameColumnError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-end gap-2.5 mt-2 pt-3 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingColumn(null);
+                      setRenameColumnError("");
+                    }}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold text-[#3d4947] hover:bg-gray-100 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-lg text-sm font-semibold text-white bg-[#00685f] hover:bg-[#005049] transition-colors shadow-xs cursor-pointer"
+                  >
+                    Save Label
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Remove Column Confirmation Modal */}
+      {columnToRemove && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-6 flex flex-col gap-4">
+              <div className="size-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+                <svg
+                  className="size-6"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  strokeWidth="2"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 1.732z"
+                  />
+                </svg>
+              </div>
+
+              <div className="flex flex-col items-center text-center gap-1">
+                <h3 className="text-lg font-bold text-[#141b2b]">
+                  Remove Column "{columnToRemove.label}"?
+                </h3>
+
+                <p className="text-xs text-[#565e74] max-w-xs mt-1 leading-relaxed">
+                  Removing this column will remove seats along track <strong>{columnToRemove.label}</strong> across all sections ({categories.length} {categories.length === 1 ? "tier" : "tiers"}). This change cannot be undone if seats have active bookings.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-center gap-3 mt-3 pt-3 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setColumnToRemove(null)}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold text-[#3d4947] hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmRemoveColumn}
+                  className="px-5 py-2 rounded-lg text-sm font-semibold text-white bg-[#ba1a1a] hover:bg-red-700 transition-colors shadow-xs cursor-pointer"
+                >
+                  Remove Column
                 </button>
               </div>
             </div>

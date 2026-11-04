@@ -135,6 +135,59 @@ func (r *SeatRepository) CountBookedByLayoutID(layoutID uuid.UUID) (int64, error
 	return count, nil
 }
 
+func (r *SeatRepository) CountBookedOrReservedByColumnID(ctx context.Context, columnID uuid.UUID) (int64, error) {
+	var count int64
+	query := `
+		SELECT COUNT(id)
+		FROM seats
+		WHERE column_id = ? AND status IN (?, ?)
+	`
+	if err := r.db.WithContext(ctx).Raw(query, columnID, domain.SeatStatusBooked, domain.SeatStatusReserved).Scan(&count).Error; err != nil {
+		r.logger.ErrorContext(ctx, "count_booked_seats_by_column_failed",
+			slog.String("column_id", columnID.String()),
+			slog.Any("error", err),
+		)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *SeatRepository) CountBookedOrReservedBySeatIDs(ctx context.Context, seatIDs []uuid.UUID) (int64, error) {
+	if len(seatIDs) == 0 {
+		return 0, nil
+	}
+	var count int64
+	query := `
+		SELECT COUNT(id)
+		FROM seats
+		WHERE id IN ? AND status IN (?, ?)
+	`
+	if err := r.db.WithContext(ctx).Raw(query, seatIDs, domain.SeatStatusBooked, domain.SeatStatusReserved).Scan(&count).Error; err != nil {
+		r.logger.ErrorContext(ctx, "count_booked_seats_by_ids_failed",
+			slog.Int("seat_count", len(seatIDs)),
+			slog.Any("error", err),
+		)
+		return 0, err
+	}
+	return count, nil
+}
+
+func (r *SeatRepository) FindByColumnID(ctx context.Context, columnID uuid.UUID) ([]domain.Seat, error) {
+	var seatModels []models.SeatModel
+	if err := r.db.WithContext(ctx).Where("column_id = ?", columnID).Find(&seatModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "find_seats_by_column_id_failed",
+			slog.String("column_id", columnID.String()),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+	seats := make([]domain.Seat, 0, len(seatModels))
+	for i := range seatModels {
+		seats = append(seats, *toSeatDomain(&seatModels[i]))
+	}
+	return seats, nil
+}
+
 func (r *SeatRepository) FindByRowID(
 	rowID uuid.UUID,
 ) ([]domain.Seat, error) {
@@ -142,7 +195,7 @@ func (r *SeatRepository) FindByRowID(
 
 	if err := r.db.
 		Where("row_id = ?", rowID).
-		Order("seat_number ASC").
+		Order("grid_col ASC, seat_number ASC").
 		Find(&seatModels).Error; err != nil {
 
 		r.logger.Error(
@@ -183,10 +236,13 @@ func (r *SeatRepository) FindByID(seatID uuid.UUID) (*domain.Seat, error) {
 }
 
 type seatDetailRow struct {
-	ID          uuid.UUID `gorm:"column:id"`
-	SeatNumber  int       `gorm:"column:seat_number"`
-	RowName     string    `gorm:"column:row_name"`
-	SectionName string    `gorm:"column:section_name"`
+	ID          uuid.UUID  `gorm:"column:id"`
+	SeatNumber  int        `gorm:"column:seat_number"`
+	ColumnID    *uuid.UUID `gorm:"column:column_id"`
+	GridCol     int        `gorm:"column:grid_col"`
+	ColumnLabel string     `gorm:"column:column_label"`
+	RowName     string     `gorm:"column:row_name"`
+	SectionName string     `gorm:"column:section_name"`
 }
 
 func (r *SeatRepository) FindDetailsBySeatIDs(
@@ -200,10 +256,11 @@ func (r *SeatRepository) FindDetailsBySeatIDs(
 
 	var rows []seatDetailRow
 	query := `
-		SELECT s.id, s.seat_number, sr.row_name, ss.name AS section_name
+		SELECT s.id, s.seat_number, s.column_id, s.grid_col, COALESCE(sc.label, '') AS column_label, sr.row_name, ss.name AS section_name
 		FROM seats s
 		INNER JOIN seat_rows sr ON sr.id = s.row_id
 		INNER JOIN seat_sections ss ON ss.id = sr.section_id
+		LEFT JOIN seat_columns sc ON sc.id = s.column_id
 		WHERE s.id IN ?
 	`
 
@@ -223,6 +280,9 @@ func (r *SeatRepository) FindDetailsBySeatIDs(
 		result[row.ID] = domain.SeatDetail{
 			SeatID:      row.ID,
 			SeatNumber:  row.SeatNumber,
+			ColumnID:    row.ColumnID,
+			GridCol:     row.GridCol,
+			ColumnLabel: row.ColumnLabel,
 			RowName:     row.RowName,
 			SectionName: row.SectionName,
 			Label:       label,
@@ -366,6 +426,8 @@ func toSeatModel(seat *domain.Seat) *models.SeatModel {
 	return &models.SeatModel{
 		ID:         seat.ID,
 		RowID:      seat.RowID,
+		ColumnID:   seat.ColumnID,
+		GridCol:    seat.GridCol,
 		SeatNumber: seat.SeatNumber,
 		Status:     seat.Status,
 		CreatedAt:  seat.CreatedAt,
@@ -376,6 +438,8 @@ func toSeatDomain(seatModel *models.SeatModel) *domain.Seat {
 	return &domain.Seat{
 		ID:         seatModel.ID,
 		RowID:      seatModel.RowID,
+		ColumnID:   seatModel.ColumnID,
+		GridCol:    seatModel.GridCol,
 		SeatNumber: seatModel.SeatNumber,
 		Status:     seatModel.Status,
 		CreatedAt:  seatModel.CreatedAt,

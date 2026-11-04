@@ -363,6 +363,7 @@ export default function SeatSelectionPage() {
   }
 
   const sections = seatLayout.sections || [];
+  const layoutColumns = seatLayout.columns || [];
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f9f9ff] text-[#141b2b]">
@@ -458,6 +459,26 @@ export default function SeatSelectionPage() {
                             </span>
                           </div>
 
+                          {/* Column Headers */}
+                          {layoutColumns.length > 0 && (
+                            <div className="flex items-center justify-center gap-2 sm:gap-2.5 pb-1 mb-1 border-b border-[#f1f5f9]">
+                              <span className="w-6 text-center font-bold text-[10px] sm:text-xs text-[#8b95a5]">
+                                COL
+                              </span>
+                              <div className="flex items-center gap-1.5 sm:gap-2 justify-center">
+                                {layoutColumns.map((col, cIdx) => (
+                                  <span
+                                    key={col.id || cIdx}
+                                    className="w-[36px] sm:w-[40px] text-center font-bold text-[11px] sm:text-xs text-[#565e74] shrink-0"
+                                  >
+                                    {col.label}
+                                  </span>
+                                ))}
+                              </div>
+                              <span className="w-6 shrink-0" />
+                            </div>
+                          )}
+
                           {/* Rows inside section */}
                           <div className="space-y-3">
                             {(section.rows || []).map((row) => (
@@ -470,34 +491,84 @@ export default function SeatSelectionPage() {
                                 </span>
 
                                 <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-center">
-                                  {(row.seats || []).map((seat) => {
-                                    const isSelected = selectedSeats.some((s) => s.id === seat.id);
-                                    const isAvailable = seat.status === "AVAILABLE";
-                                    const isReserved = seat.status === "RESERVED";
-                                    const isBooked = seat.status === "BOOKED";
-                                    const isDisabled = seat.status === "DISABLED";
+                                  {layoutColumns.length > 0 ? (
+                                    layoutColumns.map((col, colIdx) => {
+                                      const seat = (row.seats || []).find(
+                                        (s) =>
+                                          (s.grid_col !== undefined
+                                            ? s.grid_col
+                                            : s.gridCol !== undefined
+                                            ? s.gridCol
+                                            : null) === colIdx
+                                      );
 
-                                    let stateClass = "available";
-                                    if (isSelected) stateClass = "selected";
-                                    else if (isReserved) stateClass = "reserved";
-                                    else if (isBooked) stateClass = "booked";
-                                    else if (isDisabled) stateClass = "disabled";
+                                      if (!seat) {
+                                        return (
+                                          <div
+                                            key={`gap-${row.id}-${col.id || colIdx}`}
+                                            className="w-[36px] h-[36px] sm:w-[40px] sm:h-[40px] shrink-0"
+                                            aria-hidden="true"
+                                          />
+                                        );
+                                      }
 
-                                    return (
-                                      <button
-                                        key={seat.id}
-                                        type="button"
-                                        onClick={() => toggleSeat(seat, row, section)}
-                                        disabled={!isAvailable && !isSelected}
-                                        aria-label={`Seat ${row.row_name}${seat.seat_number} - ₹${section.price} ${stateClass}`}
-                                        aria-pressed={isSelected}
-                                        title={`${section.name} - Row ${row.row_name}, Seat ${seat.seat_number} (₹${section.price})`}
-                                        className={`seat ${stateClass}`}
-                                      >
-                                        {isDisabled ? "×" : seat.seat_number}
-                                      </button>
-                                    );
-                                  })}
+                                      const isSelected = selectedSeats.some((s) => s.id === seat.id);
+                                      const isAvailable = seat.status === "AVAILABLE";
+                                      const isReserved = seat.status === "RESERVED";
+                                      const isBooked = seat.status === "BOOKED";
+                                      const isDisabled = seat.status === "DISABLED";
+
+                                      let stateClass = "available";
+                                      if (isSelected) stateClass = "selected";
+                                      else if (isReserved) stateClass = "reserved";
+                                      else if (isBooked) stateClass = "booked";
+                                      else if (isDisabled) stateClass = "disabled";
+
+                                      return (
+                                        <button
+                                          key={seat.id}
+                                          type="button"
+                                          onClick={() => toggleSeat(seat, row, section)}
+                                          disabled={!isAvailable && !isSelected}
+                                          aria-label={`Seat ${row.row_name}${seat.seat_number} - ₹${section.price} ${stateClass}`}
+                                          aria-pressed={isSelected}
+                                          title={`${section.name} - Row ${row.row_name}, Seat ${seat.seat_number} (₹${section.price})`}
+                                          className={`seat ${stateClass}`}
+                                        >
+                                          {isDisabled ? "×" : seat.seat_number}
+                                        </button>
+                                      );
+                                    })
+                                  ) : (
+                                    (row.seats || []).map((seat) => {
+                                      const isSelected = selectedSeats.some((s) => s.id === seat.id);
+                                      const isAvailable = seat.status === "AVAILABLE";
+                                      const isReserved = seat.status === "RESERVED";
+                                      const isBooked = seat.status === "BOOKED";
+                                      const isDisabled = seat.status === "DISABLED";
+
+                                      let stateClass = "available";
+                                      if (isSelected) stateClass = "selected";
+                                      else if (isReserved) stateClass = "reserved";
+                                      else if (isBooked) stateClass = "booked";
+                                      else if (isDisabled) stateClass = "disabled";
+
+                                      return (
+                                        <button
+                                          key={seat.id}
+                                          type="button"
+                                          onClick={() => toggleSeat(seat, row, section)}
+                                          disabled={!isAvailable && !isSelected}
+                                          aria-label={`Seat ${row.row_name}${seat.seat_number} - ₹${section.price} ${stateClass}`}
+                                          aria-pressed={isSelected}
+                                          title={`${section.name} - Row ${row.row_name}, Seat ${seat.seat_number} (₹${section.price})`}
+                                          className={`seat ${stateClass}`}
+                                        >
+                                          {isDisabled ? "×" : seat.seat_number}
+                                        </button>
+                                      );
+                                    })
+                                  )}
                                 </div>
 
                                 <span className="w-6 text-center font-bold text-xs sm:text-sm text-[#565e74]">
