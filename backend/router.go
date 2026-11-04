@@ -89,6 +89,7 @@ func setupRouter(
 		userRepo,
 	)
 	registerCategoryRoutes(router, categoryHandler)
+	registerPublicPricingRoutes(router, adminPricingTaxHandler)
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService, userRepo)
 	registerCheckoutRoutes(router, checkoutHandler, jwtService, userRepo)
@@ -336,6 +337,18 @@ func registerCategoryRoutes(
 	api.GET(
 		"/categories",
 		categoryHandler.GetCategories,
+	)
+}
+
+func registerPublicPricingRoutes(
+	router *gin.Engine,
+	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
+) {
+	api := router.Group("/api/v1")
+
+	api.GET(
+		"/pricing/active",
+		adminPricingTaxHandler.GetPublicActiveConfiguration,
 	)
 }
 

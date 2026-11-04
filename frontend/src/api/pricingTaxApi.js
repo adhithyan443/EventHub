@@ -31,3 +31,9 @@ export const cancelScheduledPricingTax = async (id, data) => {
   const response = await apiClient.post(`/admin/pricing-tax/scheduled/${id}/cancel`, data);
   return response.data;
 };
+
+// Get public active pricing configuration (customer-safe preview rates)
+export const getPublicActivePricingTax = async () => {
+  const response = await apiClient.get("/pricing/active");
+  return response.data;
+};

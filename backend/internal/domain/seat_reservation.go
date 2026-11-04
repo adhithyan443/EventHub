@@ -33,6 +33,7 @@ type SeatReservation struct {
 	ExpiresAt time.Time
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Items     []SeatReservationItem
 }
 
 type SeatReservationRepository interface {

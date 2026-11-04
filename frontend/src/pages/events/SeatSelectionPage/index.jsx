@@ -4,6 +4,7 @@ import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import OrderPriceSummary from "../components/OrderPriceSummary";
 import { getPublicEventById, getPublicEventSeatLayout } from "../../../api/eventApi";
+import { getPublicActivePricingTax } from "../../../api/pricingTaxApi";
 import {
   createReservation,
   cancelReservation,
@@ -52,6 +53,7 @@ export default function SeatSelectionPage() {
 
   // Array of selected seat objects: { id, seatNumber, rowName, sectionName, price }
   const [selectedSeats, setSelectedSeats] = useState([]);
+  const [pricingConfig, setPricingConfig] = useState(null);
 
   const [isReserving, setIsReserving] = useState(false);
   const [reservationError, setReservationError] = useState(null);
@@ -91,12 +93,17 @@ export default function SeatSelectionPage() {
       }
 
       try {
-        const [eventRes, layoutRes] = await Promise.all([
+        const [eventRes, layoutRes, pricingRes] = await Promise.all([
           getPublicEventById(eventId),
           getPublicEventSeatLayout(eventId),
+          getPublicActivePricingTax().catch(() => null),
         ]);
 
         if (cancelled) return;
+
+        if (pricingRes?.data) {
+          setPricingConfig(pricingRes.data);
+        }
 
         const eventData = eventRes?.data;
         if (!eventData) {
@@ -167,13 +174,52 @@ export default function SeatSelectionPage() {
     });
   };
 
-  // Dynamic pricing calculation based on selected seats and real section prices
+  // Dynamic pricing preview calculation based on selected seats and active backend pricing configuration
   const subtotalNum = selectedSeats.reduce(
     (acc, seat) => acc + (Number(seat.price) || 0),
     0
   );
-  const platformFeeNum = subtotalNum > 0 ? 99 : 0;
-  const taxesNum = Math.round(subtotalNum * 0.06);
+  const paidSubtotalNum = selectedSeats.reduce((acc, seat) => {
+    const p = Number(seat.price) || 0;
+    return p > 0 ? acc + p : acc;
+  }, 0);
+
+  let platformFeeNum = 0;
+  if (
+    pricingConfig?.platform_fee_enabled &&
+    Number(pricingConfig.platform_fee_percent) > 0 &&
+    paidSubtotalNum > 0
+  ) {
+    platformFeeNum =
+      Math.round(
+        (paidSubtotalNum * Number(pricingConfig.platform_fee_percent)) / 100 * 100
+      ) / 100;
+  }
+
+  let taxesNum = 0;
+  if (pricingConfig?.tax_enabled && Number(pricingConfig.tax_percent) > 0) {
+    let taxableBasis = 0;
+    switch (pricingConfig.tax_basis) {
+      case "PLATFORM_FEE_ONLY":
+        taxableBasis = platformFeeNum;
+        break;
+      case "SUBTOTAL_ONLY":
+        taxableBasis = paidSubtotalNum;
+        break;
+      case "TOTAL_BEFORE_TAX":
+        taxableBasis = paidSubtotalNum + platformFeeNum;
+        break;
+      default:
+        taxableBasis = 0;
+    }
+    if (taxableBasis > 0) {
+      taxesNum =
+        Math.round(
+          (taxableBasis * Number(pricingConfig.tax_percent)) / 100 * 100
+        ) / 100;
+    }
+  }
+
   const totalNum = subtotalNum + platformFeeNum + taxesNum;
 
   const pricing = {

@@ -63,6 +63,7 @@ export default function CheckoutPage() {
 
   const navState = getInitialState();
   const reservation = navState.reservation;
+  const selectedTickets = navState.selectedTickets;
   const selectedTicket = navState.selectedTicket;
   const ticketPrice = navState.ticketPrice;
   const quantity = navState.quantity || 1;
@@ -82,13 +83,46 @@ export default function CheckoutPage() {
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [agreedPaymentTerms, setAgreedPaymentTerms] = useState(true);
 
+  // Derive multi-category ticket selections from navState or reservation items
+  const derivedTickets = (() => {
+    if (selectedTickets && Array.isArray(selectedTickets) && selectedTickets.length > 0) {
+      return selectedTickets;
+    }
+    const items = reservation?.Items || reservation?.items;
+    if (Array.isArray(items) && items.length > 0 && (!selectedSeats || selectedSeats.length === 0)) {
+      const map = {};
+      for (const it of items) {
+        const tid = it.TicketTypeID || it.ticket_type_id || it.ticketTypeId;
+        if (!tid) continue;
+        if (!map[tid]) {
+          const tier = (event?.ticket_types || []).find((t) => t.id === tid);
+          map[tid] = {
+            ticketTypeId: tid,
+            name: tier?.name || "General Admission",
+            price: Number(it.Price || it.price || tier?.price || 0),
+            quantity: 0,
+            lineTotal: 0,
+          };
+        }
+        map[tid].quantity += 1;
+        map[tid].lineTotal += Number(it.Price || it.price || map[tid].price || 0);
+      }
+      const list = Object.values(map);
+      if (list.length > 0) return list;
+    }
+    return null;
+  })();
+
   // Checkout snapshot and payment states
   const [checkout, setCheckout] = useState(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(true);
+  const [checkoutError, setCheckoutError] = useState(null);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
   const [isChangingSelection, setIsChangingSelection] = useState(false);
   const changingRef = useRef(false);
+  const initializingCheckoutRef = useRef(false);
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [confirmedPayment, setConfirmedPayment] = useState(null);
 
@@ -200,6 +234,60 @@ export default function CheckoutPage() {
     return () => clearInterval(interval);
   }, [reservation, cacheKey, eventId]);
 
+  // Mount-time checkout snapshot initialization
+  useEffect(() => {
+    const reservationId = reservation?.ID || reservation?.id;
+    if (!reservationId || isExpired) {
+      setCheckoutLoading(false);
+      return;
+    }
+
+    if (initializingCheckoutRef.current) return;
+    initializingCheckoutRef.current = true;
+
+    let cancelled = false;
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+
+    const initCheckout = async () => {
+      try {
+        const response = await createCheckout(reservationId);
+        if (cancelled) return;
+        const checkoutData = response?.data?.checkout;
+        if (!checkoutData) {
+          throw new Error("Invalid checkout response from server");
+        }
+        setCheckout(checkoutData);
+      } catch (err) {
+        if (cancelled) return;
+        const status = err?.response?.status;
+        if (status === 409 || status === 400) {
+          setIsExpired(true);
+          const expMsg =
+            "Your ticket reservation has expired or is no longer valid. Please select tickets again.";
+          setCheckoutError(expMsg);
+          notify.error(expMsg);
+        } else {
+          const errMsg =
+            err?.response?.data?.message ||
+            "Failed to initialize checkout pricing snapshot. Please try again.";
+          setCheckoutError(errMsg);
+        }
+      } finally {
+        if (!cancelled) {
+          setCheckoutLoading(false);
+        }
+        initializingCheckoutRef.current = false;
+      }
+    };
+
+    initCheckout();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [reservation, isExpired]);
+
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -207,10 +295,17 @@ export default function CheckoutPage() {
   };
 
   const handleProceedToPayment = async () => {
-    if (!agreedTerms || isExpired || isCheckingOut) return;
+    if (!agreedTerms || isExpired || isCheckingOut || checkoutLoading) return;
     const reservationId = reservation?.ID || reservation?.id;
     if (!reservationId) {
       setPaymentError("No reservation identifier found. Please select tickets again.");
+      return;
+    }
+
+    // If checkout snapshot is already loaded, proceed directly
+    if (checkout) {
+      setCurrentStep(3);
+      window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
 
@@ -423,6 +518,8 @@ export default function CheckoutPage() {
     ? Number(checkout.Subtotal || checkout.subtotal || 0)
     : selectedSeatObjects && selectedSeatObjects.length > 0
     ? selectedSeatObjects.reduce((acc, s) => acc + (Number(s.price) || 0), 0)
+    : derivedTickets && derivedTickets.length > 0
+    ? derivedTickets.reduce((acc, t) => acc + Number(t.price || 0) * (t.quantity || 1), 0)
     : (ticketPrice != null
         ? Number(ticketPrice)
         : event?.starting_price
@@ -645,6 +742,36 @@ export default function CheckoutPage() {
                         </div>
                       ))}
                     </div>
+                  ) : derivedTickets && derivedTickets.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {derivedTickets.map((t, idx) => {
+                        const tierName = t.name || "Ticket";
+                        const tierQty = t.quantity || 1;
+                        const unitPrice = Number(t.price || 0);
+                        const lineTotal = Number(t.lineTotal || unitPrice * tierQty);
+                        return (
+                          <div
+                            key={t.ticketTypeId || idx}
+                            className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-[#00796d]">▣</span>
+                              <div>
+                                <strong className="block font-medium text-ink">
+                                  {tierName}
+                                </strong>
+                                <span className="text-xs text-[#565e74]">
+                                  Quantity: {tierQty} {tierQty === 1 ? "ticket" : "tickets"} (₹{unitPrice.toLocaleString("en-IN")} each)
+                                </span>
+                              </div>
+                            </div>
+                            <strong className="font-display font-bold text-ink">
+                              ₹{lineTotal.toLocaleString("en-IN")}
+                            </strong>
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <div className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm">
                       <div className="flex items-center gap-2">
@@ -744,13 +871,62 @@ export default function CheckoutPage() {
                     Price Summary
                   </h2>
 
-                  <OrderPriceSummary
-                    subtotal={pricing.subtotal}
-                    platformFee={pricing.platformFee}
-                    taxes={pricing.taxes}
-                    total={pricing.total}
-                    className="mb-6"
-                  />
+                  {checkoutLoading ? (
+                    <div className="space-y-3 py-4 animate-pulse mb-6">
+                      <div className="flex justify-between">
+                        <div className="h-4 bg-slate-200 rounded w-24"></div>
+                        <div className="h-4 bg-slate-200 rounded w-16"></div>
+                      </div>
+                      <div className="flex justify-between">
+                        <div className="h-4 bg-slate-200 rounded w-28"></div>
+                        <div className="h-4 bg-slate-200 rounded w-12"></div>
+                      </div>
+                      <div className="flex justify-between">
+                        <div className="h-4 bg-slate-200 rounded w-20"></div>
+                        <div className="h-4 bg-slate-200 rounded w-12"></div>
+                      </div>
+                      <div className="border-t border-[#bcc9c6] pt-3 flex justify-between">
+                        <div className="h-5 bg-slate-200 rounded w-28"></div>
+                        <div className="h-5 bg-slate-200 rounded w-20"></div>
+                      </div>
+                    </div>
+                  ) : checkoutError ? (
+                    <div className="mb-6 rounded-lg bg-[#ffd8d4] p-3 text-xs sm:text-sm font-medium text-[#a70a18] border border-[#fca5a5]">
+                      <p>{checkoutError}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          initializingCheckoutRef.current = false;
+                          const reservationId = reservation?.ID || reservation?.id;
+                          if (reservationId) {
+                            setCheckoutLoading(true);
+                            setCheckoutError(null);
+                            createCheckout(reservationId)
+                              .then((res) => {
+                                setCheckout(res?.data?.checkout);
+                              })
+                              .catch((err) => {
+                                setCheckoutError(err?.response?.data?.message || "Failed to load pricing.");
+                              })
+                              .finally(() => {
+                                setCheckoutLoading(false);
+                              });
+                          }
+                        }}
+                        className="mt-2 text-xs font-bold text-[#00685f] underline cursor-pointer"
+                      >
+                        Retry pricing calculation
+                      </button>
+                    </div>
+                  ) : (
+                    <OrderPriceSummary
+                      subtotal={pricing.subtotal}
+                      platformFee={pricing.platformFee}
+                      taxes={pricing.taxes}
+                      total={pricing.total}
+                      className="mb-6"
+                    />
+                  )}
 
                   {/* Terms & Conditions Checkbox */}
                   <label className="mb-6 flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-[#565e74]">
@@ -778,10 +954,15 @@ export default function CheckoutPage() {
                   <button
                     type="button"
                     onClick={handleProceedToPayment}
-                    disabled={!agreedTerms || isExpired || isCheckingOut}
+                    disabled={!agreedTerms || isExpired || isCheckingOut || checkoutLoading || !!checkoutError}
                     className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] disabled:cursor-not-allowed disabled:bg-[#9db5b1] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 cursor-pointer flex items-center justify-center gap-2"
                   >
-                    {isCheckingOut ? (
+                    {checkoutLoading ? (
+                      <>
+                        <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Calculating Total...</span>
+                      </>
+                    ) : isCheckingOut ? (
                       <>
                         <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                         <span>Creating Checkout...</span>
@@ -1052,9 +1233,20 @@ export default function CheckoutPage() {
                       <span className="text-[#00796d]">▣</span> {eventDateStr}
                     </p>
                     <div className="mt-4 flex items-center gap-2 flex-wrap">
-                      <span className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white">
-                        {quantity}x {selectedTicket || "General Admission"}
-                      </span>
+                      {derivedTickets && derivedTickets.length > 0 ? (
+                        derivedTickets.map((t, idx) => (
+                          <span
+                            key={t.ticketTypeId || idx}
+                            className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white"
+                          >
+                            {t.quantity}x {t.name || "Ticket"}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white">
+                          {quantity}x {selectedTicket || "General Admission"}
+                        </span>
+                      )}
                       {selectedSeats && selectedSeats.length > 0 && (
                         <span className="text-xs sm:text-sm text-[#565e74]">
                           Seats {selectedSeats.join(", ")}
@@ -1141,6 +1333,22 @@ export default function CheckoutPage() {
                         </span>
                         <strong className="font-bold text-ink">
                           ₹{Number(seat.price || 0).toLocaleString("en-IN")}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                ) : derivedTickets && derivedTickets.length > 0 ? (
+                  <div className="space-y-2">
+                    {derivedTickets.map((t, idx) => (
+                      <div
+                        key={t.ticketTypeId || idx}
+                        className="flex items-center justify-between rounded-lg bg-[#f9f9ff] border border-[#bcc9c6]/50 px-3.5 py-2.5 text-xs sm:text-sm"
+                      >
+                        <span className="text-ink font-medium">
+                          {t.quantity}x {t.name || "Ticket"}
+                        </span>
+                        <strong className="font-bold text-ink">
+                          ₹{Number(t.lineTotal || (t.price * t.quantity)).toLocaleString("en-IN")}
                         </strong>
                       </div>
                     ))}

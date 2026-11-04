@@ -29,19 +29,36 @@ func NewReservationUsecase(
 	}
 }
 
+type TicketSelection struct {
+	TicketTypeID uuid.UUID
+	Quantity     int
+}
+
 type CreateReservationRequest struct {
 	UserID       uuid.UUID
 	EventID      uuid.UUID
 	SeatIDs      []uuid.UUID
 	TicketTypeID *uuid.UUID
 	Quantity     int
+	Tickets      []TicketSelection
+}
+
+func normalizeTickets(req *CreateReservationRequest) {
+	if len(req.Tickets) == 0 && req.TicketTypeID != nil && req.Quantity > 0 {
+		req.Tickets = []TicketSelection{
+			{
+				TicketTypeID: *req.TicketTypeID,
+				Quantity:     req.Quantity,
+			},
+		}
+	}
 }
 
 func (u *ReservationUsecase) CreateReservation(
 	ctx context.Context,
 	req CreateReservationRequest,
 ) (*domain.SeatReservation, error) {
-	if err := validateReservationRequest(req); err != nil {
+	if err := validateReservationRequest(&req); err != nil {
 		u.logger.WarnContext(ctx, "invalid reservation request",
 			slog.String("user_id", req.UserID.String()),
 			slog.String("event_id", req.EventID.String()),
@@ -78,9 +95,13 @@ func (u *ReservationUsecase) CreateReservation(
 				return err
 			}
 
-			requestedQuantity := req.Quantity
+			requestedQuantity := 0
 			if len(req.SeatIDs) > 0 {
 				requestedQuantity = len(req.SeatIDs)
+			} else {
+				for _, t := range req.Tickets {
+					requestedQuantity += t.Quantity
+				}
 			}
 
 			if requestedQuantity > setting.BookingLimitPerUser {
@@ -136,6 +157,8 @@ func (u *ReservationUsecase) CreateReservation(
 				return err
 			}
 
+			var createdItems []domain.SeatReservationItem
+
 			if hasSeats {
 				layout, err := tx.SeatLayoutRepository().FindByEventID(
 					req.EventID,
@@ -189,45 +212,52 @@ func (u *ReservationUsecase) CreateReservation(
 					); err != nil {
 						return err
 					}
+
+					createdItems = append(createdItems, *item)
 				}
 			} else {
-				ticketType, err := tx.TicketTypeRepository().FindByID(
-					ctx,
-					*req.TicketTypeID,
-				)
-				if err != nil {
-					return err
-				}
+				for _, t := range req.Tickets {
+					ticketType, err := tx.TicketTypeRepository().FindByID(
+						ctx,
+						t.TicketTypeID,
+					)
+					if err != nil {
+						return err
+					}
 
-				if ticketType.EventID != req.EventID {
-					return domain.ErrTicketTypeEventMismatch
-				}
+					if ticketType.EventID != req.EventID {
+						return domain.ErrTicketTypeEventMismatch
+					}
 
-				if err := tx.TicketTypeRepository().ReserveQuantityIfAvailable(
-					ctx,
-					ticketType.ID,
-					req.Quantity,
-				); err != nil {
-					return err
-				}
+					if err := tx.TicketTypeRepository().ReserveQuantityIfAvailable(
+						ctx,
+						ticketType.ID,
+						t.Quantity,
+					); err != nil {
+						return err
+					}
 
-				ticketTypeID := ticketType.ID
-				item := &domain.SeatReservationItem{
-					ID:            uuid.New(),
-					ReservationID: reservation.ID,
-					TicketTypeID:  &ticketTypeID,
-					Quantity:      req.Quantity,
-					Price:         ticketType.Price,
-					CreatedAt:     now,
-				}
+					ticketTypeID := ticketType.ID
+					item := &domain.SeatReservationItem{
+						ID:            uuid.New(),
+						ReservationID: reservation.ID,
+						TicketTypeID:  &ticketTypeID,
+						Quantity:      t.Quantity,
+						Price:         ticketType.Price,
+						CreatedAt:     now,
+					}
 
-				if err := tx.SeatReservationRepository().CreateItem(
-					ctx, item,
-				); err != nil {
-					return err
+					if err := tx.SeatReservationRepository().CreateItem(
+						ctx, item,
+					); err != nil {
+						return err
+					}
+
+					createdItems = append(createdItems, *item)
 				}
 			}
 
+			reservation.Items = createdItems
 			return nil
 		},
 	)
@@ -359,6 +389,11 @@ func (u *ReservationUsecase) CancelReservation(
 				return domain.ErrSeatReservationNotFound
 			}
 
+			if _, err := tx.CheckoutRepository().
+				ExpireActiveByReservationID(ctx, reservationID); err != nil {
+				return err
+			}
+
 			items, err := tx.SeatReservationRepository().
 				FindItemsByReservationID(ctx, reservationID)
 			if err != nil {
@@ -464,20 +499,13 @@ func (u *ReservationUsecase) ProcessExpiredReservations(
 	return firstErr
 }
 
-func validateReservationRequest(req CreateReservationRequest) error {
+func validateReservationRequest(req *CreateReservationRequest) error {
+	normalizeTickets(req)
 
 	hasSeats := len(req.SeatIDs) > 0
-	hasTicketType := req.TicketTypeID != nil
+	hasTickets := len(req.Tickets) > 0
 
-	if hasSeats == hasTicketType {
-		return domain.ErrInvalidReservationRequest
-	}
-
-	if hasTicketType && req.Quantity <= 0 {
-		return domain.ErrInvalidReservationRequest
-	}
-
-	if hasSeats && req.Quantity != 0 {
+	if hasSeats == hasTickets {
 		return domain.ErrInvalidReservationRequest
 	}
 
@@ -485,21 +513,38 @@ func validateReservationRequest(req CreateReservationRequest) error {
 		return domain.ErrInvalidReservationRequest
 	}
 
-	seen := make(map[uuid.UUID]struct{}, len(req.SeatIDs))
-	for _, seatID := range req.SeatIDs {
-		if seatID == uuid.Nil {
+	if hasSeats {
+		if req.Quantity != 0 {
 			return domain.ErrInvalidReservationRequest
 		}
 
-		if _, exists := seen[seatID]; exists {
-			return domain.ErrInvalidReservationRequest
-		}
+		seen := make(map[uuid.UUID]struct{}, len(req.SeatIDs))
+		for _, seatID := range req.SeatIDs {
+			if seatID == uuid.Nil {
+				return domain.ErrInvalidReservationRequest
+			}
 
-		seen[seatID] = struct{}{}
+			if _, exists := seen[seatID]; exists {
+				return domain.ErrInvalidReservationRequest
+			}
+
+			seen[seatID] = struct{}{}
+		}
 	}
 
-	if hasTicketType && *req.TicketTypeID == uuid.Nil {
-		return domain.ErrInvalidReservationRequest
+	if hasTickets {
+		seen := make(map[uuid.UUID]struct{}, len(req.Tickets))
+		for _, t := range req.Tickets {
+			if t.TicketTypeID == uuid.Nil || t.Quantity <= 0 {
+				return domain.ErrInvalidReservationRequest
+			}
+
+			if _, exists := seen[t.TicketTypeID]; exists {
+				return domain.ErrInvalidReservationRequest
+			}
+
+			seen[t.TicketTypeID] = struct{}{}
+		}
 	}
 
 	return nil
