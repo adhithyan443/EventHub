@@ -1517,11 +1517,11 @@ type EventDetailsTicketType struct {
 }
 
 type EventDetailsSeatLayout struct {
-	ID         uuid.UUID
-	EventID    uuid.UUID
-	LayoutName string
-	Columns    []EventDetailsSeatColumn
-	Sections   []EventDetailsSeatSection
+	ID         uuid.UUID                 `json:"id"`
+	EventID    uuid.UUID                 `json:"event_id"`
+	LayoutName string                    `json:"layout_name"`
+	Columns    []EventDetailsSeatColumn  `json:"columns"`
+	Sections   []EventDetailsSeatSection `json:"sections"`
 }
 
 type EventDetailsSeatColumn struct {
@@ -1531,16 +1531,16 @@ type EventDetailsSeatColumn struct {
 }
 
 type EventDetailsSeatSection struct {
-	ID    uuid.UUID
-	Name  string
-	Price decimal.Decimal
-	Rows  []EventDetailsSeatRow
+	ID    uuid.UUID             `json:"id"`
+	Name  string                `json:"name"`
+	Price decimal.Decimal       `json:"price"`
+	Rows  []EventDetailsSeatRow `json:"rows"`
 }
 
 type EventDetailsSeatRow struct {
-	ID      uuid.UUID
-	RowName string
-	Seats   []EventDetailsSeat
+	ID      uuid.UUID          `json:"id"`
+	RowName string             `json:"row_name"`
+	Seats   []EventDetailsSeat `json:"seats"`
 }
 
 type EventDetailsSeat struct {

@@ -1446,11 +1446,17 @@ const useEventCreationStore = create((set, get) => ({
     );
     const seatsPerRow = columns.length;
 
+    const isNumericLabels =
+      columns.length > 0 &&
+      columns.every((c) => /^\d+$/.test(String(c.label || "").trim()));
+    const inferredLabelType = isNumericLabels ? "NUMERIC" : "ALPHA";
+
     set((state) => ({
       seatingConfiguration: {
         ...state.seatingConfiguration,
         layoutName,
         columns,
+        columnLabelType: inferredLabelType,
         categories,
         sections: categories,
         rows: allRows,
@@ -1514,9 +1520,11 @@ const useEventCreationStore = create((set, get) => ({
         })).sort((a, b) => (a.order_index ?? 0) - (b.order_index ?? 0));
       }
 
+      const rawSections = seatLayout.Sections || seatLayout.sections || [];
+
       if (columns.length === 0) {
         let maxCols = 8;
-        seatLayout.Sections.forEach((sec) => {
+        rawSections.forEach((sec) => {
           (sec.Rows || sec.rows || []).forEach((r) => {
             const seats = r.Seats || r.seats || [];
             if (seats.length > maxCols) maxCols = seats.length;
@@ -1525,21 +1533,25 @@ const useEventCreationStore = create((set, get) => ({
         columns = generateDefaultColumns(maxCols, "ALPHA");
       }
 
-      const categories = seatLayout.Sections.map((sec, idx) => {
-        const rawPrice = sec.Price ?? 0;
+      const categories = rawSections.map((sec, idx) => {
+        const secId = sec.ID || sec.id;
+        const secName = sec.Name || sec.name || "";
+        const rawPrice = sec.Price ?? sec.price ?? 0;
         const formattedPrice =
           typeof rawPrice === "string" && rawPrice.startsWith("₹")
             ? rawPrice
             : `₹${rawPrice}`;
 
         return {
-          id: sec.ID,
-          name: sec.Name || "",
-          tier: sec.Name || "Standard",
+          id: secId,
+          name: secName,
+          tier: secName || "Standard",
           price: formattedPrice,
           color: colors[idx % colors.length],
-          rows: (sec.Rows || []).map((row) => {
+          rows: (sec.Rows || sec.rows || []).map((row) => {
             const rawSeats = row.Seats || row.seats || [];
+            const rowId = row.ID || row.id;
+            const rowLetter = row.RowName || row.row_name || row.rowLetter || "";
             const seatByGridCol = new Map();
             rawSeats.forEach((s, sIdx) => {
               const cId = s.ColumnID || s.column_id || s.columnId;
@@ -1574,24 +1586,24 @@ const useEventCreationStore = create((set, get) => ({
                     "DISABLED"
                       ? "disabled"
                       : "available",
-                  categoryId: sec.ID,
+                  categoryId: secId,
                 };
               }
               return {
-                id: `gap-${row.ID || row.id}-${colIdx}`,
+                id: `gap-${rowId}-${colIdx}`,
                 number: colIdx + 1,
                 columnId: col.id,
                 gridCol: col.order_index ?? colIdx,
                 columnLabel: col.label,
                 status: "gap",
-                categoryId: sec.ID,
+                categoryId: secId,
               };
             });
 
             return {
-              id: row.ID,
-              name: `Row ${row.RowName}`,
-              rowLetter: row.RowName,
+              id: rowId,
+              name: `Row ${rowLetter}`,
+              rowLetter: rowLetter,
               seats: alignedSeats,
             };
           }),
@@ -1604,10 +1616,16 @@ const useEventCreationStore = create((set, get) => ({
         0
       );
 
+      const isNumericLabels =
+        columns.length > 0 &&
+        columns.every((c) => /^\d+$/.test(String(c.label || "").trim()));
+      const inferredLabelType = isNumericLabels ? "NUMERIC" : "ALPHA";
+
       seatingConfig = {
-        layoutName: seatLayout.LayoutName || "Main Seating Layout",
+        layoutName:
+          seatLayout.LayoutName || seatLayout.layout_name || "Main Seating Layout",
         columns,
-        columnLabelType: "ALPHA",
+        columnLabelType: inferredLabelType,
         categories,
         sections: categories,
         rows: allRows,

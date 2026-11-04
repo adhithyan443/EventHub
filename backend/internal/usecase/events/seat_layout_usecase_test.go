@@ -61,7 +61,8 @@ func (m *mockSLOrganizerRepo) FindByUserID(userID uuid.UUID) (*domain.Organizer,
 
 type mockSLEventRepo struct {
 	domain.EventRepository
-	event *domain.Event
+	event                   *domain.Event
+	findByIDForUpdateCalled bool
 }
 
 func (m *mockSLEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
@@ -72,6 +73,7 @@ func (m *mockSLEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
 }
 
 func (m *mockSLEventRepo) FindByIDForUpdate(id uuid.UUID) (*domain.Event, error) {
+	m.findByIDForUpdateCalled = true
 	return m.FindByID(id)
 }
 
@@ -272,6 +274,7 @@ type mockSLSeatRepo struct {
 	seats                     map[uuid.UUID]domain.Seat
 	bookedOrReservedSeatIDs   map[uuid.UUID]bool
 	bookedOrReservedColumnIDs map[uuid.UUID]bool
+	bookedCountByLayoutID     int64
 }
 
 func (m *mockSLSeatRepo) Create(seat *domain.Seat) error {
@@ -314,7 +317,7 @@ func (m *mockSLSeatRepo) FindByColumnID(ctx context.Context, colID uuid.UUID) ([
 	return list, nil
 }
 func (m *mockSLSeatRepo) CountBookedByLayoutID(layoutID uuid.UUID) (int64, error) {
-	return 0, nil
+	return m.bookedCountByLayoutID, nil
 }
 func (m *mockSLSeatRepo) CountBookedOrReservedByColumnID(ctx context.Context, columnID uuid.UUID) (int64, error) {
 	if m.bookedOrReservedColumnIDs != nil && m.bookedOrReservedColumnIDs[columnID] {
@@ -748,4 +751,906 @@ func TestUpdateSeatLayout_RejectRemovalOfBookedSeat(t *testing.T) {
 	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrSeatLayoutBookedSeatCannotBeRemoved)
+}
+
+func TestCreateSeatLayout_RejectDuplicateGridColZero(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	input := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 0, SeatNumber: 2}, // Duplicate GridCol 0
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := usecase.CreateSeatLayout(input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidSeatRow)
+}
+
+func TestCreateSeatLayout_RejectNegativeGridCol(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+
+	input := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   1,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: -1, SeatNumber: 1}, // Negative GridCol
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := usecase.CreateSeatLayout(input)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidSeatRow)
+}
+
+func TestUpdateSeatLayout_RejectDuplicateGridColZero(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, GridCol: 0, SeatNumber: 2}, // Duplicate GridCol 0
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidSeatRow)
+}
+
+func TestUpdateSeatLayout_RejectNegativeGridCol(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   1,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   1,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: -1, SeatNumber: 1}, // Negative
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidSeatRow)
+}
+
+func TestUpdateSeatLayout_RejectColumnReorderingWhenBookingsExist(t *testing.T) {
+	usecase, txRepos, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Simulate that bookings exist on this layout
+	mockSeats := txRepos.seatRepo.(*mockSLSeatRepo)
+	mockSeats.bookedCountByLayoutID = 2
+
+	// Organizer attempts to reorder columns (swap OrderIndex: Col A -> 1, Col B -> 0)
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 1},
+			{ID: &col2ID, Label: "B", OrderIndex: 0},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSeatLayoutStructuralChangesNotAllowed)
+}
+
+func TestUpdateSeatLayout_AllowColumnLabelRenameWhenBookingsExist(t *testing.T) {
+	usecase, txRepos, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Simulate that bookings exist on this layout
+	mockSeats := txRepos.seatRepo.(*mockSLSeatRepo)
+	mockSeats.bookedCountByLayoutID = 2
+
+	// Organizer renames column label only (Col A -> "Alpha"), preserving ID and OrderIndex
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "Alpha", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	output, err := usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.NoError(t, err)
+	assert.Equal(t, "Alpha", output.Columns[0].Label)
+}
+
+func TestUpdateSeatLayout_PreserveGridColZero(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	output, err := usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.NoError(t, err)
+	require.Len(t, output.Seats, 2)
+
+	// Verify Seat 1 preserves GridCol 0 and is not overwritten with SeatNumber (1)
+	assert.Equal(t, 0, output.Seats[0].GridCol)
+	assert.Equal(t, 1, output.Seats[0].SeatNumber)
+
+	// Verify Seat 2 preserves GridCol 1
+	assert.Equal(t, 1, output.Seats[1].GridCol)
+	assert.Equal(t, 2, output.Seats[1].SeatNumber)
+}
+
+func TestUpdateSeatLayout_AdjacentSeatsRetainDistinctZeroAndOne(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Update existing seats and verify they do not collapse into the same column
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	output, err := usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.NoError(t, err)
+	require.Len(t, output.Seats, 2)
+
+	assert.NotEqual(t, output.Seats[0].GridCol, output.Seats[1].GridCol, "Adjacent seats must have distinct GridCol positions")
+	assert.Equal(t, 0, output.Seats[0].GridCol)
+	assert.Equal(t, 1, output.Seats[1].GridCol)
+}
+
+func TestUpdateSeatLayout_MissingGridColBehavior(t *testing.T) {
+	usecase, _, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Scenario 1: Multiple seats in row with missing/omitted GridCol (both default to 0 in Go)
+	// Must be rejected because two seats cannot occupy the same column 0
+	multiSeatMissingColInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, SeatNumber: 1}, // GridCol omitted (defaults to 0)
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, SeatNumber: 2}, // GridCol omitted (defaults to 0)
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err = usecase.UpdateSeatLayout(context.Background(), multiSeatMissingColInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrInvalidSeatRow)
+
+	// Scenario 2: Single seat in row with missing/omitted GridCol (defaults to 0)
+	// Succeeds and takes valid column 0
+	singleSeatMissingColInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   1,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, SeatNumber: 1}, // GridCol omitted -> defaults to 0
+						},
+					},
+				},
+			},
+		},
+	}
+	output, err := usecase.UpdateSeatLayout(context.Background(), singleSeatMissingColInput)
+	require.NoError(t, err)
+	require.Len(t, output.Seats, 1)
+	assert.Equal(t, 0, output.Seats[0].GridCol)
+}
+
+func TestUpdateSeatLayout_AcquiresEventLockForUpdate(t *testing.T) {
+	usecase, txRepos, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   1,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Reset event repo lock flag
+	eventRepo := txRepos.eventRepo.(*mockSLEventRepo)
+	eventRepo.findByIDForUpdateCalled = false
+
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "General",
+				Price: decimal.NewFromInt(50),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   1,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.NoError(t, err)
+
+	// Verify FindByIDForUpdate was explicitly called to acquire the row-level lock
+	assert.True(t, eventRepo.findByIDForUpdateCalled, "UpdateSeatLayout must acquire exclusive event row lock with FindByIDForUpdate")
+}
+
+func TestUpdateSeatLayout_RejectColumnReplacementWhenBookingsExist(t *testing.T) {
+	usecase, txRepos, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Simulate that bookings exist on this layout
+	mockSeats := txRepos.seatRepo.(*mockSLSeatRepo)
+	mockSeats.bookedCountByLayoutID = 1
+
+	// Organizer attempts to replace Col 2 with a brand new column ID (same total count = 2)
+	newCol2ID := uuid.New()
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &newCol2ID, Label: "B-New", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &newCol2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSeatLayoutStructuralChangesNotAllowed)
+
+	// Verify no destructive repository operations occurred
+	colRepo := txRepos.seatColumnRepo.(*mockSLSeatColumnRepo)
+	assert.Len(t, colRepo.columns, 2, "Column count in repo must remain intact")
+	_, existsOldCol := colRepo.columns[col2ID]
+	assert.True(t, existsOldCol, "Original column must not be deleted")
+	_, existsNewCol := colRepo.columns[newCol2ID]
+	assert.False(t, existsNewCol, "Replaced column must not be created")
+}
+
+func TestUpdateSeatLayout_RejectBookedSeatGridColChange(t *testing.T) {
+	usecase, txRepos, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+	col3ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+			{ID: &col3ID, Label: "C", OrderIndex: 2},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Simulate that bookings exist on this layout
+	mockSeats := txRepos.seatRepo.(*mockSLSeatRepo)
+	mockSeats.bookedCountByLayoutID = 1
+
+	// Organizer attempts to shift Seat 2's GridCol from 1 to 2
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+			{ID: &col3ID, Label: "C", OrderIndex: 2},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col3ID, GridCol: 2, SeatNumber: 2}, // Shifted GridCol 1 -> 2
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSeatLayoutStructuralChangesNotAllowed)
+
+	// Verify no destructive repository operations occurred on seats
+	seat1, err1 := txRepos.seatRepo.FindByID(createOutput.Seats[0].ID)
+	require.NoError(t, err1)
+	assert.Equal(t, 0, seat1.GridCol, "Seat 1 position must be preserved")
+
+	seat2, err2 := txRepos.seatRepo.FindByID(createOutput.Seats[1].ID)
+	require.NoError(t, err2)
+	assert.Equal(t, 1, seat2.GridCol, "Seat 2 position must be preserved at original GridCol 1")
+}
+
+func TestUpdateSeatLayout_RejectBookedSeatColumnIDReassignment(t *testing.T) {
+	usecase, txRepos, userID, eventID := setupSeatLayoutUsecaseTest()
+
+	col1ID := uuid.New()
+	col2ID := uuid.New()
+
+	createInput := CreateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []SeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []SeatSectionInput{
+			{
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []SeatRowInput{
+					{
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []SeatItemInput{
+							{ColumnID: &col1ID, GridCol: 0, SeatNumber: 1},
+							{ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+	createOutput, err := usecase.CreateSeatLayout(createInput)
+	require.NoError(t, err)
+
+	// Simulate that bookings exist on this layout
+	mockSeats := txRepos.seatRepo.(*mockSLSeatRepo)
+	mockSeats.bookedCountByLayoutID = 1
+
+	// Organizer attempts to reassign Seat 1's ColumnID from col1ID to col2ID (or nil)
+	updateInput := UpdateSeatLayoutInput{
+		UserID:     userID,
+		EventID:    eventID,
+		LayoutName: "Main Hall",
+		Columns: []UpdateSeatColumnInput{
+			{ID: &col1ID, Label: "A", OrderIndex: 0},
+			{ID: &col2ID, Label: "B", OrderIndex: 1},
+		},
+		Sections: []UpdateSeatSectionInput{
+			{
+				ID:    &createOutput.Sections[0].ID,
+				Name:  "VIP",
+				Price: decimal.NewFromInt(100),
+				Rows: []UpdateSeatRowInput{
+					{
+						ID:      &createOutput.Rows[0].ID,
+						RowName: "A",
+						Seats:   2,
+						SeatItems: []UpdateSeatItemInput{
+							{ID: &createOutput.Seats[0].ID, ColumnID: &col2ID, GridCol: 0, SeatNumber: 1}, // ColumnID reassigned col1ID -> col2ID
+							{ID: &createOutput.Seats[1].ID, ColumnID: &col2ID, GridCol: 1, SeatNumber: 2},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	_, err = usecase.UpdateSeatLayout(context.Background(), updateInput)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSeatLayoutStructuralChangesNotAllowed)
+
+	// Verify no destructive repository operations occurred on seats
+	seat1, err1 := txRepos.seatRepo.FindByID(createOutput.Seats[0].ID)
+	require.NoError(t, err1)
+	require.NotNil(t, seat1.ColumnID)
+	assert.Equal(t, col1ID, *seat1.ColumnID, "Seat 1 column assignment must remain intact")
 }

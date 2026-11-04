@@ -57,7 +57,7 @@ export default function CreateEventReviewPublishPage() {
   const eventDetails = useEventCreationStore((state) => state.eventDetails);
   const ticketMode = useEventCreationStore((state) => state.ticketMode);
   const ticketTypes = useEventCreationStore((state) => state.ticketTypes);
-  const seatingConfig = useEventCreationStore((state) => state.seatingConfig);
+  const seatingConfig = useEventCreationStore((state) => state.seatingConfiguration);
   const ticketSalesSettings = useEventCreationStore((state) => state.ticketSalesSettings);
   const resetForm = useEventCreationStore((state) => state.resetForm);
   const isEditMode = useEventCreationStore((state) => state.isEditMode);

@@ -10,7 +10,7 @@ type SeatModel struct {
 	ID         uuid.UUID  `gorm:"type:uuid;primaryKey"`
 	RowID      uuid.UUID  `gorm:"type:uuid;not null;index;uniqueIndex:idx_row_seat"`
 	ColumnID   *uuid.UUID `gorm:"type:uuid;index"`
-	GridCol    int        `gorm:"not null;default:1"`
+	GridCol    int        `gorm:"not null"`
 	SeatNumber int        `gorm:"not null;uniqueIndex:idx_row_seat"`
 
 	Status string `gorm:"type:varchar(20);not null;index"`

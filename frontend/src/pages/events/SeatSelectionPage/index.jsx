@@ -362,8 +362,15 @@ export default function SeatSelectionPage() {
     );
   }
 
-  const sections = seatLayout.sections || [];
-  const layoutColumns = seatLayout.columns || [];
+  const sections = seatLayout.sections || seatLayout.Sections || [];
+  const rawCols = seatLayout.columns || seatLayout.Columns || [];
+  const layoutColumns = Array.isArray(rawCols)
+    ? [...rawCols].sort(
+        (a, b) =>
+          Number(a.order_index ?? a.OrderIndex ?? 0) -
+          Number(b.order_index ?? b.OrderIndex ?? 0)
+      )
+    : [];
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f9f9ff] text-[#141b2b]">
@@ -435,7 +442,7 @@ export default function SeatSelectionPage() {
             {/* Responsive Seat Map Card */}
             <section className="rounded-xl border border-[#bcc9c6] bg-white p-4 sm:p-6 lg:p-8 shadow-xs overflow-hidden">
               <div className="overflow-x-auto pb-4">
-                <div className="mx-auto min-w-[560px] max-w-[720px]">
+                <div className="mx-auto min-w-fit px-2">
                   {/* STAGE Graphic */}
                   <div className="mx-auto mb-8 w-[72%] rounded-b-[38px] border border-[#bcc9c6] bg-[#dce2f7] py-4 sm:py-5 text-center text-xl sm:text-2xl font-bold tracking-[.28em] text-[#565e74] shadow-xs">
                     STAGE
@@ -465,7 +472,7 @@ export default function SeatSelectionPage() {
                               <span className="w-6 text-center font-bold text-[10px] sm:text-xs text-[#8b95a5]">
                                 COL
                               </span>
-                              <div className="flex items-center gap-1.5 sm:gap-2 justify-center">
+                              <div className="flex items-center gap-1.5 sm:gap-2 flex-nowrap justify-center">
                                 {layoutColumns.map((col, cIdx) => (
                                   <span
                                     key={col.id || cIdx}
@@ -490,7 +497,7 @@ export default function SeatSelectionPage() {
                                   {row.row_name}
                                 </span>
 
-                                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-center">
+                                <div className="flex items-center gap-1.5 sm:gap-2 flex-nowrap justify-center">
                                   {layoutColumns.length > 0 ? (
                                     layoutColumns.map((col, colIdx) => {
                                       const seat = (row.seats || []).find(

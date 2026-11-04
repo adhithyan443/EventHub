@@ -16,7 +16,7 @@ CREATE INDEX idx_seat_columns_seat_layout_id ON seat_columns(seat_layout_id);
 
 ALTER TABLE seats
     ADD COLUMN column_id UUID NULL REFERENCES seat_columns(id) ON DELETE SET NULL,
-    ADD COLUMN grid_col INTEGER NOT NULL DEFAULT 1;
+    ADD COLUMN grid_col INTEGER NOT NULL DEFAULT 0;
 
 CREATE INDEX idx_seats_column_id ON seats(column_id);
 
@@ -37,12 +37,12 @@ BEGIN
         WHERE ss.seat_layout_id = layout_rec.id;
 
         IF max_seats > 0 THEN
-            FOR col_idx IN 1..max_seats LOOP
+            FOR col_idx IN 0..(max_seats - 1) LOOP
                 new_col_id := gen_random_uuid();
-                IF col_idx <= 26 THEN
-                    col_label := CHR(64 + col_idx);
+                IF col_idx < 26 THEN
+                    col_label := CHR(65 + col_idx);
                 ELSE
-                    col_label := 'C' || col_idx;
+                    col_label := 'C' || (col_idx + 1);
                 END IF;
 
                 INSERT INTO seat_columns (id, seat_layout_id, label, order_index)
@@ -54,7 +54,7 @@ BEGIN
                 JOIN seat_sections ss ON ss.id = sr.section_id
                 WHERE s.row_id = sr.id
                   AND ss.seat_layout_id = layout_rec.id
-                  AND s.seat_number = col_idx;
+                  AND s.seat_number = (col_idx + 1);
             END LOOP;
         END IF;
     END LOOP;

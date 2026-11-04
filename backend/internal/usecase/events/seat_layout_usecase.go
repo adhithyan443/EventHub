@@ -196,7 +196,7 @@ func (u *SeatLayoutUsecase) CreateSeatLayout(
 			}
 
 			// Find the event.
-			event, err := repos.EventRepository().FindByID(input.EventID)
+			event, err := repos.EventRepository().FindByIDForUpdate(input.EventID)
 			if err != nil {
 				return err
 			}
@@ -567,12 +567,13 @@ func validateSeatLayoutStructure(
 						return ErrInvalidSeatRow
 					}
 					seenNumbers[item.SeatNumber] = true
-					if item.GridCol > 0 {
-						if seenCols[item.GridCol] {
-							return ErrInvalidSeatRow
-						}
-						seenCols[item.GridCol] = true
+					if item.GridCol < 0 {
+						return ErrInvalidSeatRow
 					}
+					if seenCols[item.GridCol] {
+						return ErrInvalidSeatRow
+					}
+					seenCols[item.GridCol] = true
 				}
 			} else if row.Seats <= 0 {
 				return ErrInvalidSeatRow
@@ -647,7 +648,7 @@ func (u *SeatLayoutUsecase) UpdateSeatLayout(
 				return ErrUnauthorizedOrganizer
 			}
 
-			event, err := repos.EventRepository().FindByID(input.EventID)
+			event, err := repos.EventRepository().FindByIDForUpdate(input.EventID)
 			if err != nil {
 				return err
 			}
@@ -1122,9 +1123,6 @@ func (u *SeatLayoutUsecase) UpdateSeatLayout(
 							}
 
 							gridCol := seatItem.GridCol
-							if gridCol <= 0 {
-								gridCol = seatItem.SeatNumber
-							}
 
 							var colID *uuid.UUID
 							if seatItem.ColumnID != nil {
@@ -1318,12 +1316,13 @@ func validateUpdateSeatLayoutInput(input UpdateSeatLayoutInput) error {
 					}
 					seenSeatNumbers[seat.SeatNumber] = true
 
-					if seat.GridCol > 0 {
-						if seenGridCols[seat.GridCol] {
-							return ErrInvalidSeatRow
-						}
-						seenGridCols[seat.GridCol] = true
+					if seat.GridCol < 0 {
+						return ErrInvalidSeatRow
 					}
+					if seenGridCols[seat.GridCol] {
+						return ErrInvalidSeatRow
+					}
+					seenGridCols[seat.GridCol] = true
 
 					if seat.ID != nil {
 						if *seat.ID == uuid.Nil || seenSeatIDs[*seat.ID] {
@@ -1398,9 +1397,27 @@ func isStructuralChange(
 	existingColumns []domain.SeatColumn,
 	input UpdateSeatLayoutInput,
 ) bool {
+	if len(input.Columns) != len(existingColumns) {
+		return true
+	}
+
 	if len(input.Columns) > 0 && len(existingColumns) > 0 {
-		if len(input.Columns) != len(existingColumns) {
-			return true
+		existingColMap := make(map[uuid.UUID]domain.SeatColumn)
+		for _, col := range existingColumns {
+			existingColMap[col.ID] = col
+		}
+
+		for _, colInput := range input.Columns {
+			if colInput.ID == nil {
+				return true
+			}
+			existingCol, ok := existingColMap[*colInput.ID]
+			if !ok {
+				return true
+			}
+			if colInput.OrderIndex != existingCol.OrderIndex {
+				return true
+			}
 		}
 	}
 
@@ -1476,6 +1493,44 @@ func isStructuralChange(
 			}
 			if len(existingSeats) != expectedSeatCount {
 				return true
+			}
+
+			if len(rowInput.SeatItems) > 0 {
+				existingSeatByID := make(map[uuid.UUID]domain.Seat)
+				existingSeatByNumber := make(map[int]domain.Seat)
+				for _, s := range existingSeats {
+					existingSeatByID[s.ID] = s
+					existingSeatByNumber[s.SeatNumber] = s
+				}
+
+				for _, seatInput := range rowInput.SeatItems {
+					var existingSeat *domain.Seat
+					if seatInput.ID != nil {
+						if s, ok := existingSeatByID[*seatInput.ID]; ok {
+							existingSeat = &s
+						}
+					} else {
+						if s, ok := existingSeatByNumber[seatInput.SeatNumber]; ok {
+							existingSeat = &s
+						}
+					}
+
+					if existingSeat == nil {
+						return true
+					}
+
+					if seatInput.GridCol != existingSeat.GridCol {
+						return true
+					}
+
+					if seatInput.ColumnID != nil && existingSeat.ColumnID != nil {
+						if *seatInput.ColumnID != *existingSeat.ColumnID {
+							return true
+						}
+					} else if (seatInput.ColumnID == nil) != (existingSeat.ColumnID == nil) {
+						return true
+					}
+				}
 			}
 		}
 	}
