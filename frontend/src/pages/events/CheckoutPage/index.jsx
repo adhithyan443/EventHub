@@ -34,6 +34,70 @@ const formatVenueLocation = (ev) => {
   return "Venue TBA";
 };
 
+const parseCheckoutError = (err) => {
+  const status = err?.response?.status;
+  const rawMessage =
+    err?.response?.data?.message ||
+    err?.response?.data?.error ||
+    err?.message ||
+    "";
+  const lowerMsg = rawMessage.toLowerCase();
+
+  // 1. Explicit Expiration:
+  // - HTTP 409 (Conflict: reservation expired or inventory re-allocated)
+  // - HTTP 400 where backend message indicates reservation expiration / invalid status ("invalid or expired reservation")
+  // - HTTP 404 where message indicates reservation was not found ("reservation not found")
+  const isExplicitExpired =
+    status === 409 ||
+    (status === 400 && (lowerMsg.includes("expired") || lowerMsg.includes("invalid or expired"))) ||
+    (status === 404 && lowerMsg.includes("reservation"));
+
+  if (isExplicitExpired) {
+    return {
+      isExpired: true,
+      message:
+        "Your ticket reservation has expired or is no longer valid. Please select tickets again.",
+    };
+  }
+
+  // 2. Network errors (no HTTP response received)
+  if (!err?.response) {
+    return {
+      isExpired: false,
+      message:
+        "Network connection error. Please check your internet connection and retry.",
+    };
+  }
+
+  // 3. Server errors (HTTP 500+)
+  if (status >= 500) {
+    return {
+      isExpired: false,
+      message:
+        err?.response?.data?.message ||
+        "The pricing configuration is temporarily unavailable. Please retry in a few moments.",
+    };
+  }
+
+  // 4. Other validation / bad request errors (HTTP 400)
+  if (status === 400) {
+    return {
+      isExpired: false,
+      message:
+        err?.response?.data?.message ||
+        "Invalid checkout request. Please verify your selection and try again.",
+    };
+  }
+
+  // 5. Default fallback
+  return {
+    isExpired: false,
+    message:
+      err?.response?.data?.message ||
+      "Failed to initialize checkout pricing snapshot. Please try again.",
+  };
+};
+
 export default function CheckoutPage() {
   const { eventId } = useParams();
   const location = useLocation();
@@ -43,7 +107,7 @@ export default function CheckoutPage() {
 
   // Read state passed from CustomerEventDetailsPage, or fallback to client-side cache
   const cacheKey = eventId ? `eventhub_reservation_${eventId}` : null;
-  const getInitialState = () => {
+  const [navState] = useState(() => {
     if (location.state?.reservation) {
       return location.state;
     }
@@ -51,18 +115,17 @@ export default function CheckoutPage() {
       try {
         const cachedRaw = sessionStorage.getItem(cacheKey);
         if (cachedRaw) {
-          const parsed = JSON.parse(cachedRaw);
-          return parsed;
+          return JSON.parse(cachedRaw);
         }
       } catch {
         // ignore parse error
       }
     }
     return location.state || {};
-  };
+  });
 
-  const navState = getInitialState();
   const reservation = navState.reservation;
+  const reservationId = reservation?.ID || reservation?.id || null;
   const selectedTickets = navState.selectedTickets;
   const selectedTicket = navState.selectedTicket;
   const ticketPrice = navState.ticketPrice;
@@ -122,9 +185,13 @@ export default function CheckoutPage() {
   const [paymentError, setPaymentError] = useState(null);
   const [isChangingSelection, setIsChangingSelection] = useState(false);
   const changingRef = useRef(false);
-  const initializingCheckoutRef = useRef(false);
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [confirmedPayment, setConfirmedPayment] = useState(null);
+
+  // Safe async lifecycle refs across React Strict Mode and component remounts
+  const isMountedRef = useRef(true);
+  const activeReservationIdRef = useRef(null);
+  const inFlightReservationIdRef = useRef(null);
 
   const handleChangeSelection = async (e) => {
     if (e?.preventDefault) e.preventDefault();
@@ -232,61 +299,91 @@ export default function CheckoutPage() {
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [reservation, cacheKey, eventId]);
+  }, [reservation?.ExpiresAt, reservation?.expires_at, cacheKey, eventId]);
+
+  // Load or reuse checkout snapshot safely across React Strict Mode, remounts, and retries
+  const loadCheckoutSnapshot = async (resId, forceRetry = false) => {
+    if (!resId || isExpired) {
+      setCheckoutLoading(false);
+      return;
+    }
+
+    // Reuse existing snapshot if already loaded for this reservation
+    const loadedResId = (checkout?.ReservationID || checkout?.reservationId || "").toString().toLowerCase();
+    const targetResId = (resId || "").toString().toLowerCase();
+    if (!forceRetry && checkout && loadedResId && loadedResId === targetResId) {
+      setCheckoutLoading(false);
+      return;
+    }
+
+    // Deduplicate concurrent in-flight requests for the exact same reservation
+    if (!forceRetry && inFlightReservationIdRef.current === resId) {
+      return;
+    }
+
+    inFlightReservationIdRef.current = resId;
+    activeReservationIdRef.current = resId;
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+
+    try {
+      console.info("[Checkout] Initializing checkout pricing snapshot", {
+        reservation_id: resId,
+      });
+      const response = await createCheckout(resId);
+
+      // Discard update if component has unmounted or reservation target has shifted
+      if (!isMountedRef.current || activeReservationIdRef.current !== resId) {
+        return;
+      }
+
+      const checkoutData =
+        response?.data?.checkout ||
+        response?.checkout ||
+        (response?.ID || response?.id ? response : null);
+      if (!checkoutData) {
+        throw new Error("Invalid checkout response from server");
+      }
+
+      setCheckout(checkoutData);
+      setCheckoutError(null);
+    } catch (err) {
+      if (!isMountedRef.current || activeReservationIdRef.current !== resId) {
+        return;
+      }
+
+      console.error("[Checkout] Failed to load checkout pricing snapshot:", err);
+      const parsed = parseCheckoutError(err);
+      if (parsed.isExpired) {
+        setIsExpired(true);
+      }
+      setCheckoutError(parsed.message);
+      notify.error(parsed.message);
+    } finally {
+      if (inFlightReservationIdRef.current === resId) {
+        inFlightReservationIdRef.current = null;
+      }
+      if (isMountedRef.current && activeReservationIdRef.current === resId) {
+        setCheckoutLoading(false);
+      }
+    }
+  };
 
   // Mount-time checkout snapshot initialization
   useEffect(() => {
-    const reservationId = reservation?.ID || reservation?.id;
+    isMountedRef.current = true;
+
     if (!reservationId || isExpired) {
       setCheckoutLoading(false);
       return;
     }
 
-    if (initializingCheckoutRef.current) return;
-    initializingCheckoutRef.current = true;
-
-    let cancelled = false;
-    setCheckoutLoading(true);
-    setCheckoutError(null);
-
-    const initCheckout = async () => {
-      try {
-        const response = await createCheckout(reservationId);
-        if (cancelled) return;
-        const checkoutData = response?.data?.checkout;
-        if (!checkoutData) {
-          throw new Error("Invalid checkout response from server");
-        }
-        setCheckout(checkoutData);
-      } catch (err) {
-        if (cancelled) return;
-        const status = err?.response?.status;
-        if (status === 409 || status === 400) {
-          setIsExpired(true);
-          const expMsg =
-            "Your ticket reservation has expired or is no longer valid. Please select tickets again.";
-          setCheckoutError(expMsg);
-          notify.error(expMsg);
-        } else {
-          const errMsg =
-            err?.response?.data?.message ||
-            "Failed to initialize checkout pricing snapshot. Please try again.";
-          setCheckoutError(errMsg);
-        }
-      } finally {
-        if (!cancelled) {
-          setCheckoutLoading(false);
-        }
-        initializingCheckoutRef.current = false;
-      }
-    };
-
-    initCheckout();
+    loadCheckoutSnapshot(reservationId);
 
     return () => {
-      cancelled = true;
+      isMountedRef.current = false;
     };
-  }, [reservation, isExpired]);
+  }, [reservationId, isExpired]);
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -296,8 +393,8 @@ export default function CheckoutPage() {
 
   const handleProceedToPayment = async () => {
     if (!agreedTerms || isExpired || isCheckingOut || checkoutLoading) return;
-    const reservationId = reservation?.ID || reservation?.id;
-    if (!reservationId) {
+    const currentResId = reservationId || reservation?.ID || reservation?.id;
+    if (!currentResId) {
       setPaymentError("No reservation identifier found. Please select tickets again.");
       return;
     }
@@ -313,8 +410,11 @@ export default function CheckoutPage() {
     setPaymentError(null);
 
     try {
-      const response = await createCheckout(reservationId);
-      const checkoutData = response?.data?.checkout;
+      const response = await createCheckout(currentResId);
+      const checkoutData =
+        response?.data?.checkout ||
+        response?.checkout ||
+        (response?.ID || response?.id ? response : null);
       if (!checkoutData) {
         throw new Error("Invalid checkout response from server");
       }
@@ -322,20 +422,12 @@ export default function CheckoutPage() {
       setCurrentStep(3);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      const status = err?.response?.status;
-      if (status === 409 || status === 400) {
+      const parsed = parseCheckoutError(err);
+      if (parsed.isExpired) {
         setIsExpired(true);
-        const expMsg =
-          "Your ticket reservation has expired or is no longer valid. Please select tickets again.";
-        setPaymentError(expMsg);
-        notify.error(expMsg);
-      } else {
-        const errMsg =
-          err?.response?.data?.message ||
-          "Failed to initialize checkout. Please try again.";
-        setPaymentError(errMsg);
-        notify.error(errMsg);
       }
+      setPaymentError(parsed.message);
+      notify.error(parsed.message);
     } finally {
       setIsCheckingOut(false);
     }
@@ -896,21 +988,8 @@ export default function CheckoutPage() {
                       <button
                         type="button"
                         onClick={() => {
-                          initializingCheckoutRef.current = false;
-                          const reservationId = reservation?.ID || reservation?.id;
                           if (reservationId) {
-                            setCheckoutLoading(true);
-                            setCheckoutError(null);
-                            createCheckout(reservationId)
-                              .then((res) => {
-                                setCheckout(res?.data?.checkout);
-                              })
-                              .catch((err) => {
-                                setCheckoutError(err?.response?.data?.message || "Failed to load pricing.");
-                              })
-                              .finally(() => {
-                                setCheckoutLoading(false);
-                              });
+                            loadCheckoutSnapshot(reservationId, true);
                           }
                         }}
                         className="mt-2 text-xs font-bold text-[#00685f] underline cursor-pointer"
