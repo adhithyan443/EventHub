@@ -547,7 +547,8 @@ export default function CreateEventTicketTypesPage() {
                   <div className="flex items-center gap-6 self-end md:self-center">
                     <div className="flex flex-col text-right">
                       <span className="text-base font-bold text-[#141b2b]">
-                        ${Number(ticket.price).toFixed(2)}
+                        ₹
+                        {Number(ticket.price).toFixed(2)}
                       </span>
 
                       <span className="text-[11px] text-[#565e74]">

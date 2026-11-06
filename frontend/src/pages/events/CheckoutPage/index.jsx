@@ -4,6 +4,7 @@ import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import StepsProgress from "../components/StepsProgress";
 import OrderPriceSummary from "../components/OrderPriceSummary";
+import CancelReservationModal from "../components/CancelReservationModal";
 import { getPublicEventById } from "../../../api/eventApi";
 import { createCheckout } from "../../../api/checkoutApi";
 import { createPayment, verifyPayment } from "../../../api/paymentApi";
@@ -157,18 +158,20 @@ export default function CheckoutPage() {
       for (const it of items) {
         const tid = it.TicketTypeID || it.ticket_type_id || it.ticketTypeId;
         if (!tid) continue;
+        const itemQty = Number(it.Quantity ?? it.quantity ?? 1);
+        const itemPrice = Number(it.Price ?? it.price ?? 0);
         if (!map[tid]) {
           const tier = (event?.ticket_types || []).find((t) => t.id === tid);
           map[tid] = {
             ticketTypeId: tid,
             name: tier?.name || "General Admission",
-            price: Number(it.Price || it.price || tier?.price || 0),
+            price: Number(itemPrice || tier?.price || 0),
             quantity: 0,
             lineTotal: 0,
           };
         }
-        map[tid].quantity += 1;
-        map[tid].lineTotal += Number(it.Price || it.price || map[tid].price || 0);
+        map[tid].quantity += itemQty;
+        map[tid].lineTotal += map[tid].price * itemQty;
       }
       const list = Object.values(map);
       if (list.length > 0) return list;
@@ -188,49 +191,41 @@ export default function CheckoutPage() {
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [confirmedPayment, setConfirmedPayment] = useState(null);
 
+  // Cancellation modal state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelModalTarget, setCancelModalTarget] = useState("details"); // "details" or "seats"
+
   // Safe async lifecycle refs across React Strict Mode and component remounts
   const isMountedRef = useRef(true);
   const activeReservationIdRef = useRef(null);
   const inFlightReservationIdRef = useRef(null);
 
-  const handleChangeSelection = async (e) => {
+  const handleRequestChangeSelection = (e) => {
     if (e?.preventDefault) e.preventDefault();
-    if (changingRef.current) return;
-    changingRef.current = true;
-    setIsChangingSelection(true);
-    setPaymentError(null);
+    setCancelModalTarget(selectedSeats && selectedSeats.length > 0 ? "seats" : "details");
+    setShowCancelModal(true);
+  };
+
+  const handleRequestCancelReservation = (e) => {
+    if (e?.preventDefault) e.preventDefault();
+    setCancelModalTarget("details");
+    setShowCancelModal(true);
+  };
+
+  const handleModalCancellationSuccess = () => {
+    clearStoredReservation(eventId);
+    setShowCancelModal(false);
+    notify.success("Reservation cancelled and hold released.");
 
     const targetPath =
-      selectedSeats && selectedSeats.length > 0
+      cancelModalTarget === "seats" && selectedSeats && selectedSeats.length > 0
         ? `/events/${eventId}/seats`
         : `/events/${eventId}`;
 
-    const currentResId = reservation?.ID || reservation?.id;
-
-    try {
-      if (currentResId) {
-        console.info("[Checkout] User chose change selection; cancelling reservation before navigation", {
-          event_id: eventId,
-          reservation_id: currentResId,
-        });
-        await cancelReservation(currentResId);
-      }
-      clearStoredReservation(eventId);
-      navigate(targetPath, {
-        replace: true,
-        state: { reservationCancelled: true },
-      });
-    } catch (err) {
-      console.error("[Checkout] Failed to cancel reservation on change selection:", err);
-      const msg =
-        err?.response?.data?.message ||
-        err?.message ||
-        "Could not release current reservation. Please check your connection.";
-      setPaymentError(msg);
-    } finally {
-      changingRef.current = false;
-      setIsChangingSelection(false);
-    }
+    navigate(targetPath, {
+      replace: true,
+      state: { reservationCancelled: true },
+    });
   };
 
   // Customer info form fields initialized from authenticated user
@@ -778,18 +773,27 @@ export default function CheckoutPage() {
                     <h2 className="font-display text-lg sm:text-xl font-bold text-ink">
                       {selectedSeats && selectedSeats.length > 0 ? "Selected Seats" : "Selected Tickets"}
                     </h2>
-                    <button
-                      type="button"
-                      onClick={handleChangeSelection}
-                      disabled={isChangingSelection}
-                      className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline cursor-pointer disabled:opacity-50"
-                    >
-                      {isChangingSelection
-                        ? "Releasing..."
-                        : selectedSeats && selectedSeats.length > 0
-                        ? "Change Seats"
-                        : "Change Tickets"}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleRequestChangeSelection}
+                        disabled={isExpired}
+                        className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        {selectedSeats && selectedSeats.length > 0
+                          ? "Change Seats"
+                          : "Change Tickets"}
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={handleRequestCancelReservation}
+                        disabled={isExpired}
+                        className="text-xs sm:text-sm font-semibold text-rose-600 hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        Cancel Reservation
+                      </button>
+                    </div>
                   </div>
 
                   {selectedSeatObjects && selectedSeatObjects.length > 0 ? (
@@ -1056,6 +1060,15 @@ export default function CheckoutPage() {
                   <p className="mt-4 text-center text-xs text-[#565e74] flex items-center justify-center gap-1.5">
                     <span>♙</span> Temporary hold active
                   </p>
+
+                  <button
+                    type="button"
+                    onClick={handleRequestCancelReservation}
+                    disabled={isExpired || isCheckingOut || isPaying}
+                    className="w-full mt-2 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer disabled:opacity-40 transition-colors"
+                  >
+                    Cancel Reservation
+                  </button>
                 </section>
               </aside>
             </div>
@@ -1285,6 +1298,14 @@ export default function CheckoutPage() {
                     <p className="text-center text-xs text-[#565e74]">
                       Secured by Razorpay. 256-bit SSL encrypted.
                     </p>
+                    <button
+                      type="button"
+                      onClick={handleRequestCancelReservation}
+                      disabled={isExpired || isPaying}
+                      className="w-full mt-2 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer disabled:opacity-40 transition-colors"
+                    >
+                      Cancel Reservation
+                    </button>
                   </div>
                 </section>
 
@@ -1494,6 +1515,21 @@ export default function CheckoutPage() {
           </div>
         )}
       </main>
+
+      {/* Cancel Reservation Confirmation Modal */}
+      {showCancelModal && (
+        <CancelReservationModal
+          isOpen={showCancelModal}
+          reservation={reservation}
+          event={event}
+          selectedTickets={derivedTickets || []}
+          selectedSeats={selectedSeats || []}
+          selectedSeatObjects={selectedSeatObjects || []}
+          totalAmount={pricing.total}
+          onClose={() => setShowCancelModal(false)}
+          onSuccess={handleModalCancellationSuccess}
+        />
+      )}
 
       <Footer />
     </div>

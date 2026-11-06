@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation, useNavigationType } from "react-ro
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import OrderPriceSummary from "../components/OrderPriceSummary";
+import CancelReservationModal from "../components/CancelReservationModal";
 import { getPublicEventById, getPublicEventSeatLayout } from "../../../api/eventApi";
 import { getPublicActivePricingTax } from "../../../api/pricingTaxApi";
 import {
@@ -59,6 +60,10 @@ export default function SeatSelectionPage() {
   const [reservationError, setReservationError] = useState(null);
   const reservingRef = useRef(false);
 
+  // Cancellation modal state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [activeReservation, setActiveReservation] = useState(null);
+
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
@@ -75,22 +80,6 @@ export default function SeatSelectionPage() {
       setLoading(true);
       setError(null);
       setIsNotFound(false);
-
-      // If returning via browser Back or landing on seat selection with an existing active reservation:
-      // Cancel previous reservation so previously held seats unlock on the map before layout query.
-      const stored = getStoredReservation(eventId);
-      if (stored?.reservationId && !stored.isExpired) {
-        console.info("[SeatSelection] Active reservation found on seat page load/back; releasing seats before layout fetch", {
-          event_id: eventId,
-          reservation_id: stored.reservationId,
-          navigation_type: navigationType,
-        });
-        try {
-          await cancelStoredReservation(eventId);
-        } catch (cancelErr) {
-          console.warn("[SeatSelection] Could not cancel stored reservation on mount:", cancelErr?.message);
-        }
-      }
 
       try {
         const [eventRes, layoutRes, pricingRes] = await Promise.all([
@@ -230,16 +219,30 @@ export default function SeatSelectionPage() {
     rawTotal: totalNum,
   };
 
-  const handleBackToDetails = async (e) => {
+  const handleBackToDetails = (e) => {
     if (e?.preventDefault) e.preventDefault();
-    if (eventId) {
-      try {
-        await cancelStoredReservation(eventId);
-      } catch (err) {
-        console.warn("[SeatSelection] Could not cancel stored reservation on back to details:", err?.message);
-      }
+
+    // Intercept if an active, unexpired reservation exists
+    const stored = getStoredReservation(eventId);
+    if (stored?.reservationId && !stored.isExpired) {
+      setActiveReservation(stored);
+      setShowCancelModal(true);
+      return;
     }
+
+    // Otherwise navigate back immediately
     navigate(eventId ? `/events/${eventId}` : "/events");
+  };
+
+  const handleModalCancellationSuccess = () => {
+    clearStoredReservation(eventId);
+    setShowCancelModal(false);
+    setActiveReservation(null);
+    notify.success("Reservation cancelled and held seats released.");
+    navigate(eventId ? `/events/${eventId}` : "/events", {
+      replace: true,
+      state: { reservationCancelled: true },
+    });
   };
 
   const handleContinueToCheckout = async () => {
@@ -732,6 +735,20 @@ export default function SeatSelectionPage() {
           </aside>
         </div>
       </main>
+
+      {/* Cancel Reservation Confirmation Modal */}
+      {showCancelModal && (
+        <CancelReservationModal
+          isOpen={showCancelModal}
+          reservation={activeReservation?.reservation || activeReservation}
+          event={event}
+          selectedSeats={activeReservation?.selectedSeats || selectedSeats.map((s) => `${s.rowName}${s.seatNumber}`)}
+          selectedSeatObjects={activeReservation?.selectedSeatObjects || selectedSeats}
+          totalAmount={pricing.total}
+          onClose={() => setShowCancelModal(false)}
+          onSuccess={handleModalCancellationSuccess}
+        />
+      )}
 
       <Footer />
     </div>
