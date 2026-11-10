@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -290,55 +291,7 @@ func (u *BookingUsecase) GetMyBookings(
 				return err
 			}
 
-			if len(bookings) == 0 {
-				return nil
-			}
-
-			bookingIDs := make([]uuid.UUID, 0, len(bookings))
-			for _, b := range bookings {
-				bookingIDs = append(bookingIDs, b.ID)
-			}
-
-			itemsByBooking, err := tx.BookingRepository().FindItemsByBookingIDs(ctx, bookingIDs)
-			if err != nil {
-				u.logger.WarnContext(ctx, "failed to find items for customer bookings", slog.Any("error", err))
-				return nil
-			}
-
-			var allSeatIDs []uuid.UUID
-			for _, items := range itemsByBooking {
-				for _, item := range items {
-					if item.SeatID != nil && *item.SeatID != uuid.Nil {
-						allSeatIDs = append(allSeatIDs, *item.SeatID)
-					}
-				}
-			}
-
-			seatMap := make(map[uuid.UUID]domain.SeatDetail)
-			if len(allSeatIDs) > 0 {
-				details, err := tx.SeatRepository().FindDetailsBySeatIDs(ctx, allSeatIDs)
-				if err != nil {
-					u.logger.WarnContext(ctx, "failed to resolve seats for customer bookings", slog.Any("error", err))
-				} else {
-					seatMap = details
-				}
-			}
-
-			for i := range bookings {
-				bID := bookings[i].ID
-				items := itemsByBooking[bID]
-				var seats []domain.SeatDetail
-				for _, item := range items {
-					if item.SeatID != nil {
-						if d, ok := seatMap[*item.SeatID]; ok {
-							seats = append(seats, d)
-						}
-					}
-				}
-				bookings[i].Seats = seats
-			}
-
-			return nil
+			return u.populateBookingSeats(ctx, tx, bookings)
 		},
 	)
 	if err != nil {
@@ -353,12 +306,123 @@ func (u *BookingUsecase) GetMyBookings(
 		bookings = []domain.Booking{}
 	}
 
-	u.logger.InfoContext(ctx, "customer bookings retrieved",
-		slog.String("user_id", userID.String()),
-		slog.Int("booking_count", len(bookings)),
-	)
-
 	return bookings, nil
+}
+
+// GetMyBookingsPaginated returns paginated bookings belonging to the authenticated customer.
+func (u *BookingUsecase) GetMyBookingsPaginated(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter domain.CustomerBookingFilter,
+) (*domain.CustomerBookingList, error) {
+	if userID == uuid.Nil {
+		u.logger.WarnContext(ctx, "booking listing rejected: invalid user ID")
+		return nil, domain.ErrBookingNotFound
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 5
+	} else if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	var bookings []domain.Booking
+	var total int64
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			var err error
+			bookings, total, err = tx.BookingRepository().FindByUserIDPaginated(ctx, userID, filter)
+			if err != nil {
+				return err
+			}
+
+			return u.populateBookingSeats(ctx, tx, bookings)
+		},
+	)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "failed to retrieve paginated customer bookings",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	if bookings == nil {
+		bookings = []domain.Booking{}
+	}
+
+	totalPages := 1
+	if total > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(filter.Limit)))
+	}
+
+	return &domain.CustomerBookingList{
+		Bookings:   bookings,
+		Total:      total,
+		Page:       filter.Page,
+		Limit:      filter.Limit,
+		TotalPages: totalPages,
+	}, nil
+}
+
+func (u *BookingUsecase) populateBookingSeats(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	bookings []domain.Booking,
+) error {
+	if len(bookings) == 0 {
+		return nil
+	}
+
+	bookingIDs := make([]uuid.UUID, 0, len(bookings))
+	for _, b := range bookings {
+		bookingIDs = append(bookingIDs, b.ID)
+	}
+
+	itemsByBooking, err := tx.BookingRepository().FindItemsByBookingIDs(ctx, bookingIDs)
+	if err != nil {
+		u.logger.WarnContext(ctx, "failed to find items for customer bookings", slog.Any("error", err))
+		return nil
+	}
+
+	var allSeatIDs []uuid.UUID
+	for _, items := range itemsByBooking {
+		for _, item := range items {
+			if item.SeatID != nil && *item.SeatID != uuid.Nil {
+				allSeatIDs = append(allSeatIDs, *item.SeatID)
+			}
+		}
+	}
+
+	seatMap := make(map[uuid.UUID]domain.SeatDetail)
+	if len(allSeatIDs) > 0 {
+		details, err := tx.SeatRepository().FindDetailsBySeatIDs(ctx, allSeatIDs)
+		if err != nil {
+			u.logger.WarnContext(ctx, "failed to resolve seats for customer bookings", slog.Any("error", err))
+		} else {
+			seatMap = details
+		}
+	}
+
+	for i := range bookings {
+		bID := bookings[i].ID
+		items := itemsByBooking[bID]
+		var seats []domain.SeatDetail
+		for _, item := range items {
+			if item.SeatID != nil {
+				if d, ok := seatMap[*item.SeatID]; ok {
+					seats = append(seats, d)
+				}
+			}
+		}
+		bookings[i].Seats = seats
+	}
+
+	return nil
 }
 
 // GetBookingByID returns a specific booking and its associated items only when it belongs to the authenticated user.

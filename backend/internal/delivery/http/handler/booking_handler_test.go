@@ -27,11 +27,12 @@ import (
 
 type stubBookingHandlerRepo struct {
 	domain.BookingRepository
-	findByUserFn        func(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error)
-	findWithItemsFn     func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error)
-	findByIDForUpdateFn func(ctx context.Context, id uuid.UUID) (*domain.Booking, error)
-	updateStatusFn      func(ctx context.Context, id uuid.UUID, status string) error
-	findItemsFn         func(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingItem, error)
+	findByUserFn          func(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error)
+	findByUserPaginatedFn func(ctx context.Context, userID uuid.UUID, filter domain.CustomerBookingFilter) ([]domain.Booking, int64, error)
+	findWithItemsFn       func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error)
+	findByIDForUpdateFn   func(ctx context.Context, id uuid.UUID) (*domain.Booking, error)
+	updateStatusFn        func(ctx context.Context, id uuid.UUID, status string) error
+	findItemsFn           func(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingItem, error)
 }
 
 func (s *stubBookingHandlerRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error) {
@@ -39,6 +40,24 @@ func (s *stubBookingHandlerRepo) FindByUserID(ctx context.Context, userID uuid.U
 		return s.findByUserFn(ctx, userID)
 	}
 	return nil, nil
+}
+
+func (s *stubBookingHandlerRepo) FindByUserIDPaginated(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter domain.CustomerBookingFilter,
+) ([]domain.Booking, int64, error) {
+	if s.findByUserPaginatedFn != nil {
+		return s.findByUserPaginatedFn(ctx, userID, filter)
+	}
+	if s.findByUserFn != nil {
+		bookings, err := s.findByUserFn(ctx, userID)
+		if err != nil {
+			return nil, 0, err
+		}
+		return bookings, int64(len(bookings)), nil
+	}
+	return nil, 0, nil
 }
 
 func (s *stubBookingHandlerRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
@@ -378,6 +397,91 @@ func TestGetMyBookings_InternalServerError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "database connection pool")
 	assert.Contains(t, rec.Body.String(), "failed to retrieve bookings")
+}
+
+func TestGetMyBookings_Pagination_Success(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+
+	expectedBookings := []domain.Booking{
+		{
+			ID:            uuid.New(),
+			BookingNumber: "BK-2026-0001",
+			UserID:        f.userID,
+			Status:        domain.BookingStatusConfirmed,
+		},
+	}
+
+	var capturedFilter domain.CustomerBookingFilter
+	f.repo.findByUserPaginatedFn = func(ctx context.Context, userID uuid.UUID, filter domain.CustomerBookingFilter) ([]domain.Booking, int64, error) {
+		assert.Equal(t, f.userID, userID)
+		capturedFilter = filter
+		return expectedBookings, 11, nil
+	}
+
+	f.router.GET("/api/v1/bookings", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyBookings(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings?page=2&limit=5&status=CONFIRMED&search=Concert&sort_by=oldest", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 2, capturedFilter.Page)
+	assert.Equal(t, 5, capturedFilter.Limit)
+	assert.Equal(t, "CONFIRMED", capturedFilter.Status)
+	assert.Equal(t, "Concert", capturedFilter.Search)
+	assert.Equal(t, "oldest", capturedFilter.SortBy)
+
+	var resp struct {
+		Data []domain.Booking `json:"data"`
+		Meta struct {
+			Page       int   `json:"page"`
+			Limit      int   `json:"limit"`
+			Total      int64 `json:"total"`
+			TotalPages int   `json:"total_pages"`
+		} `json:"meta"`
+	}
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Len(t, resp.Data, 1)
+	assert.Equal(t, 2, resp.Meta.Page)
+	assert.Equal(t, 5, resp.Meta.Limit)
+	assert.Equal(t, int64(11), resp.Meta.Total)
+	assert.Equal(t, 3, resp.Meta.TotalPages)
+}
+
+func TestGetMyBookings_Pagination_InvalidPage(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+
+	f.router.GET("/api/v1/bookings", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyBookings(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings?page=0", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid page parameter")
+}
+
+func TestGetMyBookings_Pagination_InvalidLimit(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+
+	f.router.GET("/api/v1/bookings", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyBookings(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings?limit=150", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid limit parameter, must be between 1 and 100")
 }
 
 func TestGetBookingByID_Success(t *testing.T) {

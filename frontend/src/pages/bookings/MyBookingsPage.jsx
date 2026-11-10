@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import AppHeader from "../../components/layout/AppHeader";
 import Footer from "../../components/layout/Footer";
@@ -47,12 +47,15 @@ const formatVenueLocation = (event) => {
 
 export default function MyBookingsPage() {
   const [bookings, setBookings] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
   const [eventsMap, setEventsMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const [tab, setTab] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [sortBy, setSortBy] = useState("newest");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRefundBooking, setSelectedRefundBooking] = useState(null);
@@ -61,21 +64,16 @@ export default function MyBookingsPage() {
 
   const [reloadKey, setReloadKey] = useState(0);
 
-  const handleCancellationSuccess = (output) => {
-    const cancelledId = output.booking_id;
-    setBookings((prev) =>
-      prev.map((b) => {
-        const id = b.ID || b.id;
-        if (id === cancelledId) {
-          return {
-            ...b,
-            Status: "CANCELLED",
-            status: "CANCELLED",
-          };
-        }
-        return b;
-      })
-    );
+  // Debounce search query changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const handleCancellationSuccess = () => {
+    setReloadKey((prev) => prev + 1);
     notify.success("Booking cancelled successfully.");
   };
 
@@ -100,7 +98,7 @@ export default function MyBookingsPage() {
     setReloadKey((prev) => prev + 1);
   };
 
-  // Fetch live customer bookings and resolve associated event data
+  // Fetch live customer bookings with server-side pagination & filtering
   useEffect(() => {
     let cancelled = false;
 
@@ -109,12 +107,30 @@ export default function MyBookingsPage() {
       setError(null);
 
       try {
-        const response = await getMyBookings();
+        const params = {
+          page: currentPage,
+          limit: ITEMS_PER_PAGE,
+          status: tab === "All" ? "" : tab.toUpperCase(),
+          search: debouncedSearch,
+          sort_by: sortBy,
+        };
+
+        const response = await getMyBookings(params);
         if (cancelled) return;
 
         const rawBookings = Array.isArray(response?.data) ? response.data : [];
-        setBookings(rawBookings);
+        const meta = response?.meta || response?.pagination || {};
+        const totalCount = typeof meta.total === "number" ? meta.total : rawBookings.length;
+        const totalPageCount =
+          typeof meta.total_pages === "number"
+            ? meta.total_pages
+            : Math.max(1, Math.ceil(totalCount / ITEMS_PER_PAGE));
 
+        setBookings(rawBookings);
+        setTotal(totalCount);
+        setTotalPages(totalPageCount);
+
+        // Fetch event details for the bookings on the current page
         const eventIds = [
           ...new Set(
             rawBookings
@@ -124,19 +140,24 @@ export default function MyBookingsPage() {
         ];
 
         if (eventIds.length > 0) {
-          const eventResults = await Promise.allSettled(
-            eventIds.map((id) => getPublicEventById(id))
-          );
-          if (cancelled) return;
+          const missingIds = eventIds.filter((id) => !eventsMap[id]);
+          if (missingIds.length > 0) {
+            const eventResults = await Promise.allSettled(
+              missingIds.map((id) => getPublicEventById(id))
+            );
+            if (cancelled) return;
 
-          const newEventsMap = {};
-          eventResults.forEach((res, index) => {
-            const id = eventIds[index];
-            if (res.status === "fulfilled" && res.value?.data) {
-              newEventsMap[id] = res.value.data;
-            }
-          });
-          setEventsMap(newEventsMap);
+            setEventsMap((prev) => {
+              const updated = { ...prev };
+              eventResults.forEach((res, index) => {
+                const id = missingIds[index];
+                if (res.status === "fulfilled" && res.value?.data) {
+                  updated[id] = res.value.data;
+                }
+              });
+              return updated;
+            });
+          }
         }
       } catch (err) {
         if (cancelled) return;
@@ -158,58 +179,7 @@ export default function MyBookingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [reloadKey]);
-
-  // Filter bookings based on tab and search
-  const filteredBookings = useMemo(() => {
-    return bookings
-      .filter((booking) => {
-        const rawStatus = (booking.Status || booking.status || "CONFIRMED").toUpperCase();
-
-        // Tab filter
-        let matchesTab = true;
-        if (tab === "Confirmed") {
-          matchesTab = rawStatus === "CONFIRMED" || rawStatus === "COMPLETED";
-        } else if (tab === "Cancelled") {
-          matchesTab = rawStatus === "CANCELLED";
-        } else if (tab === "Refunded") {
-          matchesTab = rawStatus === "REFUNDED";
-        }
-
-        if (!matchesTab) return false;
-
-        // Search filter
-        const query = searchQuery.trim().toLowerCase();
-        if (!query) return true;
-
-        const eventId = booking.EventID || booking.event_id || booking.eventId;
-        const event = eventsMap[eventId];
-        const eventTitle = (event?.title || "").toLowerCase();
-        const bookingNum = (booking.BookingNumber || booking.booking_number || booking.ID || "").toLowerCase();
-        const locationStr = formatVenueLocation(event).toLowerCase();
-
-        return (
-          eventTitle.includes(query) ||
-          bookingNum.includes(query) ||
-          locationStr.includes(query)
-        );
-      })
-      .sort((a, b) => {
-        const dateA = new Date(a.CreatedAt || a.created_at || 0).getTime();
-        const dateB = new Date(b.CreatedAt || b.created_at || 0).getTime();
-        if (sortBy === "oldest") {
-          return dateA - dateB;
-        }
-        return dateB - dateA;
-      });
-  }, [bookings, eventsMap, tab, searchQuery, sortBy]);
-
-  // Pagination calculation
-  const totalPages = Math.max(1, Math.ceil(filteredBookings.length / ITEMS_PER_PAGE));
-  const paginatedBookings = useMemo(() => {
-    const start = (currentPage - 1) * ITEMS_PER_PAGE;
-    return filteredBookings.slice(start, start + ITEMS_PER_PAGE);
-  }, [filteredBookings, currentPage]);
+  }, [currentPage, tab, debouncedSearch, sortBy, reloadKey]);
 
   const getStatusBadgeClass = (status) => {
     const s = (status || "").toUpperCase();
@@ -339,7 +309,7 @@ export default function MyBookingsPage() {
         {/* Bookings List */}
         {!loading && !error && (
           <div className="mt-6 sm:mt-8 space-y-4">
-            {filteredBookings.length === 0 ? (
+            {bookings.length === 0 ? (
               <div className="rounded-xl border border-dashed border-[#dfe5e3] bg-white p-8 sm:p-12 text-center">
                 <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-[#565e74] mb-3">
                   <TagReceiptIcon className="w-6 h-6" />
@@ -360,6 +330,7 @@ export default function MyBookingsPage() {
                     onClick={() => {
                       setTab("All");
                       setSearchQuery("");
+                      setDebouncedSearch("");
                       setCurrentPage(1);
                     }}
                     className="mt-4 inline-flex items-center rounded-lg bg-[#00685f] px-4 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-[#00544c] transition-colors cursor-pointer"
@@ -376,7 +347,7 @@ export default function MyBookingsPage() {
                 )}
               </div>
             ) : (
-              paginatedBookings.map((booking) => {
+              bookings.map((booking) => {
                 const bookingId = booking.ID || booking.id;
                 const bookingNumber = booking.BookingNumber || booking.booking_number || bookingId;
                 const eventId = booking.EventID || booking.event_id || booking.eventId;
@@ -580,47 +551,68 @@ export default function MyBookingsPage() {
           </div>
         )}
 
-        {/* Pagination */}
-        {!loading && !error && filteredBookings.length > ITEMS_PER_PAGE && (
-          <div className="mt-8 sm:mt-10 flex items-center justify-center gap-2">
-            <button
-              type="button"
-              disabled={currentPage <= 1}
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              className={`flex h-10 w-10 items-center justify-center rounded-lg border border-[#dfe5e3] bg-white text-[#565e74] transition-colors ${
-                currentPage <= 1 ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50 cursor-pointer"
-              }`}
-              aria-label="Previous page"
-            >
-              <ChevronLeftIcon className="w-3.5 h-3.5" />
-            </button>
+        {/* Pagination Controls */}
+        {!loading && !error && total > 0 && (
+          <div className="mt-8 sm:mt-10 flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-[#dfe5e3] pt-6">
+            <span className="text-xs sm:text-sm text-[#565e74]">
+              Showing {total === 0 ? 0 : (currentPage - 1) * ITEMS_PER_PAGE + 1} to{" "}
+              {Math.min(currentPage * ITEMS_PER_PAGE, total)} of {total} bookings (Page {currentPage} of {totalPages})
+            </span>
 
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNumber) => (
+            <div className="flex items-center gap-1.5">
               <button
-                key={pageNumber}
                 type="button"
-                onClick={() => setCurrentPage(pageNumber)}
-                className={`flex h-10 w-10 items-center justify-center rounded-lg border text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
-                  currentPage === pageNumber
-                    ? "border-[#00685f] bg-[#00685f] text-white shadow-xs"
-                    : "border-[#dfe5e3] bg-white text-[#565e74] hover:bg-slate-50"
+                disabled={currentPage <= 1 || loading}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border border-[#dfe5e3] bg-white text-[#565e74] transition-colors ${
+                  currentPage <= 1 || loading
+                    ? "opacity-40 cursor-not-allowed"
+                    : "hover:bg-slate-50 cursor-pointer"
                 }`}
+                aria-label="Previous page"
               >
-                {pageNumber}
+                <ChevronLeftIcon className="w-3.5 h-3.5" />
               </button>
-            ))}
 
-            <button
-              type="button"
-              disabled={currentPage >= totalPages}
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              className={`flex h-10 w-10 items-center justify-center rounded-lg border border-[#dfe5e3] bg-white text-[#565e74] transition-colors ${
-                currentPage >= totalPages ? "opacity-40 cursor-not-allowed" : "hover:bg-slate-50 cursor-pointer"
-              }`}
-              aria-label="Next page"
-            >
-              <ChevronRightIcon className="w-3.5 h-3.5" />
-            </button>
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((p) => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 1)
+                .map((p, idx, arr) => {
+                  const prev = arr[idx - 1];
+                  const hasGap = prev && p - prev > 1;
+
+                  return (
+                    <div key={p} className="flex items-center gap-1.5">
+                      {hasGap && <span className="px-1 text-xs text-[#6d7a77]">…</span>}
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => setCurrentPage(p)}
+                        className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border text-xs sm:text-sm font-semibold transition-colors cursor-pointer ${
+                          currentPage === p
+                            ? "border-[#00685f] bg-[#00685f] text-white shadow-xs"
+                            : "border-[#dfe5e3] bg-white text-[#565e74] hover:bg-slate-50"
+                        } ${loading ? "opacity-60 cursor-not-allowed" : ""}`}
+                      >
+                        {p}
+                      </button>
+                    </div>
+                  );
+                })}
+
+              <button
+                type="button"
+                disabled={currentPage >= totalPages || loading}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                className={`flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border border-[#dfe5e3] bg-white text-[#565e74] transition-colors ${
+                  currentPage >= totalPages || loading
+                    ? "opacity-40 cursor-not-allowed"
+                    : "hover:bg-slate-50 cursor-pointer"
+                }`}
+                aria-label="Next page"
+              >
+                <ChevronRightIcon className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
       </main>

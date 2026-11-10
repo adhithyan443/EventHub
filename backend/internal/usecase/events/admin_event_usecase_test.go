@@ -149,6 +149,9 @@ func (m *mockAdminBookingRepo) FindByReservationID(ctx context.Context, resID uu
 func (m *mockAdminBookingRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error) {
 	return nil, nil
 }
+func (m *mockAdminBookingRepo) FindByUserIDPaginated(ctx context.Context, userID uuid.UUID, filter domain.CustomerBookingFilter) ([]domain.Booking, int64, error) {
+	return nil, 0, nil
+}
 func (m *mockAdminBookingRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
 	return nil, nil, nil
 }

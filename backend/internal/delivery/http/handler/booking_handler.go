@@ -48,7 +48,40 @@ func (h *BookingHandler) GetMyBookings(c *gin.Context) {
 		return
 	}
 
-	bookings, err := h.bookingUsecase.GetMyBookings(c.Request.Context(), userID)
+	page := 1
+	limit := 5
+
+	if val := c.Query("page"); val != "" {
+		p, err := strconv.Atoi(val)
+		if err != nil || p < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid page parameter",
+			})
+			return
+		}
+		page = p
+	}
+
+	if val := c.Query("limit"); val != "" {
+		l, err := strconv.Atoi(val)
+		if err != nil || l < 1 || l > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid limit parameter, must be between 1 and 100",
+			})
+			return
+		}
+		limit = l
+	}
+
+	filter := domain.CustomerBookingFilter{
+		Page:   page,
+		Limit:  limit,
+		Status: strings.TrimSpace(c.Query("status")),
+		Search: strings.TrimSpace(c.Query("search")),
+		SortBy: strings.TrimSpace(c.Query("sort_by")),
+	}
+
+	result, err := h.bookingUsecase.GetMyBookingsPaginated(c.Request.Context(), userID, filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to retrieve bookings",
@@ -56,12 +89,22 @@ func (h *BookingHandler) GetMyBookings(c *gin.Context) {
 		return
 	}
 
+	bookings := result.Bookings
 	if bookings == nil {
 		bookings = []domain.Booking{}
 	}
 
+	meta := gin.H{
+		"page":        result.Page,
+		"limit":       result.Limit,
+		"total":       result.Total,
+		"total_pages": result.TotalPages,
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"data": bookings,
+		"data":       bookings,
+		"meta":       meta,
+		"pagination": meta,
 	})
 }
 

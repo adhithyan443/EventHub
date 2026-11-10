@@ -295,6 +295,18 @@ func (m *mockBookingRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([
 	return res, nil
 }
 
+func (m *mockBookingRepo) FindByUserIDPaginated(ctx context.Context, userID uuid.UUID, filter domain.CustomerBookingFilter) ([]domain.Booking, int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.Booking
+	for _, b := range m.bookings {
+		if b.UserID == userID {
+			res = append(res, *b)
+		}
+	}
+	return res, int64(len(res)), nil
+}
+
 func (m *mockBookingRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

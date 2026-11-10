@@ -1,11 +1,12 @@
 import apiClient from "./client";
 
 /**
- * Retrieves all bookings belonging to the authenticated customer.
- * @returns {Promise<{ data: Array }>}
+ * Retrieves bookings belonging to the authenticated customer with optional pagination & filtering.
+ * @param {object} [params] - Query parameters (page, limit, status, search, sort_by)
+ * @returns {Promise<{ data: Array, meta?: object, pagination?: object }>}
  */
-export const getMyBookings = async () => {
-  const response = await apiClient.get("/bookings");
+export const getMyBookings = async (params = {}) => {
+  const response = await apiClient.get("/bookings", { params });
   return response.data;
 };
 
