@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/invoice"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -17,6 +19,7 @@ import (
 type BookingUsecase struct {
 	transactionManager domain.TransactionManager
 	refundProvider     domain.PaymentRefundProvider
+	receiptPDFService  *invoice.ReceiptPDFService
 	logger             *slog.Logger
 }
 
@@ -31,6 +34,7 @@ func NewBookingUsecase(
 	return &BookingUsecase{
 		transactionManager: transactionManager,
 		refundProvider:     refundProvider,
+		receiptPDFService:  invoice.NewReceiptPDFService(),
 		logger:             logger,
 	}
 }
@@ -287,55 +291,7 @@ func (u *BookingUsecase) GetMyBookings(
 				return err
 			}
 
-			if len(bookings) == 0 {
-				return nil
-			}
-
-			bookingIDs := make([]uuid.UUID, 0, len(bookings))
-			for _, b := range bookings {
-				bookingIDs = append(bookingIDs, b.ID)
-			}
-
-			itemsByBooking, err := tx.BookingRepository().FindItemsByBookingIDs(ctx, bookingIDs)
-			if err != nil {
-				u.logger.WarnContext(ctx, "failed to find items for customer bookings", slog.Any("error", err))
-				return nil
-			}
-
-			var allSeatIDs []uuid.UUID
-			for _, items := range itemsByBooking {
-				for _, item := range items {
-					if item.SeatID != nil && *item.SeatID != uuid.Nil {
-						allSeatIDs = append(allSeatIDs, *item.SeatID)
-					}
-				}
-			}
-
-			seatMap := make(map[uuid.UUID]domain.SeatDetail)
-			if len(allSeatIDs) > 0 {
-				details, err := tx.SeatRepository().FindDetailsBySeatIDs(ctx, allSeatIDs)
-				if err != nil {
-					u.logger.WarnContext(ctx, "failed to resolve seats for customer bookings", slog.Any("error", err))
-				} else {
-					seatMap = details
-				}
-			}
-
-			for i := range bookings {
-				bID := bookings[i].ID
-				items := itemsByBooking[bID]
-				var seats []domain.SeatDetail
-				for _, item := range items {
-					if item.SeatID != nil {
-						if d, ok := seatMap[*item.SeatID]; ok {
-							seats = append(seats, d)
-						}
-					}
-				}
-				bookings[i].Seats = seats
-			}
-
-			return nil
+			return u.populateBookingSeats(ctx, tx, bookings)
 		},
 	)
 	if err != nil {
@@ -350,12 +306,123 @@ func (u *BookingUsecase) GetMyBookings(
 		bookings = []domain.Booking{}
 	}
 
-	u.logger.InfoContext(ctx, "customer bookings retrieved",
-		slog.String("user_id", userID.String()),
-		slog.Int("booking_count", len(bookings)),
-	)
-
 	return bookings, nil
+}
+
+// GetMyBookingsPaginated returns paginated bookings belonging to the authenticated customer.
+func (u *BookingUsecase) GetMyBookingsPaginated(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter domain.CustomerBookingFilter,
+) (*domain.CustomerBookingList, error) {
+	if userID == uuid.Nil {
+		u.logger.WarnContext(ctx, "booking listing rejected: invalid user ID")
+		return nil, domain.ErrBookingNotFound
+	}
+
+	if filter.Page < 1 {
+		filter.Page = 1
+	}
+	if filter.Limit < 1 {
+		filter.Limit = 5
+	} else if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	var bookings []domain.Booking
+	var total int64
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			var err error
+			bookings, total, err = tx.BookingRepository().FindByUserIDPaginated(ctx, userID, filter)
+			if err != nil {
+				return err
+			}
+
+			return u.populateBookingSeats(ctx, tx, bookings)
+		},
+	)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "failed to retrieve paginated customer bookings",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	if bookings == nil {
+		bookings = []domain.Booking{}
+	}
+
+	totalPages := 1
+	if total > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(filter.Limit)))
+	}
+
+	return &domain.CustomerBookingList{
+		Bookings:   bookings,
+		Total:      total,
+		Page:       filter.Page,
+		Limit:      filter.Limit,
+		TotalPages: totalPages,
+	}, nil
+}
+
+func (u *BookingUsecase) populateBookingSeats(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	bookings []domain.Booking,
+) error {
+	if len(bookings) == 0 {
+		return nil
+	}
+
+	bookingIDs := make([]uuid.UUID, 0, len(bookings))
+	for _, b := range bookings {
+		bookingIDs = append(bookingIDs, b.ID)
+	}
+
+	itemsByBooking, err := tx.BookingRepository().FindItemsByBookingIDs(ctx, bookingIDs)
+	if err != nil {
+		u.logger.WarnContext(ctx, "failed to find items for customer bookings", slog.Any("error", err))
+		return nil
+	}
+
+	var allSeatIDs []uuid.UUID
+	for _, items := range itemsByBooking {
+		for _, item := range items {
+			if item.SeatID != nil && *item.SeatID != uuid.Nil {
+				allSeatIDs = append(allSeatIDs, *item.SeatID)
+			}
+		}
+	}
+
+	seatMap := make(map[uuid.UUID]domain.SeatDetail)
+	if len(allSeatIDs) > 0 {
+		details, err := tx.SeatRepository().FindDetailsBySeatIDs(ctx, allSeatIDs)
+		if err != nil {
+			u.logger.WarnContext(ctx, "failed to resolve seats for customer bookings", slog.Any("error", err))
+		} else {
+			seatMap = details
+		}
+	}
+
+	for i := range bookings {
+		bID := bookings[i].ID
+		items := itemsByBooking[bID]
+		var seats []domain.SeatDetail
+		for _, item := range items {
+			if item.SeatID != nil {
+				if d, ok := seatMap[*item.SeatID]; ok {
+					seats = append(seats, d)
+				}
+			}
+		}
+		bookings[i].Seats = seats
+	}
+
+	return nil
 }
 
 // GetBookingByID returns a specific booking and its associated items only when it belongs to the authenticated user.
@@ -813,33 +880,42 @@ func (u *BookingUsecase) CancelBooking(
 				return fmt.Errorf("invalid payment id format: %w", err)
 			}
 
-			// Ensure no active refund is already processed or pending in-flight.
+			// Check existing refund records for this booking.
 			existingRefunds, err := tx.RefundRepository().FindByBookingID(ctx, booking.ID)
 			if err != nil {
 				return err
 			}
-			for _, r := range existingRefunds {
-				if r.Status == domain.RefundStatusSuccess {
-					return domain.ErrRefundAlreadyProcessed
+			for i := range existingRefunds {
+				r := &existingRefunds[i]
+				if r.Status == domain.RefundStatusSuccess || (r.Status == domain.RefundStatusPending && r.GatewayRefundID != nil && *r.GatewayRefundID != "") {
+					// Gateway refund is already recorded locally from an earlier accepted attempt,
+					// but booking cancellation was interrupted. Reuse this refund to complete cancellation.
+					pendingRefund = r
+					break
 				}
 				if r.Status == domain.RefundStatusPending && time.Since(r.CreatedAt) < 2*time.Minute {
 					return domain.ErrRefundInProgress
 				}
 			}
 
-			// Create PENDING refund record before invoking gateway outside transaction.
-			pendingRefund = &domain.Refund{
-				ID:        uuid.New(),
-				BookingID: booking.ID,
-				PaymentID: paymentUUID,
-				Amount:    refundAmount,
-				Status:    domain.RefundStatusPending,
-				Reason:    "CUSTOMER_CANCELLATION",
-				CreatedAt: now,
-				UpdatedAt: now,
-			}
+			if pendingRefund == nil {
+				// Create PENDING refund record before invoking gateway outside transaction.
+				pendingRefund = &domain.Refund{
+					ID:        uuid.New(),
+					BookingID: booking.ID,
+					PaymentID: paymentUUID,
+					Amount:    refundAmount,
+					Status:    domain.RefundStatusPending,
+					Reason:    "CUSTOMER_CANCELLATION",
+					CreatedAt: now,
+					UpdatedAt: now,
+				}
 
-			return tx.RefundRepository().Create(ctx, pendingRefund)
+				if err := tx.RefundRepository().Create(ctx, pendingRefund); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	)
 	if err != nil {
@@ -873,29 +949,81 @@ func (u *BookingUsecase) CancelBooking(
 	gatewayPaymentID := *successfulPayment.TransactionID
 	idempotencyKey := pendingRefund.ID.String()
 
-	refundResult, gatewayErr := u.refundProvider.Refund(ctx, gatewayPaymentID, refundAmount, "INR", idempotencyKey)
-	if gatewayErr != nil || refundResult == nil || refundResult.Status != domain.RefundStatusSuccess {
-		// Mark refund as FAILED in separate short transaction so the customer can retry.
-		_ = u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
-			pendingRefund.Status = domain.RefundStatusFailed
-			pendingRefund.UpdatedAt = time.Now()
-			return tx.RefundRepository().Update(ctx, pendingRefund)
-		})
+	var refundResult *domain.RefundResult
 
-		u.logger.ErrorContext(ctx, "booking_cancellation_gateway_refund_failed",
-			slog.String("booking_id", booking.ID.String()),
-			slog.String("refund_id", pendingRefund.ID.String()),
-			slog.String("gateway_payment_id", gatewayPaymentID),
-			slog.Any("error", gatewayErr),
-		)
-
-		if gatewayErr != nil {
-			return nil, fmt.Errorf("%w: %v", domain.ErrGatewayRefundFailed, gatewayErr)
+	// 1. If pendingRefund already has a GatewayRefundID (e.g. recovered from previous attempt),
+	// use it directly.
+	if pendingRefund.GatewayRefundID != nil && *pendingRefund.GatewayRefundID != "" {
+		refundResult = &domain.RefundResult{
+			RefundID: *pendingRefund.GatewayRefundID,
+			Amount:   pendingRefund.Amount,
+			Status:   pendingRefund.Status,
+			Receipt:  booking.ID.String(),
 		}
-		return nil, domain.ErrGatewayRefundFailed
 	}
 
-	// Phase 2: Gateway confirmed refund. Mark refund SUCCESS, booking CANCELLED, tickets CANCELLED, release inventory.
+	// 2. Preflight Gateway Reconciliation: Check if a refund was already accepted by the gateway
+	// for this booking before issuing a new gateway refund call.
+	if refundResult == nil {
+		gatewayRefunds, fetchErr := u.refundProvider.FetchRefunds(ctx, gatewayPaymentID)
+		if fetchErr == nil && len(gatewayRefunds) > 0 {
+			refundResult = findMatchingGatewayRefund(gatewayRefunds, booking.ID, &pendingRefund.ID, refundAmount)
+			if refundResult != nil {
+				u.logger.InfoContext(ctx, "reconciled_existing_gateway_refund_preflight",
+					slog.String("booking_id", booking.ID.String()),
+					slog.String("gateway_refund_id", refundResult.RefundID),
+					slog.String("status", refundResult.Status),
+				)
+			}
+		}
+	}
+
+	// 3. Issue Gateway Refund if no existing gateway refund was discovered.
+	if refundResult == nil {
+		res, gatewayErr := u.refundProvider.Refund(ctx, gatewayPaymentID, refundAmount, "INR", idempotencyKey)
+		if gatewayErr == nil && res != nil && (res.Status == domain.RefundStatusSuccess || res.Status == domain.RefundStatusPending) {
+			refundResult = res
+		} else {
+			// 4. Ambiguous Timeout Recovery / Post-failure Reconciliation:
+			// If the gateway returned an error (such as network timeout / 5xx) or non-success status,
+			// query FetchRefunds to discover if the gateway actually accepted and processed the refund.
+			reconciledRefunds, fetchErr := u.refundProvider.FetchRefunds(ctx, gatewayPaymentID)
+			if fetchErr == nil && len(reconciledRefunds) > 0 {
+				matched := findMatchingGatewayRefund(reconciledRefunds, booking.ID, &pendingRefund.ID, refundAmount)
+				if matched != nil {
+					u.logger.InfoContext(ctx, "recovered_refund_from_gateway_reconciliation",
+						slog.String("booking_id", booking.ID.String()),
+						slog.String("gateway_refund_id", matched.RefundID),
+						slog.String("status", matched.Status),
+					)
+					refundResult = matched
+				}
+			}
+
+			// If still no refund found, this is a confirmed gateway failure.
+			if refundResult == nil {
+				_ = u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+					pendingRefund.Status = domain.RefundStatusFailed
+					pendingRefund.UpdatedAt = time.Now()
+					return tx.RefundRepository().Update(ctx, pendingRefund)
+				})
+
+				u.logger.ErrorContext(ctx, "booking_cancellation_gateway_refund_failed",
+					slog.String("booking_id", booking.ID.String()),
+					slog.String("refund_id", pendingRefund.ID.String()),
+					slog.String("gateway_payment_id", gatewayPaymentID),
+					slog.Any("error", gatewayErr),
+				)
+
+				if gatewayErr != nil {
+					return nil, fmt.Errorf("%w: %v", domain.ErrGatewayRefundFailed, gatewayErr)
+				}
+				return nil, domain.ErrGatewayRefundFailed
+			}
+		}
+	}
+
+	// Phase 2: Gateway confirmed refund. Mark refund, booking CANCELLED, tickets CANCELLED, release inventory.
 	completionTime := time.Now()
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
@@ -907,7 +1035,7 @@ func (u *BookingUsecase) CancelBooking(
 				return nil
 			}
 
-			pendingRefund.Status = domain.RefundStatusSuccess
+			pendingRefund.Status = refundResult.Status
 			pendingRefund.GatewayRefundID = &refundResult.RefundID
 			pendingRefund.ProcessedAt = &completionTime
 			pendingRefund.UpdatedAt = completionTime
@@ -941,6 +1069,7 @@ func (u *BookingUsecase) CancelBooking(
 		slog.String("refund_id", pendingRefund.ID.String()),
 		slog.String("gateway_refund_id", refundResult.RefundID),
 		slog.String("refund_amount", refundAmount.String()),
+		slog.String("refund_status", refundResult.Status),
 		slog.String("refund_policy", booking.RefundPolicy),
 	)
 
@@ -949,7 +1078,7 @@ func (u *BookingUsecase) CancelBooking(
 		BookingNumber: booking.BookingNumber,
 		Status:        domain.BookingStatusCancelled,
 		RefundAmount:  refundAmount,
-		RefundStatus:  domain.RefundStatusSuccess,
+		RefundStatus:  refundResult.Status,
 		RefundID:      refundResult.RefundID,
 		CancelledAt:   completionTime,
 	}, nil
@@ -998,4 +1127,441 @@ func (u *BookingUsecase) restoreInventory(
 	}
 
 	return nil
+}
+
+func findMatchingGatewayRefund(
+	refunds []domain.RefundResult,
+	bookingID uuid.UUID,
+	pendingRefundID *uuid.UUID,
+	expectedAmount decimal.Decimal,
+) *domain.RefundResult {
+	bookingIDStr := bookingID.String()
+	var pendingRefundIDStr string
+	if pendingRefundID != nil {
+		pendingRefundIDStr = pendingRefundID.String()
+	}
+
+	// First pass: exact receipt match against booking ID or pending refund ID.
+	for i := range refunds {
+		r := &refunds[i]
+		if r.Status != domain.RefundStatusSuccess && r.Status != domain.RefundStatusPending {
+			continue
+		}
+		if r.Receipt != "" && (r.Receipt == bookingIDStr || (pendingRefundIDStr != "" && r.Receipt == pendingRefundIDStr)) {
+			copied := *r
+			return &copied
+		}
+	}
+
+	// Second pass: amount match when exactly one active gateway refund exists.
+	var amountMatch *domain.RefundResult
+	count := 0
+	for i := range refunds {
+		r := &refunds[i]
+		if r.Status != domain.RefundStatusSuccess && r.Status != domain.RefundStatusPending {
+			continue
+		}
+		if r.Amount.Equal(expectedAmount) {
+			copied := *r
+			amountMatch = &copied
+			count++
+		}
+	}
+	if count == 1 {
+		return amountMatch
+	}
+
+	return nil
+}
+
+// GetBookingInvoice retrieves the authoritative booking receipt snapshot for an authorized user.
+// If the booking is confirmed but the historical receipt snapshot does not exist, it self-heals
+// by creating the invoice snapshot.
+func (u *BookingUsecase) GetBookingInvoice(
+	ctx context.Context,
+	userID uuid.UUID,
+	bookingID uuid.UUID,
+) (*domain.InvoiceSummaryDTO, error) {
+	if userID == uuid.Nil || bookingID == uuid.Nil {
+		return nil, domain.ErrBookingNotFound
+	}
+
+	var dto *domain.InvoiceSummaryDTO
+
+	err := u.transactionManager.WithinTransaction(
+		func(tx domain.TransactionRepositories) error {
+			booking, _, err := tx.BookingRepository().FindWithItemsByID(ctx, bookingID)
+			if err != nil {
+				return err
+			}
+
+			if booking.UserID != userID {
+				u.logger.WarnContext(ctx, "booking receipt access denied (user mismatch)",
+					slog.String("user_id", userID.String()),
+					slog.String("booking_id", bookingID.String()),
+				)
+				return domain.ErrBookingNotFound
+			}
+
+			invoice, invItems, err := tx.InvoiceRepository().FindByBookingIDWithItems(ctx, bookingID)
+			if err != nil {
+				if errors.Is(err, domain.ErrInvoiceNotFound) {
+					// Check eligibility for historical self-healing
+					if booking.Status != domain.BookingStatusConfirmed {
+						return domain.ErrInvoiceNotFound
+					}
+
+					payments, pErr := tx.PaymentRepository().FindByBookingID(ctx, bookingID.String())
+					if pErr != nil {
+						return pErr
+					}
+
+					var successfulPayment *domain.Payment
+					for i := range payments {
+						if payments[i].Status == domain.PaymentStatusSuccess {
+							successfulPayment = &payments[i]
+							break
+						}
+					}
+
+					if successfulPayment == nil {
+						return domain.ErrInvoiceNotFound
+					}
+
+					// Self-heal snapshot
+					healedInv, healErr := u.createReceiptSnapshot(ctx, tx, booking, successfulPayment, time.Now())
+					if healErr != nil {
+						return healErr
+					}
+					invoice = healedInv
+					invItems = healedInv.Items
+				} else {
+					return err
+				}
+			}
+
+			// Retrieve payment details
+			payMethod := "ONLINE"
+			var txID *string
+			var orderID *string
+			paidAt := invoice.IssuedAt
+
+			payments, _ := tx.PaymentRepository().FindByBookingID(ctx, bookingID.String())
+			for _, p := range payments {
+				if p.Status == domain.PaymentStatusSuccess {
+					payMethod = string(p.Method)
+					txID = p.TransactionID
+					orderID = p.ProviderOrderID
+					if p.PaidAt != nil {
+						paidAt = *p.PaidAt
+					}
+					break
+				}
+			}
+
+			d := &domain.InvoiceSummaryDTO{
+				ID:            invoice.ID,
+				ReceiptNumber: invoice.InvoiceNumber,
+				DocumentType:  "Booking Receipt",
+				Status:        invoice.Status,
+				IssuedAt:      invoice.IssuedAt,
+				Items:         invItems,
+			}
+
+			d.Booking.ID = booking.ID
+			d.Booking.BookingNumber = booking.BookingNumber
+
+			d.Customer.Name = invoice.CustomerName
+			d.Customer.Email = invoice.CustomerEmail
+			d.Customer.Phone = invoice.CustomerPhone
+
+			d.Event.Title = invoice.EventTitle
+			d.Event.Date = invoice.EventDate
+			d.Event.Time = invoice.EventTimeStr
+			d.Event.VenueName = invoice.VenueName
+			d.Event.VenueAddress = invoice.VenueAddress
+			d.Event.IsOnline = invoice.IsOnline
+			d.Event.OnlineDetails = invoice.OnlineDetails
+
+			d.Issuer.IssuerName = invoice.IssuerName
+			d.Issuer.OrganizerName = invoice.OrganizerName
+			d.Issuer.Disclaimer = "This document is an official booking and payment receipt confirming your reservation and payment. Not a GST tax invoice."
+
+			d.Pricing.Subtotal = invoice.Subtotal
+			d.Pricing.PlatformFee = invoice.PlatformFee
+			d.Pricing.TaxAmount = invoice.TaxAmount
+			d.Pricing.DiscountAmount = invoice.DiscountAmount
+			d.Pricing.TotalAmount = invoice.TotalAmount
+			d.Pricing.PaidAmount = invoice.PaidAmount
+			d.Pricing.Currency = invoice.Currency
+
+			d.Payment.Method = payMethod
+			d.Payment.TransactionID = txID
+			d.Payment.ProviderOrderID = orderID
+			d.Payment.PaidAt = paidAt
+
+			dto = d
+			return nil
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return dto, nil
+}
+
+// GetBookingInvoicePDF generates the PDF bytes and recommended filename for a booking receipt.
+func (u *BookingUsecase) GetBookingInvoicePDF(
+	ctx context.Context,
+	userID uuid.UUID,
+	bookingID uuid.UUID,
+) ([]byte, string, error) {
+	dto, err := u.GetBookingInvoice(ctx, userID, bookingID)
+	if err != nil {
+		return nil, "", err
+	}
+
+	pdfBytes, err := u.receiptPDFService.GenerateReceiptPDF(*dto)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "failed to generate receipt PDF",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("receipt_number", dto.ReceiptNumber),
+			slog.Any("error", err),
+		)
+		return nil, "", fmt.Errorf("failed to generate receipt PDF: %w", err)
+	}
+
+	filename := fmt.Sprintf("receipt-%s.pdf", dto.ReceiptNumber)
+	return pdfBytes, filename, nil
+}
+
+func (u *BookingUsecase) createReceiptSnapshot(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	booking *domain.Booking,
+	payment *domain.Payment,
+	now time.Time,
+) (*domain.Invoice, error) {
+	if booking == nil || payment == nil {
+		return nil, errors.New("booking and payment are required to create receipt snapshot")
+	}
+
+	existing, err := tx.InvoiceRepository().FindByBookingID(ctx, booking.ID)
+	if err == nil && existing != nil {
+		return existing, nil
+	}
+
+	paymentUUID, err := uuid.Parse(payment.ID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid payment id %s: %w", payment.ID, err)
+	}
+
+	receiptNumber, err := tx.InvoiceRepository().NextReceiptNumber(ctx, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate receipt number: %w", err)
+	}
+
+	customerName := "Customer"
+	customerEmail := ""
+	var customerPhone *string
+	user, userErr := tx.UserRepository().FindByID(booking.UserID)
+	if userErr == nil && user != nil {
+		if strings.TrimSpace(user.FullName) != "" {
+			customerName = strings.TrimSpace(user.FullName)
+		} else if strings.TrimSpace(user.Email) != "" {
+			customerName = strings.TrimSpace(user.Email)
+		}
+		customerEmail = strings.TrimSpace(user.Email)
+		if strings.TrimSpace(user.Phone) != "" {
+			phone := strings.TrimSpace(user.Phone)
+			customerPhone = &phone
+		}
+	}
+
+	eventTitle := "Event"
+	isOnline := false
+	var onlineDetails *string
+	var venueName *string
+	var venueAddress *string
+	var organizerName *string
+
+	event, eventErr := tx.EventRepository().FindByID(booking.EventID)
+	if eventErr == nil && event != nil {
+		if strings.TrimSpace(event.Title) != "" {
+			eventTitle = strings.TrimSpace(event.Title)
+		}
+		isOnline = event.EventType == domain.EventTypeOnline || event.EventType == domain.EventTypeHybrid
+		if event.OnlineURL != "" {
+			onlineDetails = &event.OnlineURL
+		}
+
+		if event.EventType != domain.EventTypeOnline && event.VenueID != nil && *event.VenueID != uuid.Nil {
+			venue, vErr := tx.VenueRepository().FindByID(*event.VenueID)
+			if vErr == nil && venue != nil {
+				vName := strings.TrimSpace(venue.Name)
+				if vName != "" {
+					venueName = &vName
+				}
+				var addrParts []string
+				if strings.TrimSpace(venue.Address) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.Address))
+				}
+				if strings.TrimSpace(venue.City) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.City))
+				}
+				if strings.TrimSpace(venue.State) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.State))
+				}
+				if strings.TrimSpace(venue.PostalCode) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.PostalCode))
+				}
+				if len(addrParts) > 0 {
+					vAddr := strings.Join(addrParts, ", ")
+					venueAddress = &vAddr
+				}
+			}
+		}
+
+		if event.OrganizerID != uuid.Nil {
+			profile, pErr := tx.OrganizerProfileRepository().FindByOrganizerID(event.OrganizerID)
+			if pErr == nil && profile != nil && strings.TrimSpace(profile.BusinessName) != "" {
+				bName := strings.TrimSpace(profile.BusinessName)
+				organizerName = &bName
+			}
+		}
+	}
+
+	eventDate := now.Format("2006-01-02")
+	var eventTimeStr *string
+	schedule, sErr := tx.EventScheduleRepository().FindByEventID(booking.EventID)
+	if sErr == nil && schedule != nil && !schedule.EventDate.IsZero() {
+		eventDate = schedule.EventDate.Format("2006-01-02")
+		if !schedule.StartTime.IsZero() {
+			tStr := schedule.StartTime.Format("03:04 PM")
+			if !schedule.EndTime.IsZero() {
+				tStr = fmt.Sprintf("%s - %s", tStr, schedule.EndTime.Format("03:04 PM"))
+			}
+			eventTimeStr = &tStr
+		} else if schedule.IsAllDay {
+			allDay := "All Day"
+			eventTimeStr = &allDay
+		}
+	}
+
+	bookingItems, bErr := tx.BookingRepository().FindItemsByBookingID(ctx, booking.ID)
+	if bErr != nil {
+		return nil, fmt.Errorf("failed to fetch booking items: %w", bErr)
+	}
+
+	var seatIDs []uuid.UUID
+	for _, it := range bookingItems {
+		if it.SeatID != nil && *it.SeatID != uuid.Nil {
+			seatIDs = append(seatIDs, *it.SeatID)
+		}
+	}
+
+	var seatDetailsMap map[uuid.UUID]domain.SeatDetail
+	if len(seatIDs) > 0 {
+		seatDetailsMap, _ = tx.SeatRepository().FindDetailsBySeatIDs(ctx, seatIDs)
+	}
+
+	ticketTypeCache := make(map[uuid.UUID]string)
+
+	invoiceID := uuid.New()
+	invoiceItems := make([]domain.InvoiceItem, 0, len(bookingItems))
+
+	for _, it := range bookingItems {
+		categoryName := "Admission"
+		if it.TicketTypeID != nil && *it.TicketTypeID != uuid.Nil {
+			if name, ok := ticketTypeCache[*it.TicketTypeID]; ok {
+				categoryName = name
+			} else {
+				tt, ttErr := tx.TicketTypeRepository().FindByID(ctx, *it.TicketTypeID)
+				if ttErr == nil && tt != nil && strings.TrimSpace(tt.Name) != "" {
+					categoryName = strings.TrimSpace(tt.Name)
+					ticketTypeCache[*it.TicketTypeID] = categoryName
+				}
+			}
+		}
+
+		var seatLabel *string
+		if it.SeatID != nil && seatDetailsMap != nil {
+			if sd, ok := seatDetailsMap[*it.SeatID]; ok && strings.TrimSpace(sd.Label) != "" {
+				label := strings.TrimSpace(sd.Label)
+				seatLabel = &label
+			}
+		}
+
+		itemTotalPrice := it.UnitPrice.Mul(decimal.NewFromInt(int64(it.Quantity)))
+		itemID := it.ID
+		invoiceItems = append(invoiceItems, domain.InvoiceItem{
+			ID:            uuid.New(),
+			InvoiceID:     invoiceID,
+			BookingItemID: &itemID,
+			CategoryName:  categoryName,
+			SeatLabel:     seatLabel,
+			Quantity:      it.Quantity,
+			UnitPrice:     it.UnitPrice,
+			TotalPrice:    itemTotalPrice,
+			CreatedAt:     now,
+		})
+	}
+
+	if len(invoiceItems) == 0 {
+		invoiceItems = append(invoiceItems, domain.InvoiceItem{
+			ID:           uuid.New(),
+			InvoiceID:    invoiceID,
+			CategoryName: "General Admission",
+			Quantity:     1,
+			UnitPrice:    booking.Total,
+			TotalPrice:   booking.Total,
+			CreatedAt:    now,
+		})
+	}
+
+	invoice := &domain.Invoice{
+		ID:             invoiceID,
+		InvoiceNumber:  receiptNumber,
+		BookingID:      booking.ID,
+		PaymentID:      paymentUUID,
+		UserID:         booking.UserID,
+		EventID:        booking.EventID,
+		Status:         domain.InvoiceStatusIssued,
+		Currency:       "INR",
+		Subtotal:       booking.Subtotal,
+		PlatformFee:    booking.PlatformFee,
+		TaxAmount:      booking.Tax,
+		DiscountAmount: booking.Discount,
+		TotalAmount:    booking.Total,
+		PaidAmount:     payment.Amount,
+		CustomerName:   customerName,
+		CustomerEmail:  customerEmail,
+		CustomerPhone:  customerPhone,
+		EventTitle:     eventTitle,
+		EventDate:      eventDate,
+		EventTimeStr:   eventTimeStr,
+		VenueName:      venueName,
+		VenueAddress:   venueAddress,
+		IsOnline:       isOnline,
+		OnlineDetails:  onlineDetails,
+		IssuerName:     "EventHub Bookings",
+		OrganizerName:  organizerName,
+		IssuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		Items:          invoiceItems,
+	}
+
+	if err := tx.InvoiceRepository().Create(ctx, invoice, invoiceItems); err != nil {
+		if errors.Is(err, domain.ErrInvoiceAlreadyExists) {
+			existing, getErr := tx.InvoiceRepository().FindByBookingID(ctx, booking.ID)
+			if getErr == nil {
+				return existing, nil
+			}
+		}
+		return nil, fmt.Errorf("failed to save invoice: %w", err)
+	}
+
+	return invoice, nil
 }

@@ -3,8 +3,10 @@ package booking_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +104,58 @@ func (m *mockBookingRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([
 		}
 	}
 	return result, nil
+}
+
+func (m *mockBookingRepo) FindByUserIDPaginated(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter domain.CustomerBookingFilter,
+) ([]domain.Booking, int64, error) {
+	var filtered []domain.Booking
+	for _, b := range m.bookingsByID {
+		if b.UserID != userID {
+			continue
+		}
+
+		status := strings.ToUpper(strings.TrimSpace(filter.Status))
+		if status == "CONFIRMED" && b.Status != domain.BookingStatusConfirmed && b.Status != "COMPLETED" {
+			continue
+		} else if status == "CANCELLED" && b.Status != domain.BookingStatusCancelled {
+			continue
+		} else if status == "REFUNDED" && b.Status != "REFUNDED" {
+			continue
+		}
+
+		search := strings.ToLower(strings.TrimSpace(filter.Search))
+		if search != "" && !strings.Contains(strings.ToLower(b.BookingNumber), search) {
+			continue
+		}
+
+		filtered = append(filtered, *b)
+	}
+
+	total := int64(len(filtered))
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit < 1 {
+		limit = 5
+	} else if limit > 100 {
+		limit = 100
+	}
+
+	start := (page - 1) * limit
+	if start >= len(filtered) {
+		return []domain.Booking{}, total, nil
+	}
+	end := start + limit
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+
+	return filtered[start:end], total, nil
 }
 
 func (m *mockBookingRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
@@ -839,6 +893,92 @@ func TestBookingUsecase_GetMyBookings_NilUserID(t *testing.T) {
 
 	_, err := uc.GetMyBookings(ctx, uuid.Nil)
 	assert.ErrorIs(t, err, domain.ErrBookingNotFound)
+}
+
+func TestBookingUsecase_GetMyBookingsPaginated_Success(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	for i := 1; i <= 7; i++ {
+		b := &domain.Booking{
+			ID:            uuid.New(),
+			BookingNumber: fmt.Sprintf("EVH-%04d", i),
+			UserID:        userID,
+			Total:         decimal.NewFromInt(int64(i * 100)),
+			Status:        domain.BookingStatusConfirmed,
+		}
+		repos.bookingRepo.bookingsByID[b.ID] = b
+	}
+
+	result, err := uc.GetMyBookingsPaginated(ctx, userID, domain.CustomerBookingFilter{
+		Page:  2,
+		Limit: 3,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(7), result.Total)
+	assert.Equal(t, 2, result.Page)
+	assert.Equal(t, 3, result.Limit)
+	assert.Equal(t, 3, result.TotalPages)
+	assert.Len(t, result.Bookings, 3)
+}
+
+func TestBookingUsecase_GetMyBookingsPaginated_StatusAndSearchFilter(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	b1 := &domain.Booking{
+		ID:            uuid.New(),
+		BookingNumber: "EVH-ROCK-001",
+		UserID:        userID,
+		Status:        domain.BookingStatusConfirmed,
+	}
+	b2 := &domain.Booking{
+		ID:            uuid.New(),
+		BookingNumber: "EVH-JAZZ-002",
+		UserID:        userID,
+		Status:        domain.BookingStatusCancelled,
+	}
+	b3 := &domain.Booking{
+		ID:            uuid.New(),
+		BookingNumber: "EVH-ROCK-003",
+		UserID:        userID,
+		Status:        domain.BookingStatusCancelled,
+	}
+	repos.bookingRepo.bookingsByID[b1.ID] = b1
+	repos.bookingRepo.bookingsByID[b2.ID] = b2
+	repos.bookingRepo.bookingsByID[b3.ID] = b3
+
+	result, err := uc.GetMyBookingsPaginated(ctx, userID, domain.CustomerBookingFilter{
+		Page:   1,
+		Limit:  10,
+		Status: "CANCELLED",
+		Search: "rock",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), result.Total)
+	assert.Len(t, result.Bookings, 1)
+	assert.Equal(t, "EVH-ROCK-003", result.Bookings[0].BookingNumber)
+}
+
+func TestBookingUsecase_GetMyBookingsPaginated_NilUserID(t *testing.T) {
+	uc, _ := setupBookingUsecase()
+	ctx := context.Background()
+
+	_, err := uc.GetMyBookingsPaginated(ctx, uuid.Nil, domain.CustomerBookingFilter{})
+	assert.ErrorIs(t, err, domain.ErrBookingNotFound)
+}
+
+func TestBookingUsecase_GetMyBookingsPaginated_Empty(t *testing.T) {
+	uc, _ := setupBookingUsecase()
+	ctx := context.Background()
+
+	result, err := uc.GetMyBookingsPaginated(ctx, uuid.New(), domain.CustomerBookingFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, result.Bookings)
+	assert.Equal(t, int64(0), result.Total)
+	assert.Equal(t, 1, result.TotalPages)
 }
 
 func TestBookingUsecase_GetBookingByID_Success(t *testing.T) {
@@ -2185,4 +2325,80 @@ func TestBookingUsecase_CancelBooking_ExactlyOnceInventoryRestoration(t *testing
 	for _, tk := range tickets {
 		assert.Equal(t, domain.TicketStatusCancelled, tk.Status)
 	}
+}
+
+func TestBookingUsecase_CancelBooking_MultipleGatewayRefunds_MatchesByReceipt(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(800)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Pre-populate gateway with multiple refunds (one for a different receipt, one matching this booking)
+	provider.existingRefunds = []domain.RefundResult{
+		{
+			RefundID: "rfnd_other_booking_123",
+			Amount:   decimal.NewFromInt(500),
+			Status:   domain.RefundStatusSuccess,
+			Receipt:  uuid.NewString(),
+		},
+		{
+			RefundID: "rfnd_correct_match_456",
+			Amount:   total,
+			Status:   domain.RefundStatusSuccess,
+			Receipt:  booking.ID.String(),
+		},
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, 0, provider.refundCalls)
+	assert.Equal(t, "rfnd_correct_match_456", out.RefundID)
+	assert.Equal(t, domain.RefundStatusSuccess, out.RefundStatus)
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+}
+
+func TestBookingUsecase_CancelBooking_AmbiguousTimeout_PostFailureReconciliation_MatchesPendingStatus(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	total := decimal.NewFromInt(750)
+
+	booking, _, items, _ := createCancellableBookingFixture(
+		repos, userID, total, true, 24, domain.RefundPolicyFull, 100, 48*time.Hour,
+	)
+
+	// Gateway returns network timeout
+	provider.refundErr = errors.New("context deadline exceeded")
+	// Post-failure reconciliation discovers a PENDING refund was registered at the gateway
+	provider.existingRefunds = []domain.RefundResult{
+		{
+			RefundID: "rfnd_recovered_pending_789",
+			Amount:   total,
+			Status:   domain.RefundStatusPending,
+			Receipt:  booking.ID.String(),
+		},
+	}
+
+	out, err := uc.CancelBooking(ctx, userID, booking.ID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, "rfnd_recovered_pending_789", out.RefundID)
+	assert.Equal(t, domain.RefundStatusPending, out.RefundStatus)
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.Equal(t, 2, repos.ticketTypeRepo.releasedQuantity[*items[0].TicketTypeID])
+
+	// Verify DB state
+	refunds := repos.refundRepo.refundsByBooking[booking.ID]
+	require.Len(t, refunds, 1)
+	assert.Equal(t, domain.RefundStatusPending, refunds[0].Status)
+	require.NotNil(t, refunds[0].GatewayRefundID)
+	assert.Equal(t, "rfnd_recovered_pending_789", *refunds[0].GatewayRefundID)
 }

@@ -90,6 +90,7 @@ type mockAdminTxReposForHandler struct {
 	ticketTypeRepo   domain.TicketTypeRepository
 	ticketRepo       domain.TicketRepository
 	seatLayoutRepo   domain.SeatLayoutRepository
+	seatColumnRepo   domain.SeatColumnRepository
 	seatSectionRepo  domain.SeatSectionRepository
 }
 
@@ -134,6 +135,9 @@ func (m *mockAdminTxReposForHandler) TicketTypeRepository() domain.TicketTypeRep
 }
 func (m *mockAdminTxReposForHandler) SeatLayoutRepository() domain.SeatLayoutRepository {
 	return m.seatLayoutRepo
+}
+func (m *mockAdminTxReposForHandler) SeatColumnRepository() domain.SeatColumnRepository {
+	return m.seatColumnRepo
 }
 func (m *mockAdminTxReposForHandler) SeatSectionRepository() domain.SeatSectionRepository {
 	return m.seatSectionRepo

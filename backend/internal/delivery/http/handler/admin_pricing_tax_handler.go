@@ -283,3 +283,49 @@ func handleError(c *gin.Context, err error) {
 		c.Error(err)
 	}
 }
+
+type PublicPricingTaxConfigResponse struct {
+	PlatformFeeEnabled bool            `json:"platform_fee_enabled"`
+	PlatformFeePercent decimal.Decimal `json:"platform_fee_percent"`
+	TaxEnabled         bool            `json:"tax_enabled"`
+	TaxPercent         decimal.Decimal `json:"tax_percent"`
+	TaxBasis           string          `json:"tax_basis"`
+	FreeTicketExempt   bool            `json:"free_ticket_exempt"`
+}
+
+func (h *AdminPricingTaxHandler) GetPublicActiveConfiguration(c *gin.Context) {
+	ctx := c.Request.Context()
+	active, err := h.usecase.GetActiveConfiguration(ctx, time.Now().UTC())
+	if err != nil {
+		if errors.Is(err, domain.ErrPricingConfigurationUnavailable) {
+			c.Error(appErrors.NewInternalError("pricing configuration is unavailable"))
+			return
+		}
+		c.Error(err)
+		return
+	}
+
+	taxEnabled := active.TaxEnabled && active.TaxRulesValidated
+	taxPercent := active.TaxPercent
+	if !taxEnabled {
+		taxPercent = decimal.Zero
+	}
+
+	platformFeeEnabled := active.PlatformFeeEnabled
+	platformFeePercent := active.PlatformFeePercent
+	if !platformFeeEnabled {
+		platformFeePercent = decimal.Zero
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": PublicPricingTaxConfigResponse{
+			PlatformFeeEnabled: platformFeeEnabled,
+			PlatformFeePercent: platformFeePercent,
+			TaxEnabled:         taxEnabled,
+			TaxPercent:         taxPercent,
+			TaxBasis:           active.TaxBasis,
+			FreeTicketExempt:   active.FreeTicketExempt,
+		},
+	})
+}

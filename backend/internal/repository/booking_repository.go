@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -275,6 +276,80 @@ func (r *bookingRepository) FindByUserID(
 	}
 
 	return bookings, nil
+}
+
+func (r *bookingRepository) FindByUserIDPaginated(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter domain.CustomerBookingFilter,
+) ([]domain.Booking, int64, error) {
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	}
+	limit := filter.Limit
+	if limit < 1 {
+		limit = 5
+	} else if limit > 100 {
+		limit = 100
+	}
+	offset := (page - 1) * limit
+
+	query := r.db.WithContext(ctx).
+		Model(&models.BookingModel{}).
+		Where("bookings.user_id = ?", userID)
+
+	status := strings.ToUpper(strings.TrimSpace(filter.Status))
+	switch status {
+	case "CONFIRMED":
+		query = query.Where("bookings.status IN ?", []string{domain.BookingStatusConfirmed, "COMPLETED"})
+	case "CANCELLED":
+		query = query.Where("bookings.status = ?", domain.BookingStatusCancelled)
+	case "REFUNDED":
+		query = query.Where("bookings.status = ?", "REFUNDED")
+	}
+
+	search := strings.TrimSpace(filter.Search)
+	if search != "" {
+		query = query.
+			Joins("LEFT JOIN events ON events.id = bookings.event_id").
+			Where("(bookings.booking_number ILIKE ? OR events.title ILIKE ?)", "%"+search+"%", "%"+search+"%")
+	}
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to count customer bookings",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, 0, err
+	}
+
+	if total == 0 {
+		return []domain.Booking{}, 0, nil
+	}
+
+	if strings.ToLower(strings.TrimSpace(filter.SortBy)) == "oldest" {
+		query = query.Order("bookings.created_at ASC")
+	} else {
+		query = query.Order("bookings.created_at DESC")
+	}
+
+	var bookingModels []models.BookingModel
+	if err := query.Select("bookings.*").Offset(offset).Limit(limit).Find(&bookingModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find paginated customer bookings",
+			slog.String("user_id", userID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, 0, err
+	}
+
+	bookings := make([]domain.Booking, 0, len(bookingModels))
+	for _, m := range bookingModels {
+		bookings = append(bookings, *bookingFromModel(&m))
+	}
+
+	return bookings, total, nil
 }
 
 func (r *bookingRepository) FindWithItemsByID(

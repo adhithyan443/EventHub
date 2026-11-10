@@ -29,7 +29,14 @@ export default function ProfileSidebar({ user }) {
                     />
                     <div className="min-w-0">
                         <p className="font-bold text-slate-900 text-sm truncate">{user.fullName}</p>
-                        <p className="text-xs text-slate-500">Member since {user.memberSince}</p>
+                        <p className="text-xs text-slate-500">
+                            Member since{" "}
+                            {new Date(user.memberSince).toLocaleDateString("en-GB", {
+                                day: "2-digit",
+                                month: "short",
+                                year: "numeric",
+                            })}
+                        </p>
                     </div>
                 </div>
 

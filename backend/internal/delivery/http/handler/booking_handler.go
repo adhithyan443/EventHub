@@ -48,7 +48,40 @@ func (h *BookingHandler) GetMyBookings(c *gin.Context) {
 		return
 	}
 
-	bookings, err := h.bookingUsecase.GetMyBookings(c.Request.Context(), userID)
+	page := 1
+	limit := 5
+
+	if val := c.Query("page"); val != "" {
+		p, err := strconv.Atoi(val)
+		if err != nil || p < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid page parameter",
+			})
+			return
+		}
+		page = p
+	}
+
+	if val := c.Query("limit"); val != "" {
+		l, err := strconv.Atoi(val)
+		if err != nil || l < 1 || l > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid limit parameter, must be between 1 and 100",
+			})
+			return
+		}
+		limit = l
+	}
+
+	filter := domain.CustomerBookingFilter{
+		Page:   page,
+		Limit:  limit,
+		Status: strings.TrimSpace(c.Query("status")),
+		Search: strings.TrimSpace(c.Query("search")),
+		SortBy: strings.TrimSpace(c.Query("sort_by")),
+	}
+
+	result, err := h.bookingUsecase.GetMyBookingsPaginated(c.Request.Context(), userID, filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "failed to retrieve bookings",
@@ -56,12 +89,22 @@ func (h *BookingHandler) GetMyBookings(c *gin.Context) {
 		return
 	}
 
+	bookings := result.Bookings
 	if bookings == nil {
 		bookings = []domain.Booking{}
 	}
 
+	meta := gin.H{
+		"page":        result.Page,
+		"limit":       result.Limit,
+		"total":       result.Total,
+		"total_pages": result.TotalPages,
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"data": bookings,
+		"data":       bookings,
+		"meta":       meta,
+		"pagination": meta,
 	})
 }
 
@@ -329,4 +372,98 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		"message": "booking successfully cancelled",
 		"data":    result,
 	})
+}
+
+// GetBookingInvoice handles GET /api/v1/bookings/:id/invoice.
+func (h *BookingHandler) GetBookingInvoice(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "unauthorized",
+		})
+		return
+	}
+
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil || bookingID == uuid.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid booking ID",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	dto, err := h.bookingUsecase.GetBookingInvoice(ctx, userID, bookingID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBookingNotFound) || errors.Is(err, domain.ErrInvoiceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "invoice not found",
+			})
+			return
+		}
+
+		h.logger.ErrorContext(ctx, "failed to retrieve booking invoice",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("user_id", userID.String()),
+			slog.Any("error", err),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to retrieve booking invoice",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    dto,
+	})
+}
+
+// DownloadBookingInvoicePDF handles GET /api/v1/bookings/:id/invoice/download.
+func (h *BookingHandler) DownloadBookingInvoicePDF(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "unauthorized",
+		})
+		return
+	}
+
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil || bookingID == uuid.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid booking ID",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	pdfBytes, filename, err := h.bookingUsecase.GetBookingInvoicePDF(ctx, userID, bookingID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBookingNotFound) || errors.Is(err, domain.ErrInvoiceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "invoice not found",
+			})
+			return
+		}
+
+		h.logger.ErrorContext(ctx, "failed to download booking invoice PDF",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("user_id", userID.String()),
+			slog.Any("error", err),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to generate invoice PDF",
+		})
+		return
+	}
+
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Content-Length", strconv.Itoa(len(pdfBytes)))
+	c.Header("Cache-Control", "private, no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+
+	c.Data(http.StatusOK, "application/pdf", pdfBytes)
 }

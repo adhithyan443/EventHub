@@ -117,8 +117,8 @@ func (h *OrganizerApplicationHandler) SubmitApplication(ctx *gin.Context) {
 					"image/png":  true,
 					"image/webp": true,
 				},
-			)
-			if openErr != nil {
+			) 
+			if openErr != nil { 
 				ctx.Error(appErrors.NewValidationError(openErr.Error()))
 				return
 			}

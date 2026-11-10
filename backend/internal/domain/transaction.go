@@ -26,6 +26,7 @@ type TransactionRepositories interface {
 	EventContactRepository() EventContactRepository
 
 	SeatLayoutRepository() SeatLayoutRepository
+	SeatColumnRepository() SeatColumnRepository
 	SeatSectionRepository() SeatSectionRepository
 	SeatRowRepository() SeatRowRepository
 	SeatRepository() SeatRepository
@@ -40,4 +41,5 @@ type TransactionRepositories interface {
 	RefundRepository() RefundRepository
 	RazorpayWebhookEventRepository() RazorpayWebhookEventRepository
 	PricingTaxConfigurationRepository() PricingTaxConfigurationRepository
+	InvoiceRepository() InvoiceRepository
 }

@@ -223,6 +223,7 @@ func (h *PaymentHandler) VerifyPayment(c *gin.Context) {
 		"data": gin.H{
 			"payment": result.Payment,
 			"booking": result.Booking,
+			"invoice": result.Invoice,
 		},
 	})
 }

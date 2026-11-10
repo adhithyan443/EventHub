@@ -22,7 +22,17 @@ export default function EventDetailsContent({
   const contact = event?.Contact || {};
   const ticketTypes = event?.TicketTypes || [];
   const statistics = event?.Statistics || {};
-  const seatLayout = event?.SeatLayout;
+  const seatLayout = event?.SeatLayout || event?.seat_layout || event?.seatLayout;
+
+  const layoutSections = seatLayout?.Sections || seatLayout?.sections || [];
+  const rawColumns = seatLayout?.Columns || seatLayout?.columns || [];
+  const layoutColumns = Array.isArray(rawColumns)
+    ? [...rawColumns].sort(
+        (a, b) =>
+          Number(a.OrderIndex ?? a.order_index ?? 0) -
+          Number(b.OrderIndex ?? b.order_index ?? 0)
+      )
+    : [];
 
   const isSeated =
     String(setting?.SeatLayoutType || "").toUpperCase() === "SEATED";
@@ -471,7 +481,7 @@ export default function EventDetailsContent({
           </div>
 
           {/* Configured Seat Layout Card (Only for SEATED events) */}
-          {isSeated && seatLayout?.Sections && seatLayout.Sections.length > 0 && (
+          {isSeated && layoutSections.length > 0 && (
             <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#bcc9c6]/40">
                 <div className="flex flex-col gap-0.5">
@@ -484,13 +494,14 @@ export default function EventDetailsContent({
                     </span>
                   </div>
                   <p className="text-xs text-[#565e74]">
-                    {seatLayout.LayoutName || "Main Seating Layout"} •{" "}
-                    {seatLayout.Sections.length}{" "}
-                    {seatLayout.Sections.length === 1 ? "Section" : "Sections"}
+                    {seatLayout.LayoutName || seatLayout.layout_name || "Main Seating Layout"} •{" "}
+                    {layoutColumns.length > 0 ? `${layoutColumns.length} Columns • ` : ""}
+                    {layoutSections.length}{" "}
+                    {layoutSections.length === 1 ? "Section" : "Sections"}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-4 text-xs text-[#565e74]">
+                <div className="flex items-center gap-4 text-xs text-[#565e74] flex-wrap">
                   <div className="flex items-center gap-1.5">
                     <span className="size-3.5 rounded-md bg-white border border-[#00685f] inline-block shadow-2xs" />
                     <span>Available Seat</span>
@@ -498,6 +509,12 @@ export default function EventDetailsContent({
                   <div className="flex items-center gap-1.5">
                     <span className="size-3.5 rounded-md bg-gray-100 border border-gray-300 inline-block line-through text-[8px] flex items-center justify-center text-gray-500 font-bold" />
                     <span>Disabled Seat</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="size-3.5 rounded-md border border-dashed border-[#bcc9c6] bg-gray-50 flex items-center justify-center text-[8px] text-[#8b95a5] font-bold">
+                      —
+                    </span>
+                    <span>Gap / Spacer</span>
                   </div>
                 </div>
               </div>
@@ -514,29 +531,37 @@ export default function EventDetailsContent({
 
               {/* Sections Display */}
               <div className="flex flex-col gap-6">
-                {seatLayout.Sections.map((section, sIdx) => {
-                  const sectionSeatCount =
-                    section.Rows?.reduce(
-                      (acc, r) => acc + (r.Seats?.length || 0),
-                      0
-                    ) || 0;
+                {layoutSections.map((section, sIdx) => {
+                  const sectionRows = section.Rows || section.rows || [];
+                  const sectionName = section.Name || section.name || "General";
+                  const sectionPrice = section.Price ?? section.price ?? 0;
+                  const sectionSeatCount = sectionRows.reduce((acc, r) => {
+                    const seats = r.Seats || r.seats || [];
+                    return (
+                      acc +
+                      seats.filter(
+                        (s) =>
+                          String(s.Status ?? s.status ?? "").toUpperCase() !== "GAP"
+                      ).length
+                    );
+                  }, 0);
 
                   return (
                     <div
-                      key={section.ID || sIdx}
+                      key={section.ID || section.id || sIdx}
                       className="bg-[#f9f9ff] border border-[#bcc9c6]/40 rounded-xl p-4 sm:p-5 flex flex-col gap-4 shadow-2xs"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-[#bcc9c6]/30">
                         <div className="flex items-center gap-2">
                           <span className="size-3 rounded-full bg-[#00685f]" />
                           <h3 className="font-bold text-sm sm:text-base text-[#141b2b]">
-                            {section.Name}
+                            {sectionName}
                           </h3>
                         </div>
 
                         <div className="flex items-center gap-3 text-xs">
                           <span className="font-semibold text-[#00685f]">
-                            ₹{Number(section.Price || 0).toLocaleString("en-IN")} / seat
+                            ₹{Number(sectionPrice).toLocaleString("en-IN")} / seat
                           </span>
                           <span className="text-[#565e74] bg-white px-2 py-0.5 rounded border border-[#bcc9c6]/40">
                             {sectionSeatCount} {sectionSeatCount === 1 ? "seat" : "seats"}
@@ -546,43 +571,127 @@ export default function EventDetailsContent({
 
                       <div className="overflow-x-auto py-2">
                         <div className="flex flex-col gap-2.5 min-w-fit mx-auto items-center">
-                          {section.Rows?.map((row, rIdx) => (
-                            <div
-                              key={row.ID || rIdx}
-                              className="flex items-center gap-3 w-full justify-center"
-                            >
-                              <span className="w-12 text-right font-bold text-xs text-[#565e74] shrink-0 select-none">
-                                Row {row.RowName}
+                          {/* Layout-wide Column Header Track */}
+                          {layoutColumns.length > 0 && (
+                            <div className="flex items-center gap-3 w-full justify-center pb-1 mb-1 border-b border-[#bcc9c6]/20">
+                              <span className="w-12 text-right font-bold text-[10px] text-[#8b95a5] shrink-0 select-none">
+                                COL
                               </span>
-
-                              <div className="flex items-center gap-1.5 flex-wrap justify-center">
-                                {row.Seats?.map((seat, seatIdx) => {
-                                  const isDisabled = seat.Status === "DISABLED";
-                                  return (
-                                    <div
-                                      key={seat.ID || seatIdx}
-                                      title={`Row ${row.RowName}, Seat ${seat.SeatNumber}${
-                                        isDisabled
-                                          ? " (Disabled)"
-                                          : ` - ₹${Number(section.Price || 0).toLocaleString("en-IN")}`
-                                      }`}
-                                      className={`size-7 sm:size-8 rounded-lg flex items-center justify-center text-[10px] sm:text-xs font-semibold select-none transition-all ${
-                                        isDisabled
-                                          ? "bg-gray-100 text-gray-400 border border-gray-300 line-through opacity-60 cursor-not-allowed"
-                                          : "bg-white text-[#141b2b] border border-[#bcc9c6] hover:border-[#00685f] hover:bg-[#00685f]/10 hover:text-[#00685f] shadow-2xs cursor-default"
-                                      }`}
-                                    >
-                                      {seat.SeatNumber}
-                                    </div>
-                                  );
-                                })}
+                              <div className="flex items-center gap-1.5 flex-nowrap justify-center">
+                                {layoutColumns.map((col, cIdx) => (
+                                  <div
+                                    key={col.ID || col.id || cIdx}
+                                    className="size-7 sm:size-8 flex items-center justify-center text-[10px] sm:text-xs font-bold text-[#4338ca] bg-[#eef2ff] border border-[#c7d2fe] rounded-md shrink-0 shadow-2xs select-none"
+                                  >
+                                    {col.Label ?? col.label ?? cIdx + 1}
+                                  </div>
+                                ))}
                               </div>
-
-                              <span className="w-12 text-left font-bold text-xs text-[#565e74] shrink-0 select-none">
-                                Row {row.RowName}
-                              </span>
+                              <span className="w-12 shrink-0 select-none" />
                             </div>
-                          ))}
+                          )}
+
+                          {sectionRows.map((row, rIdx) => {
+                            const rowName = row.RowName || row.row_name || "";
+                            const rowSeats = row.Seats || row.seats || [];
+
+                            return (
+                              <div
+                                key={row.ID || row.id || rIdx}
+                                className="flex items-center gap-3 w-full justify-center"
+                              >
+                                <span className="w-12 text-right font-bold text-xs text-[#565e74] shrink-0 select-none">
+                                  Row {rowName}
+                                </span>
+
+                                <div className="flex items-center gap-1.5 flex-nowrap justify-center">
+                                  {layoutColumns.length > 0
+                                    ? layoutColumns.map((col, colIdx) => {
+                                        const seat = rowSeats.find((s) => {
+                                          const colVal = s.GridCol ?? s.grid_col ?? s.gridCol;
+                                          if (colVal !== undefined && colVal !== null) {
+                                            return Number(colVal) === colIdx;
+                                          }
+                                          const seatColId = s.ColumnID ?? s.column_id ?? s.columnId;
+                                          if (seatColId && (col.ID || col.id)) {
+                                            return seatColId === (col.ID || col.id);
+                                          }
+                                          return false;
+                                        });
+
+                                        const seatStatus = String(
+                                          seat?.Status ?? seat?.status ?? ""
+                                        ).toUpperCase();
+                                        const isGap = !seat || seatStatus === "GAP";
+
+                                        if (isGap) {
+                                          return (
+                                            <div
+                                              key={`gap-${row.ID || row.id || rIdx}-${col.ID || col.id || colIdx}`}
+                                              className="size-7 sm:size-8 rounded-lg border border-dashed border-[#bcc9c6]/60 bg-gray-50/50 flex items-center justify-center text-[10px] sm:text-xs text-[#8b95a5]/40 select-none shrink-0"
+                                              title={`Column ${col.Label ?? col.label ?? colIdx + 1} (Empty / Gap)`}
+                                            >
+                                              —
+                                            </div>
+                                          );
+                                        }
+
+                                        const isDisabled = seatStatus === "DISABLED";
+                                        const seatNumber =
+                                          seat.SeatNumber ??
+                                          seat.seat_number ??
+                                          seat.seatNumber ??
+                                          colIdx + 1;
+
+                                        return (
+                                          <div
+                                            key={seat.ID || seat.id || colIdx}
+                                            title={`Row ${rowName}, Seat ${seatNumber}${
+                                              isDisabled
+                                                ? " (Disabled)"
+                                                : ` - ₹${Number(sectionPrice).toLocaleString("en-IN")}`
+                                            }`}
+                                            className={`size-7 sm:size-8 rounded-lg flex items-center justify-center text-[10px] sm:text-xs font-semibold select-none transition-all shrink-0 ${
+                                              isDisabled
+                                                ? "bg-gray-100 text-gray-400 border border-gray-300 line-through opacity-60 cursor-not-allowed"
+                                                : "bg-white text-[#141b2b] border border-[#bcc9c6] hover:border-[#00685f] hover:bg-[#00685f]/10 hover:text-[#00685f] shadow-2xs cursor-default"
+                                            }`}
+                                          >
+                                            {seatNumber}
+                                          </div>
+                                        );
+                                      })
+                                    : rowSeats.map((seat, seatIdx) => {
+                                        const isDisabled =
+                                          String(seat.Status ?? seat.status ?? "").toUpperCase() === "DISABLED";
+                                        const seatNumber =
+                                          seat.SeatNumber ?? seat.seat_number ?? seat.seatNumber ?? seatIdx + 1;
+                                        return (
+                                          <div
+                                            key={seat.ID || seat.id || seatIdx}
+                                            title={`Row ${rowName}, Seat ${seatNumber}${
+                                              isDisabled
+                                                ? " (Disabled)"
+                                                : ` - ₹${Number(sectionPrice).toLocaleString("en-IN")}`
+                                            }`}
+                                            className={`size-7 sm:size-8 rounded-lg flex items-center justify-center text-[10px] sm:text-xs font-semibold select-none transition-all shrink-0 ${
+                                              isDisabled
+                                                ? "bg-gray-100 text-gray-400 border border-gray-300 line-through opacity-60 cursor-not-allowed"
+                                                : "bg-white text-[#141b2b] border border-[#bcc9c6] hover:border-[#00685f] hover:bg-[#00685f]/10 hover:text-[#00685f] shadow-2xs cursor-default"
+                                            }`}
+                                          >
+                                            {seatNumber}
+                                          </div>
+                                        );
+                                      })}
+                                </div>
+
+                                <span className="w-12 text-left font-bold text-xs text-[#565e74] shrink-0 select-none">
+                                  Row {rowName}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>

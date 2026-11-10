@@ -2,11 +2,12 @@ import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import AppHeader from "../../components/layout/AppHeader";
 import Footer from "../../components/layout/Footer";
-import { getBookingById, downloadBookingPdf } from "../../api/bookingApi";
+import { getBookingById, downloadBookingPdf, downloadBookingInvoicePdf } from "../../api/bookingApi";
 import { getPublicEventById } from "../../api/eventApi";
 import { getMyTickets, downloadTicketPdf } from "../../api/ticketApi";
 import BookingBreadcrumbs from "./components/BookingBreadcrumbs";
 import CancelBookingModal from "./components/CancelBookingModal";
+import InvoiceSummaryModal from "./components/InvoiceSummaryModal";
 import { checkCancellationEligibility, formatDeadlineDateTime } from "../../utils/cancellation";
 import notify from "../../utils/toast";
 import {
@@ -15,6 +16,7 @@ import {
   BuildingIcon,
   TicketIconOutline,
   DownloadIcon,
+  TagReceiptIcon,
   ShieldCheckIcon,
   AlertTriangleIcon,
 } from "./components/BookingIcons";
@@ -78,6 +80,8 @@ export default function BookingDetailsPage() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
 
   const handleCancellationSuccess = () => {
     setBooking((prev) =>
@@ -604,6 +608,15 @@ export default function BookingDetailsPage() {
                     <DownloadIcon className="w-4 h-4" />
                     <span>{isDownloading ? "Downloading PDF..." : "Download Booking PDF"}</span>
                   </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowInvoiceModal(true)}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-white/30 py-2.5 text-xs sm:text-sm font-semibold text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <TagReceiptIcon className="w-4 h-4" />
+                    <span>View Booking Receipt</span>
+                  </button>
                 </div>
               </section>
             )}
@@ -651,6 +664,38 @@ export default function BookingDetailsPage() {
                 <strong className="font-bold text-[#00685f]">
                   {bookingStatus === "CONFIRMED" ? "PAID" : bookingStatus}
                 </strong>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between border-t border-[#dfe5e3] pt-3 text-xs">
+                <span className="text-[#565e74]">Official Receipt:</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowInvoiceModal(true)}
+                    className="font-semibold text-[#00685f] hover:underline cursor-pointer"
+                  >
+                    View
+                  </button>
+                  <span className="text-slate-300">|</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsDownloadingReceipt(true);
+                      try {
+                        await downloadBookingInvoicePdf(currentBookingId);
+                        notify.success("Receipt downloaded successfully.");
+                      } catch (err) {
+                        notify.error(err?.message || "Failed to download receipt.");
+                      } finally {
+                        setIsDownloadingReceipt(false);
+                      }
+                    }}
+                    disabled={isDownloadingReceipt}
+                    className="font-semibold text-[#00685f] hover:underline cursor-pointer disabled:opacity-50"
+                  >
+                    {isDownloadingReceipt ? "Downloading..." : "Download PDF"}
+                  </button>
+                </div>
               </div>
             </section>
 
@@ -766,6 +811,15 @@ export default function BookingDetailsPage() {
           event={event}
           onClose={() => setShowCancelModal(false)}
           onSuccess={handleCancellationSuccess}
+        />
+      )}
+
+      {/* Booking Receipt Summary Modal */}
+      {showInvoiceModal && (
+        <InvoiceSummaryModal
+          isOpen={showInvoiceModal}
+          bookingId={currentBookingId}
+          onClose={() => setShowInvoiceModal(false)}
         />
       )}
 

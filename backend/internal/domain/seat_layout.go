@@ -28,7 +28,14 @@ type PublicSeatLayout struct {
 	ID         uuid.UUID           `json:"id"`
 	EventID    uuid.UUID           `json:"event_id"`
 	LayoutName string              `json:"layout_name"`
+	Columns    []PublicSeatColumn  `json:"columns"`
 	Sections   []PublicSeatSection `json:"sections"`
+}
+
+type PublicSeatColumn struct {
+	ID         uuid.UUID `json:"id"`
+	Label      string    `json:"label"`
+	OrderIndex int       `json:"order_index"`
 }
 
 type PublicSeatSection struct {
@@ -45,8 +52,10 @@ type PublicSeatRow struct {
 }
 
 type PublicSeat struct {
-	ID         uuid.UUID `json:"id"`
-	SeatNumber int       `json:"seat_number"`
-	Status     string    `json:"status"`
+	ID          uuid.UUID  `json:"id"`
+	ColumnID    *uuid.UUID `json:"column_id,omitempty"`
+	GridCol     int        `json:"grid_col"`
+	ColumnLabel string     `json:"column_label,omitempty"`
+	SeatNumber  int        `json:"seat_number"`
+	Status      string     `json:"status"`
 }
-

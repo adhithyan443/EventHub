@@ -2,7 +2,8 @@ export default function StepsProgress({ current = 1 }) {
   const steps = ["Select Seats", "Checkout", "Payment", "Confirmation"];
 
   return (
-    <nav aria-label="Progress" className="w-full max-w-[760px] overflow-x-auto py-2">
+    <nav aria-label="Progress" className="w-full  overflow-x-auto py-2"> 
+    {/* max-w-[760px] */}
       <div className="flex items-center text-sm min-w-max">
         {steps.map((label, index) => {
           const stepNumber = index + 1;

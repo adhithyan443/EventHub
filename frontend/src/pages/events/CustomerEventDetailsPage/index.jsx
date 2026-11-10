@@ -204,9 +204,23 @@ export default function CustomerEventDetailsPage() {
 
   const handleQuantityChange = (tierId, delta, maxLimit) => {
     setSelectedTicketId(tierId);
+    if (isSeated) {
+      setQuantities((prev) => {
+        const current = tierId === selectedTicketId ? (prev[tierId] || 0) : 0;
+        const nextVal = Math.max(0, Math.min(maxLimit, current + delta));
+        return { [tierId]: nextVal };
+      });
+      return;
+    }
+
+    const bookingLimit = event?.setting?.booking_limit_per_user || 9;
     setQuantities((prev) => {
       const current = prev[tierId] || 0;
-      const nextVal = Math.max(0, Math.min(maxLimit, current + delta));
+      const otherTotal = Object.entries(prev)
+        .filter(([id]) => id !== tierId)
+        .reduce((sum, [, q]) => sum + (q || 0), 0);
+      const effectiveMax = Math.min(maxLimit, Math.max(0, bookingLimit - otherTotal));
+      const nextVal = Math.max(0, Math.min(effectiveMax, current + delta));
       return { ...prev, [tierId]: nextVal };
     });
   };
@@ -221,13 +235,13 @@ export default function CustomerEventDetailsPage() {
   const isSeated = event?.setting?.seat_layout_type === "SEATED";
 
   const handleProceed = async () => {
-    if (!selectedTicketId) return;
-    const qty = quantities[selectedTicketId] || 1;
-    if (qty <= 0) return;
-
-    const selectedTier = (event?.ticket_types || []).find((t) => t.id === selectedTicketId);
-
     if (isSeated) {
+      if (!selectedTicketId) return;
+      const qty = quantities[selectedTicketId] || 1;
+      if (qty <= 0) return;
+
+      const selectedTier = (event?.ticket_types || []).find((t) => t.id === selectedTicketId);
+
       navigate(`/events/${eventId}/seats`, {
         state: {
           selectedTicket: selectedTier?.name || "Tier",
@@ -236,6 +250,29 @@ export default function CustomerEventDetailsPage() {
           quantity: qty,
         },
       });
+      return;
+    }
+
+    // General Admission: Gather all ticket categories with quantity > 0
+    const selectedTiers = (event?.ticket_types || [])
+      .filter((tier) => (quantities[tier.id] || 0) > 0)
+      .map((tier) => ({
+        ticketTypeId: tier.id,
+        name: tier.name,
+        price: Number(tier.price),
+        quantity: quantities[tier.id],
+        lineTotal: Number(tier.price) * quantities[tier.id],
+      }));
+
+    const totalQty = selectedTiers.reduce((acc, t) => acc + t.quantity, 0);
+    if (selectedTiers.length === 0 || totalQty <= 0) {
+      notify.error("Please select at least one ticket.");
+      return;
+    }
+
+    const bookingLimit = event?.setting?.booking_limit_per_user || 9;
+    if (totalQty > bookingLimit) {
+      notify.error(`You can select at most ${bookingLimit} tickets per booking.`);
       return;
     }
 
@@ -258,19 +295,32 @@ export default function CustomerEventDetailsPage() {
       // Check stored reservation
       const stored = getStoredReservation(eventId);
       if (stored?.reservationId) {
-        const tierMatch =
-          stored.selectedTicketId === selectedTicketId &&
-          stored.quantity === qty;
+        let matches = false;
+        if (stored.selectedTickets && Array.isArray(stored.selectedTickets)) {
+          if (stored.selectedTickets.length === selectedTiers.length) {
+            matches = selectedTiers.every((curr) => {
+              const matched = stored.selectedTickets.find(
+                (st) => (st.ticketTypeId || st.ticket_type_id) === curr.ticketTypeId
+              );
+              return matched && matched.quantity === curr.quantity;
+            });
+          }
+        } else if (selectedTiers.length === 1) {
+          matches =
+            stored.selectedTicketId === selectedTiers[0].ticketTypeId &&
+            stored.quantity === selectedTiers[0].quantity;
+        }
 
         // Only reuse if matching same ticket tier and quantity, and strictly not expired (> 30s remaining)
-        if (tierMatch && !stored.isExpired && (stored.expiresAt - Date.now() > 30000)) {
+        if (matches && !stored.isExpired && stored.expiresAt - Date.now() > 30000) {
           navigate(`/events/${eventId}/checkout`, {
             state: {
               reservation: stored.reservation,
-              selectedTicket: selectedTier?.name || "General",
-              selectedTicketId,
-              ticketPrice: selectedTier?.price ?? event?.starting_price,
-              quantity: qty,
+              selectedTickets: selectedTiers,
+              selectedTicket: selectedTiers.length === 1 ? selectedTiers[0].name : `${selectedTiers.length} Ticket Tiers`,
+              selectedTicketId: selectedTiers[0].ticketTypeId,
+              ticketPrice: selectedTiers[0].price,
+              quantity: totalQty,
             },
           });
           return;
@@ -287,10 +337,17 @@ export default function CustomerEventDetailsPage() {
         }
       }
 
-      const response = await createReservation(eventId, {
-        ticket_type_id: selectedTicketId,
-        quantity: qty,
-      });
+      const requestPayload = {
+        tickets: selectedTiers.map((t) => ({
+          ticket_type_id: t.ticketTypeId,
+          quantity: t.quantity,
+        })),
+        // backward compatibility for single tier requests
+        ticket_type_id: selectedTiers[0]?.ticketTypeId,
+        quantity: totalQty,
+      };
+
+      const response = await createReservation(eventId, requestPayload);
 
       const reservationData = response?.data?.reservation;
       if (!reservationData) {
@@ -299,10 +356,11 @@ export default function CustomerEventDetailsPage() {
 
       const cachePayload = {
         reservation: reservationData,
-        selectedTicket: selectedTier?.name || "General",
-        selectedTicketId,
-        ticketPrice: selectedTier?.price ?? event?.starting_price,
-        quantity: qty,
+        selectedTickets: selectedTiers,
+        selectedTicket: selectedTiers.length === 1 ? selectedTiers[0].name : `${selectedTiers.length} Ticket Tiers`,
+        selectedTicketId: selectedTiers[0]?.ticketTypeId,
+        ticketPrice: selectedTiers[0]?.price,
+        quantity: totalQty,
       };
       sessionStorage.setItem(cacheKey, JSON.stringify(cachePayload));
 
@@ -883,16 +941,24 @@ export default function CustomerEventDetailsPage() {
                   {event.ticket_types && event.ticket_types.length > 0 ? (
                     <div className="space-y-4">
                       {event.ticket_types.map((tier) => {
-                        const isSelected = selectedTicketId === tier.id;
                         const qty = quantities[tier.id] || 0;
+                        const isSelected = isSeated
+                          ? selectedTicketId === tier.id
+                          : qty > 0 || selectedTicketId === tier.id;
                         const isSoldOut =
                           tier.status === "SOLD_OUT" || tier.available_quantity === 0;
                         const isUnavailable =
                           isSoldOut || isSalesUpcoming || isSalesClosed || isEventPast;
                         const maxBooking = event.setting?.booking_limit_per_user || 9;
+                        const otherTotal = isSeated
+                          ? 0
+                          : Object.entries(quantities)
+                              .filter(([id]) => id !== tier.id)
+                              .reduce((sum, [, q]) => sum + (q || 0), 0);
+                        const remainingLimit = Math.max(0, maxBooking - otherTotal);
                         const maxQty = Math.min(
-                          maxBooking,
-                          tier.available_quantity > 0 ? tier.available_quantity : maxBooking
+                          remainingLimit,
+                          tier.available_quantity > 0 ? tier.available_quantity : remainingLimit
                         );
 
                         return (
@@ -900,9 +966,16 @@ export default function CustomerEventDetailsPage() {
                             key={tier.id}
                             onClick={() => {
                               if (!isUnavailable) {
-                                setSelectedTicketId(tier.id);
-                                if (!quantities[tier.id]) {
-                                  setQuantities((prev) => ({ ...prev, [tier.id]: 1 }));
+                                if (isSeated) {
+                                  setSelectedTicketId(tier.id);
+                                  if (!quantities[tier.id]) {
+                                    setQuantities({ [tier.id]: 1 });
+                                  }
+                                } else {
+                                  setSelectedTicketId(tier.id);
+                                  if (!quantities[tier.id] && remainingLimit > 0) {
+                                    setQuantities((prev) => ({ ...prev, [tier.id]: 1 }));
+                                  }
                                 }
                               }
                             }}
@@ -1029,8 +1102,9 @@ export default function CustomerEventDetailsPage() {
                     type="button"
                     onClick={handleProceed}
                     disabled={
-                      !selectedTicketId ||
-                      (quantities[selectedTicketId] || 0) <= 0 ||
+                      (isSeated
+                        ? !selectedTicketId || (quantities[selectedTicketId] || 0) <= 0
+                        : Object.values(quantities).reduce((acc, q) => acc + (q || 0), 0) <= 0) ||
                       isReserving ||
                       allSoldOut ||
                       isSalesUpcoming ||
@@ -1052,9 +1126,14 @@ export default function CustomerEventDetailsPage() {
                       "Sales Closed"
                     ) : allSoldOut ? (
                       "Sold Out"
-                    ) : (
-                      "Book Tickets"
-                    )}
+                    ) : isSeated ? (
+                      "Select Seats"
+                    ) : (() => {
+                      const count = Object.values(quantities).reduce((acc, q) => acc + (q || 0), 0);
+                      return count > 0
+                        ? `Proceed to Checkout (${count} ticket${count > 1 ? "s" : ""})`
+                        : "Select Tickets";
+                    })()}
                   </button>
 
                   <p className="mt-3 text-center text-xs text-[#565e74]">

@@ -3,7 +3,9 @@ import { useParams, useNavigate, useLocation, useNavigationType } from "react-ro
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import OrderPriceSummary from "../components/OrderPriceSummary";
+import CancelReservationModal from "../components/CancelReservationModal";
 import { getPublicEventById, getPublicEventSeatLayout } from "../../../api/eventApi";
+import { getPublicActivePricingTax } from "../../../api/pricingTaxApi";
 import {
   createReservation,
   cancelReservation,
@@ -52,10 +54,15 @@ export default function SeatSelectionPage() {
 
   // Array of selected seat objects: { id, seatNumber, rowName, sectionName, price }
   const [selectedSeats, setSelectedSeats] = useState([]);
+  const [pricingConfig, setPricingConfig] = useState(null);
 
   const [isReserving, setIsReserving] = useState(false);
   const [reservationError, setReservationError] = useState(null);
   const reservingRef = useRef(false);
+
+  // Cancellation modal state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [activeReservation, setActiveReservation] = useState(null);
 
   const [retryCount, setRetryCount] = useState(0);
 
@@ -74,29 +81,18 @@ export default function SeatSelectionPage() {
       setError(null);
       setIsNotFound(false);
 
-      // If returning via browser Back or landing on seat selection with an existing active reservation:
-      // Cancel previous reservation so previously held seats unlock on the map before layout query.
-      const stored = getStoredReservation(eventId);
-      if (stored?.reservationId && !stored.isExpired) {
-        console.info("[SeatSelection] Active reservation found on seat page load/back; releasing seats before layout fetch", {
-          event_id: eventId,
-          reservation_id: stored.reservationId,
-          navigation_type: navigationType,
-        });
-        try {
-          await cancelStoredReservation(eventId);
-        } catch (cancelErr) {
-          console.warn("[SeatSelection] Could not cancel stored reservation on mount:", cancelErr?.message);
-        }
-      }
-
       try {
-        const [eventRes, layoutRes] = await Promise.all([
+        const [eventRes, layoutRes, pricingRes] = await Promise.all([
           getPublicEventById(eventId),
           getPublicEventSeatLayout(eventId),
+          getPublicActivePricingTax().catch(() => null),
         ]);
 
         if (cancelled) return;
+
+        if (pricingRes?.data) {
+          setPricingConfig(pricingRes.data);
+        }
 
         const eventData = eventRes?.data;
         if (!eventData) {
@@ -167,13 +163,52 @@ export default function SeatSelectionPage() {
     });
   };
 
-  // Dynamic pricing calculation based on selected seats and real section prices
+  // Dynamic pricing preview calculation based on selected seats and active backend pricing configuration
   const subtotalNum = selectedSeats.reduce(
     (acc, seat) => acc + (Number(seat.price) || 0),
     0
   );
-  const platformFeeNum = subtotalNum > 0 ? 99 : 0;
-  const taxesNum = Math.round(subtotalNum * 0.06);
+  const paidSubtotalNum = selectedSeats.reduce((acc, seat) => {
+    const p = Number(seat.price) || 0;
+    return p > 0 ? acc + p : acc;
+  }, 0);
+
+  let platformFeeNum = 0;
+  if (
+    pricingConfig?.platform_fee_enabled &&
+    Number(pricingConfig.platform_fee_percent) > 0 &&
+    paidSubtotalNum > 0
+  ) {
+    platformFeeNum =
+      Math.round(
+        (paidSubtotalNum * Number(pricingConfig.platform_fee_percent)) / 100 * 100
+      ) / 100;
+  }
+
+  let taxesNum = 0;
+  if (pricingConfig?.tax_enabled && Number(pricingConfig.tax_percent) > 0) {
+    let taxableBasis = 0;
+    switch (pricingConfig.tax_basis) {
+      case "PLATFORM_FEE_ONLY":
+        taxableBasis = platformFeeNum;
+        break;
+      case "SUBTOTAL_ONLY":
+        taxableBasis = paidSubtotalNum;
+        break;
+      case "TOTAL_BEFORE_TAX":
+        taxableBasis = paidSubtotalNum + platformFeeNum;
+        break;
+      default:
+        taxableBasis = 0;
+    }
+    if (taxableBasis > 0) {
+      taxesNum =
+        Math.round(
+          (taxableBasis * Number(pricingConfig.tax_percent)) / 100 * 100
+        ) / 100;
+    }
+  }
+
   const totalNum = subtotalNum + platformFeeNum + taxesNum;
 
   const pricing = {
@@ -184,16 +219,30 @@ export default function SeatSelectionPage() {
     rawTotal: totalNum,
   };
 
-  const handleBackToDetails = async (e) => {
+  const handleBackToDetails = (e) => {
     if (e?.preventDefault) e.preventDefault();
-    if (eventId) {
-      try {
-        await cancelStoredReservation(eventId);
-      } catch (err) {
-        console.warn("[SeatSelection] Could not cancel stored reservation on back to details:", err?.message);
-      }
+
+    // Intercept if an active, unexpired reservation exists
+    const stored = getStoredReservation(eventId);
+    if (stored?.reservationId && !stored.isExpired) {
+      setActiveReservation(stored);
+      setShowCancelModal(true);
+      return;
     }
+
+    // Otherwise navigate back immediately
     navigate(eventId ? `/events/${eventId}` : "/events");
+  };
+
+  const handleModalCancellationSuccess = () => {
+    clearStoredReservation(eventId);
+    setShowCancelModal(false);
+    setActiveReservation(null);
+    notify.success("Reservation cancelled and held seats released.");
+    navigate(eventId ? `/events/${eventId}` : "/events", {
+      replace: true,
+      state: { reservationCancelled: true },
+    });
   };
 
   const handleContinueToCheckout = async () => {
@@ -362,7 +411,15 @@ export default function SeatSelectionPage() {
     );
   }
 
-  const sections = seatLayout.sections || [];
+  const sections = seatLayout.sections || seatLayout.Sections || [];
+  const rawCols = seatLayout.columns || seatLayout.Columns || [];
+  const layoutColumns = Array.isArray(rawCols)
+    ? [...rawCols].sort(
+        (a, b) =>
+          Number(a.order_index ?? a.OrderIndex ?? 0) -
+          Number(b.order_index ?? b.OrderIndex ?? 0)
+      )
+    : [];
 
   return (
     <div className="flex min-h-screen flex-col bg-[#f9f9ff] text-[#141b2b]">
@@ -434,7 +491,7 @@ export default function SeatSelectionPage() {
             {/* Responsive Seat Map Card */}
             <section className="rounded-xl border border-[#bcc9c6] bg-white p-4 sm:p-6 lg:p-8 shadow-xs overflow-hidden">
               <div className="overflow-x-auto pb-4">
-                <div className="mx-auto min-w-[560px] max-w-[720px]">
+                <div className="mx-auto min-w-fit px-2">
                   {/* STAGE Graphic */}
                   <div className="mx-auto mb-8 w-[72%] rounded-b-[38px] border border-[#bcc9c6] bg-[#dce2f7] py-4 sm:py-5 text-center text-xl sm:text-2xl font-bold tracking-[.28em] text-[#565e74] shadow-xs">
                     STAGE
@@ -458,6 +515,26 @@ export default function SeatSelectionPage() {
                             </span>
                           </div>
 
+                          {/* Column Headers */}
+                          {layoutColumns.length > 0 && (
+                            <div className="flex items-center justify-center gap-2 sm:gap-2.5 pb-1 mb-1 border-b border-[#f1f5f9]">
+                              <span className="w-6 text-center font-bold text-[10px] sm:text-xs text-[#8b95a5]">
+                                COL
+                              </span>
+                              <div className="flex items-center gap-1.5 sm:gap-2 flex-nowrap justify-center">
+                                {layoutColumns.map((col, cIdx) => (
+                                  <span
+                                    key={col.id || cIdx}
+                                    className="w-[36px] sm:w-[40px] text-center font-bold text-[11px] sm:text-xs text-[#565e74] shrink-0"
+                                  >
+                                    {col.label}
+                                  </span>
+                                ))}
+                              </div>
+                              <span className="w-6 shrink-0" />
+                            </div>
+                          )}
+
                           {/* Rows inside section */}
                           <div className="space-y-3">
                             {(section.rows || []).map((row) => (
@@ -469,35 +546,85 @@ export default function SeatSelectionPage() {
                                   {row.row_name}
                                 </span>
 
-                                <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap justify-center">
-                                  {(row.seats || []).map((seat) => {
-                                    const isSelected = selectedSeats.some((s) => s.id === seat.id);
-                                    const isAvailable = seat.status === "AVAILABLE";
-                                    const isReserved = seat.status === "RESERVED";
-                                    const isBooked = seat.status === "BOOKED";
-                                    const isDisabled = seat.status === "DISABLED";
+                                <div className="flex items-center gap-1.5 sm:gap-2 flex-nowrap justify-center">
+                                  {layoutColumns.length > 0 ? (
+                                    layoutColumns.map((col, colIdx) => {
+                                      const seat = (row.seats || []).find(
+                                        (s) =>
+                                          (s.grid_col !== undefined
+                                            ? s.grid_col
+                                            : s.gridCol !== undefined
+                                            ? s.gridCol
+                                            : null) === colIdx
+                                      );
 
-                                    let stateClass = "available";
-                                    if (isSelected) stateClass = "selected";
-                                    else if (isReserved) stateClass = "reserved";
-                                    else if (isBooked) stateClass = "booked";
-                                    else if (isDisabled) stateClass = "disabled";
+                                      if (!seat) {
+                                        return (
+                                          <div
+                                            key={`gap-${row.id}-${col.id || colIdx}`}
+                                            className="w-[36px] h-[36px] sm:w-[40px] sm:h-[40px] shrink-0"
+                                            aria-hidden="true"
+                                          />
+                                        );
+                                      }
 
-                                    return (
-                                      <button
-                                        key={seat.id}
-                                        type="button"
-                                        onClick={() => toggleSeat(seat, row, section)}
-                                        disabled={!isAvailable && !isSelected}
-                                        aria-label={`Seat ${row.row_name}${seat.seat_number} - ₹${section.price} ${stateClass}`}
-                                        aria-pressed={isSelected}
-                                        title={`${section.name} - Row ${row.row_name}, Seat ${seat.seat_number} (₹${section.price})`}
-                                        className={`seat ${stateClass}`}
-                                      >
-                                        {isDisabled ? "×" : seat.seat_number}
-                                      </button>
-                                    );
-                                  })}
+                                      const isSelected = selectedSeats.some((s) => s.id === seat.id);
+                                      const isAvailable = seat.status === "AVAILABLE";
+                                      const isReserved = seat.status === "RESERVED";
+                                      const isBooked = seat.status === "BOOKED";
+                                      const isDisabled = seat.status === "DISABLED";
+
+                                      let stateClass = "available";
+                                      if (isSelected) stateClass = "selected";
+                                      else if (isReserved) stateClass = "reserved";
+                                      else if (isBooked) stateClass = "booked";
+                                      else if (isDisabled) stateClass = "disabled";
+
+                                      return (
+                                        <button
+                                          key={seat.id}
+                                          type="button"
+                                          onClick={() => toggleSeat(seat, row, section)}
+                                          disabled={!isAvailable && !isSelected}
+                                          aria-label={`Seat ${row.row_name}${seat.seat_number} - ₹${section.price} ${stateClass}`}
+                                          aria-pressed={isSelected}
+                                          title={`${section.name} - Row ${row.row_name}, Seat ${seat.seat_number} (₹${section.price})`}
+                                          className={`seat ${stateClass}`}
+                                        >
+                                          {isDisabled ? "×" : seat.seat_number}
+                                        </button>
+                                      );
+                                    })
+                                  ) : (
+                                    (row.seats || []).map((seat) => {
+                                      const isSelected = selectedSeats.some((s) => s.id === seat.id);
+                                      const isAvailable = seat.status === "AVAILABLE";
+                                      const isReserved = seat.status === "RESERVED";
+                                      const isBooked = seat.status === "BOOKED";
+                                      const isDisabled = seat.status === "DISABLED";
+
+                                      let stateClass = "available";
+                                      if (isSelected) stateClass = "selected";
+                                      else if (isReserved) stateClass = "reserved";
+                                      else if (isBooked) stateClass = "booked";
+                                      else if (isDisabled) stateClass = "disabled";
+
+                                      return (
+                                        <button
+                                          key={seat.id}
+                                          type="button"
+                                          onClick={() => toggleSeat(seat, row, section)}
+                                          disabled={!isAvailable && !isSelected}
+                                          aria-label={`Seat ${row.row_name}${seat.seat_number} - ₹${section.price} ${stateClass}`}
+                                          aria-pressed={isSelected}
+                                          title={`${section.name} - Row ${row.row_name}, Seat ${seat.seat_number} (₹${section.price})`}
+                                          className={`seat ${stateClass}`}
+                                        >
+                                          {isDisabled ? "×" : seat.seat_number}
+                                        </button>
+                                      );
+                                    })
+                                  )}
                                 </div>
 
                                 <span className="w-6 text-center font-bold text-xs sm:text-sm text-[#565e74]">
@@ -608,6 +735,20 @@ export default function SeatSelectionPage() {
           </aside>
         </div>
       </main>
+
+      {/* Cancel Reservation Confirmation Modal */}
+      {showCancelModal && (
+        <CancelReservationModal
+          isOpen={showCancelModal}
+          reservation={activeReservation?.reservation || activeReservation}
+          event={event}
+          selectedSeats={activeReservation?.selectedSeats || selectedSeats.map((s) => `${s.rowName}${s.seatNumber}`)}
+          selectedSeatObjects={activeReservation?.selectedSeatObjects || selectedSeats}
+          totalAmount={pricing.total}
+          onClose={() => setShowCancelModal(false)}
+          onSuccess={handleModalCancellationSuccess}
+        />
+      )}
 
       <Footer />
     </div>

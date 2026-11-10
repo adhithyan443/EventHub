@@ -142,7 +142,14 @@ type TicketTypeRequest struct {
 
 type SeatLayoutRequest struct {
 	LayoutName string               `json:"layout_name"`
+	Columns    []SeatColumnRequest  `json:"columns"`
 	Sections   []SeatSectionRequest `json:"sections"`
+}
+
+type SeatColumnRequest struct {
+	ID         *uuid.UUID `json:"id,omitempty"`
+	Label      string     `json:"label"`
+	OrderIndex int        `json:"order_index"`
 }
 
 type SeatSectionRequest struct {
@@ -152,8 +159,17 @@ type SeatSectionRequest struct {
 }
 
 type SeatRowRequest struct {
-	RowName string `json:"row_name"`
-	Seats   int    `json:"seats"`
+	RowName   string            `json:"row_name"`
+	Seats     int               `json:"seats"`
+	SeatsList []SeatItemRequest `json:"seats_list,omitempty"`
+}
+
+type SeatItemRequest struct {
+	ID         *uuid.UUID `json:"id,omitempty"`
+	ColumnID   *uuid.UUID `json:"column_id,omitempty"`
+	GridCol    int        `json:"grid_col"`
+	SeatNumber int        `json:"seat_number"`
+	Status     string     `json:"status,omitempty"`
 }
 
 func (h *EventHandler) CreateEvent(ctx *gin.Context) {
@@ -387,15 +403,36 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 		})
 	}
 
+	seatColumns := make([]eventUsecase.SeatColumnInput, 0, len(req.SeatLayout.Columns))
+	for _, col := range req.SeatLayout.Columns {
+		seatColumns = append(seatColumns, eventUsecase.SeatColumnInput{
+			ID:         col.ID,
+			Label:      col.Label,
+			OrderIndex: col.OrderIndex,
+		})
+	}
+
 	seatSections := make([]eventUsecase.SeatSectionInput, 0, len(req.SeatLayout.Sections))
 
 	for _, section := range req.SeatLayout.Sections {
 		rows := make([]eventUsecase.SeatRowInput, 0, len(section.Rows))
 
 		for _, row := range section.Rows {
+			seatItems := make([]eventUsecase.SeatItemInput, 0, len(row.SeatsList))
+			for _, seat := range row.SeatsList {
+				seatItems = append(seatItems, eventUsecase.SeatItemInput{
+					ID:         seat.ID,
+					ColumnID:   seat.ColumnID,
+					GridCol:    seat.GridCol,
+					SeatNumber: seat.SeatNumber,
+					Status:     seat.Status,
+				})
+			}
+
 			rows = append(rows, eventUsecase.SeatRowInput{
-				RowName: row.RowName,
-				Seats:   row.Seats,
+				RowName:   row.RowName,
+				Seats:     row.Seats,
+				SeatItems: seatItems,
 			})
 		}
 
@@ -413,6 +450,7 @@ func (h *EventHandler) CreateEvent(ctx *gin.Context) {
 
 		SeatLayout: eventUsecase.CreateSeatLayoutInput{
 			LayoutName: req.SeatLayout.LayoutName,
+			Columns:    seatColumns,
 			Sections:   seatSections,
 		},
 

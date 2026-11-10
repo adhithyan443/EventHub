@@ -4,10 +4,13 @@ import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import StepsProgress from "../components/StepsProgress";
 import OrderPriceSummary from "../components/OrderPriceSummary";
+import CancelReservationModal from "../components/CancelReservationModal";
+import InvoiceSummaryModal from "../../bookings/components/InvoiceSummaryModal";
 import { getPublicEventById } from "../../../api/eventApi";
 import { createCheckout } from "../../../api/checkoutApi";
 import { createPayment, verifyPayment } from "../../../api/paymentApi";
 import { cancelReservation, clearStoredReservation } from "../../../api/reservationApi";
+import { downloadBookingInvoicePdf } from "../../../api/bookingApi";
 import { loadRazorpay } from "../../../utils/loadRazorpay";
 import useAuthStore from "../../../store/authStore";
 import notify from "../../../utils/toast";
@@ -34,6 +37,70 @@ const formatVenueLocation = (ev) => {
   return "Venue TBA";
 };
 
+const parseCheckoutError = (err) => {
+  const status = err?.response?.status;
+  const rawMessage =
+    err?.response?.data?.message ||
+    err?.response?.data?.error ||
+    err?.message ||
+    "";
+  const lowerMsg = rawMessage.toLowerCase();
+
+  // 1. Explicit Expiration:
+  // - HTTP 409 (Conflict: reservation expired or inventory re-allocated)
+  // - HTTP 400 where backend message indicates reservation expiration / invalid status ("invalid or expired reservation")
+  // - HTTP 404 where message indicates reservation was not found ("reservation not found")
+  const isExplicitExpired =
+    status === 409 ||
+    (status === 400 && (lowerMsg.includes("expired") || lowerMsg.includes("invalid or expired"))) ||
+    (status === 404 && lowerMsg.includes("reservation"));
+
+  if (isExplicitExpired) {
+    return {
+      isExpired: true,
+      message:
+        "Your ticket reservation has expired or is no longer valid. Please select tickets again.",
+    };
+  }
+
+  // 2. Network errors (no HTTP response received)
+  if (!err?.response) {
+    return {
+      isExpired: false,
+      message:
+        "Network connection error. Please check your internet connection and retry.",
+    };
+  }
+
+  // 3. Server errors (HTTP 500+)
+  if (status >= 500) {
+    return {
+      isExpired: false,
+      message:
+        err?.response?.data?.message ||
+        "The pricing configuration is temporarily unavailable. Please retry in a few moments.",
+    };
+  }
+
+  // 4. Other validation / bad request errors (HTTP 400)
+  if (status === 400) {
+    return {
+      isExpired: false,
+      message:
+        err?.response?.data?.message ||
+        "Invalid checkout request. Please verify your selection and try again.",
+    };
+  }
+
+  // 5. Default fallback
+  return {
+    isExpired: false,
+    message:
+      err?.response?.data?.message ||
+      "Failed to initialize checkout pricing snapshot. Please try again.",
+  };
+};
+
 export default function CheckoutPage() {
   const { eventId } = useParams();
   const location = useLocation();
@@ -43,7 +110,7 @@ export default function CheckoutPage() {
 
   // Read state passed from CustomerEventDetailsPage, or fallback to client-side cache
   const cacheKey = eventId ? `eventhub_reservation_${eventId}` : null;
-  const getInitialState = () => {
+  const [navState] = useState(() => {
     if (location.state?.reservation) {
       return location.state;
     }
@@ -51,18 +118,18 @@ export default function CheckoutPage() {
       try {
         const cachedRaw = sessionStorage.getItem(cacheKey);
         if (cachedRaw) {
-          const parsed = JSON.parse(cachedRaw);
-          return parsed;
+          return JSON.parse(cachedRaw);
         }
       } catch {
         // ignore parse error
       }
     }
     return location.state || {};
-  };
+  });
 
-  const navState = getInitialState();
   const reservation = navState.reservation;
+  const reservationId = reservation?.ID || reservation?.id || null;
+  const selectedTickets = navState.selectedTickets;
   const selectedTicket = navState.selectedTicket;
   const ticketPrice = navState.ticketPrice;
   const quantity = navState.quantity || 1;
@@ -82,8 +149,42 @@ export default function CheckoutPage() {
   const [agreedTerms, setAgreedTerms] = useState(false);
   const [agreedPaymentTerms, setAgreedPaymentTerms] = useState(true);
 
+  // Derive multi-category ticket selections from navState or reservation items
+  const derivedTickets = (() => {
+    if (selectedTickets && Array.isArray(selectedTickets) && selectedTickets.length > 0) {
+      return selectedTickets;
+    }
+    const items = reservation?.Items || reservation?.items;
+    if (Array.isArray(items) && items.length > 0 && (!selectedSeats || selectedSeats.length === 0)) {
+      const map = {};
+      for (const it of items) {
+        const tid = it.TicketTypeID || it.ticket_type_id || it.ticketTypeId;
+        if (!tid) continue;
+        const itemQty = Number(it.Quantity ?? it.quantity ?? 1);
+        const itemPrice = Number(it.Price ?? it.price ?? 0);
+        if (!map[tid]) {
+          const tier = (event?.ticket_types || []).find((t) => t.id === tid);
+          map[tid] = {
+            ticketTypeId: tid,
+            name: tier?.name || "General Admission",
+            price: Number(itemPrice || tier?.price || 0),
+            quantity: 0,
+            lineTotal: 0,
+          };
+        }
+        map[tid].quantity += itemQty;
+        map[tid].lineTotal += map[tid].price * itemQty;
+      }
+      const list = Object.values(map);
+      if (list.length > 0) return list;
+    }
+    return null;
+  })();
+
   // Checkout snapshot and payment states
   const [checkout, setCheckout] = useState(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(true);
+  const [checkoutError, setCheckoutError] = useState(null);
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isPaying, setIsPaying] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
@@ -91,45 +192,45 @@ export default function CheckoutPage() {
   const changingRef = useRef(false);
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [confirmedPayment, setConfirmedPayment] = useState(null);
+  const [confirmedInvoice, setConfirmedInvoice] = useState(null);
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
 
-  const handleChangeSelection = async (e) => {
+  // Cancellation modal state
+  const [showCancelModal, setShowCancelModal] = useState(false);
+  const [cancelModalTarget, setCancelModalTarget] = useState("details"); // "details" or "seats"
+
+  // Safe async lifecycle refs across React Strict Mode and component remounts
+  const isMountedRef = useRef(true);
+  const activeReservationIdRef = useRef(null);
+  const inFlightReservationIdRef = useRef(null);
+
+  const handleRequestChangeSelection = (e) => {
     if (e?.preventDefault) e.preventDefault();
-    if (changingRef.current) return;
-    changingRef.current = true;
-    setIsChangingSelection(true);
-    setPaymentError(null);
+    setCancelModalTarget(selectedSeats && selectedSeats.length > 0 ? "seats" : "details");
+    setShowCancelModal(true);
+  };
+
+  const handleRequestCancelReservation = (e) => {
+    if (e?.preventDefault) e.preventDefault();
+    setCancelModalTarget("details");
+    setShowCancelModal(true);
+  };
+
+  const handleModalCancellationSuccess = () => {
+    clearStoredReservation(eventId);
+    setShowCancelModal(false);
+    notify.success("Reservation cancelled and hold released.");
 
     const targetPath =
-      selectedSeats && selectedSeats.length > 0
+      cancelModalTarget === "seats" && selectedSeats && selectedSeats.length > 0
         ? `/events/${eventId}/seats`
         : `/events/${eventId}`;
 
-    const currentResId = reservation?.ID || reservation?.id;
-
-    try {
-      if (currentResId) {
-        console.info("[Checkout] User chose change selection; cancelling reservation before navigation", {
-          event_id: eventId,
-          reservation_id: currentResId,
-        });
-        await cancelReservation(currentResId);
-      }
-      clearStoredReservation(eventId);
-      navigate(targetPath, {
-        replace: true,
-        state: { reservationCancelled: true },
-      });
-    } catch (err) {
-      console.error("[Checkout] Failed to cancel reservation on change selection:", err);
-      const msg =
-        err?.response?.data?.message ||
-        err?.message ||
-        "Could not release current reservation. Please check your connection.";
-      setPaymentError(msg);
-    } finally {
-      changingRef.current = false;
-      setIsChangingSelection(false);
-    }
+    navigate(targetPath, {
+      replace: true,
+      state: { reservationCancelled: true },
+    });
   };
 
   // Customer info form fields initialized from authenticated user
@@ -198,7 +299,91 @@ export default function CheckoutPage() {
     updateTimer();
     const interval = setInterval(updateTimer, 1000);
     return () => clearInterval(interval);
-  }, [reservation, cacheKey, eventId]);
+  }, [reservation?.ExpiresAt, reservation?.expires_at, cacheKey, eventId]);
+
+  // Load or reuse checkout snapshot safely across React Strict Mode, remounts, and retries
+  const loadCheckoutSnapshot = async (resId, forceRetry = false) => {
+    if (!resId || isExpired) {
+      setCheckoutLoading(false);
+      return;
+    }
+
+    // Reuse existing snapshot if already loaded for this reservation
+    const loadedResId = (checkout?.ReservationID || checkout?.reservationId || "").toString().toLowerCase();
+    const targetResId = (resId || "").toString().toLowerCase();
+    if (!forceRetry && checkout && loadedResId && loadedResId === targetResId) {
+      setCheckoutLoading(false);
+      return;
+    }
+
+    // Deduplicate concurrent in-flight requests for the exact same reservation
+    if (!forceRetry && inFlightReservationIdRef.current === resId) {
+      return;
+    }
+
+    inFlightReservationIdRef.current = resId;
+    activeReservationIdRef.current = resId;
+    setCheckoutLoading(true);
+    setCheckoutError(null);
+
+    try {
+      console.info("[Checkout] Initializing checkout pricing snapshot", {
+        reservation_id: resId,
+      });
+      const response = await createCheckout(resId);
+
+      // Discard update if component has unmounted or reservation target has shifted
+      if (!isMountedRef.current || activeReservationIdRef.current !== resId) {
+        return;
+      }
+
+      const checkoutData =
+        response?.data?.checkout ||
+        response?.checkout ||
+        (response?.ID || response?.id ? response : null);
+      if (!checkoutData) {
+        throw new Error("Invalid checkout response from server");
+      }
+
+      setCheckout(checkoutData);
+      setCheckoutError(null);
+    } catch (err) {
+      if (!isMountedRef.current || activeReservationIdRef.current !== resId) {
+        return;
+      }
+
+      console.error("[Checkout] Failed to load checkout pricing snapshot:", err);
+      const parsed = parseCheckoutError(err);
+      if (parsed.isExpired) {
+        setIsExpired(true);
+      }
+      setCheckoutError(parsed.message);
+      notify.error(parsed.message);
+    } finally {
+      if (inFlightReservationIdRef.current === resId) {
+        inFlightReservationIdRef.current = null;
+      }
+      if (isMountedRef.current && activeReservationIdRef.current === resId) {
+        setCheckoutLoading(false);
+      }
+    }
+  };
+
+  // Mount-time checkout snapshot initialization
+  useEffect(() => {
+    isMountedRef.current = true;
+
+    if (!reservationId || isExpired) {
+      setCheckoutLoading(false);
+      return;
+    }
+
+    loadCheckoutSnapshot(reservationId);
+
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, [reservationId, isExpired]);
 
   const formatTimer = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -207,10 +392,17 @@ export default function CheckoutPage() {
   };
 
   const handleProceedToPayment = async () => {
-    if (!agreedTerms || isExpired || isCheckingOut) return;
-    const reservationId = reservation?.ID || reservation?.id;
-    if (!reservationId) {
+    if (!agreedTerms || isExpired || isCheckingOut || checkoutLoading) return;
+    const currentResId = reservationId || reservation?.ID || reservation?.id;
+    if (!currentResId) {
       setPaymentError("No reservation identifier found. Please select tickets again.");
+      return;
+    }
+
+    // If checkout snapshot is already loaded, proceed directly
+    if (checkout) {
+      setCurrentStep(3);
+      window.scrollTo({ top: 0, behavior: "smooth" });
       return;
     }
 
@@ -218,8 +410,11 @@ export default function CheckoutPage() {
     setPaymentError(null);
 
     try {
-      const response = await createCheckout(reservationId);
-      const checkoutData = response?.data?.checkout;
+      const response = await createCheckout(currentResId);
+      const checkoutData =
+        response?.data?.checkout ||
+        response?.checkout ||
+        (response?.ID || response?.id ? response : null);
       if (!checkoutData) {
         throw new Error("Invalid checkout response from server");
       }
@@ -227,20 +422,12 @@ export default function CheckoutPage() {
       setCurrentStep(3);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
-      const status = err?.response?.status;
-      if (status === 409 || status === 400) {
+      const parsed = parseCheckoutError(err);
+      if (parsed.isExpired) {
         setIsExpired(true);
-        const expMsg =
-          "Your ticket reservation has expired or is no longer valid. Please select tickets again.";
-        setPaymentError(expMsg);
-        notify.error(expMsg);
-      } else {
-        const errMsg =
-          err?.response?.data?.message ||
-          "Failed to initialize checkout. Please try again.";
-        setPaymentError(errMsg);
-        notify.error(errMsg);
       }
+      setPaymentError(parsed.message);
+      notify.error(parsed.message);
     } finally {
       setIsCheckingOut(false);
     }
@@ -380,6 +567,7 @@ export default function CheckoutPage() {
 
             setConfirmedBooking(verifyRes?.data?.booking || null);
             setConfirmedPayment(verifyRes?.data?.payment || null);
+            setConfirmedInvoice(verifyRes?.data?.invoice || null);
             notify.success("Payment successful! Your tickets are confirmed.");
             setCurrentStep(4);
             window.scrollTo({ top: 0, behavior: "smooth" });
@@ -423,6 +611,8 @@ export default function CheckoutPage() {
     ? Number(checkout.Subtotal || checkout.subtotal || 0)
     : selectedSeatObjects && selectedSeatObjects.length > 0
     ? selectedSeatObjects.reduce((acc, s) => acc + (Number(s.price) || 0), 0)
+    : derivedTickets && derivedTickets.length > 0
+    ? derivedTickets.reduce((acc, t) => acc + Number(t.price || 0) * (t.quantity || 1), 0)
     : (ticketPrice != null
         ? Number(ticketPrice)
         : event?.starting_price
@@ -589,18 +779,27 @@ export default function CheckoutPage() {
                     <h2 className="font-display text-lg sm:text-xl font-bold text-ink">
                       {selectedSeats && selectedSeats.length > 0 ? "Selected Seats" : "Selected Tickets"}
                     </h2>
-                    <button
-                      type="button"
-                      onClick={handleChangeSelection}
-                      disabled={isChangingSelection}
-                      className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline cursor-pointer disabled:opacity-50"
-                    >
-                      {isChangingSelection
-                        ? "Releasing..."
-                        : selectedSeats && selectedSeats.length > 0
-                        ? "Change Seats"
-                        : "Change Tickets"}
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={handleRequestChangeSelection}
+                        disabled={isExpired}
+                        className="text-xs sm:text-sm font-semibold text-[#00685f] hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        {selectedSeats && selectedSeats.length > 0
+                          ? "Change Seats"
+                          : "Change Tickets"}
+                      </button>
+                      <span className="text-slate-300">|</span>
+                      <button
+                        type="button"
+                        onClick={handleRequestCancelReservation}
+                        disabled={isExpired}
+                        className="text-xs sm:text-sm font-semibold text-rose-600 hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        Cancel Reservation
+                      </button>
+                    </div>
                   </div>
 
                   {selectedSeatObjects && selectedSeatObjects.length > 0 ? (
@@ -644,6 +843,36 @@ export default function CheckoutPage() {
                           </strong>
                         </div>
                       ))}
+                    </div>
+                  ) : derivedTickets && derivedTickets.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {derivedTickets.map((t, idx) => {
+                        const tierName = t.name || "Ticket";
+                        const tierQty = t.quantity || 1;
+                        const unitPrice = Number(t.price || 0);
+                        const lineTotal = Number(t.lineTotal || unitPrice * tierQty);
+                        return (
+                          <div
+                            key={t.ticketTypeId || idx}
+                            className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="text-[#00796d]">▣</span>
+                              <div>
+                                <strong className="block font-medium text-ink">
+                                  {tierName}
+                                </strong>
+                                <span className="text-xs text-[#565e74]">
+                                  Quantity: {tierQty} {tierQty === 1 ? "ticket" : "tickets"} (₹{unitPrice.toLocaleString("en-IN")} each)
+                                </span>
+                              </div>
+                            </div>
+                            <strong className="font-display font-bold text-ink">
+                              ₹{lineTotal.toLocaleString("en-IN")}
+                            </strong>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="flex items-center justify-between rounded-lg bg-[#f1f3ff] px-4 py-3 text-xs sm:text-sm">
@@ -744,13 +973,49 @@ export default function CheckoutPage() {
                     Price Summary
                   </h2>
 
-                  <OrderPriceSummary
-                    subtotal={pricing.subtotal}
-                    platformFee={pricing.platformFee}
-                    taxes={pricing.taxes}
-                    total={pricing.total}
-                    className="mb-6"
-                  />
+                  {checkoutLoading ? (
+                    <div className="space-y-3 py-4 animate-pulse mb-6">
+                      <div className="flex justify-between">
+                        <div className="h-4 bg-slate-200 rounded w-24"></div>
+                        <div className="h-4 bg-slate-200 rounded w-16"></div>
+                      </div>
+                      <div className="flex justify-between">
+                        <div className="h-4 bg-slate-200 rounded w-28"></div>
+                        <div className="h-4 bg-slate-200 rounded w-12"></div>
+                      </div>
+                      <div className="flex justify-between">
+                        <div className="h-4 bg-slate-200 rounded w-20"></div>
+                        <div className="h-4 bg-slate-200 rounded w-12"></div>
+                      </div>
+                      <div className="border-t border-[#bcc9c6] pt-3 flex justify-between">
+                        <div className="h-5 bg-slate-200 rounded w-28"></div>
+                        <div className="h-5 bg-slate-200 rounded w-20"></div>
+                      </div>
+                    </div>
+                  ) : checkoutError ? (
+                    <div className="mb-6 rounded-lg bg-[#ffd8d4] p-3 text-xs sm:text-sm font-medium text-[#a70a18] border border-[#fca5a5]">
+                      <p>{checkoutError}</p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (reservationId) {
+                            loadCheckoutSnapshot(reservationId, true);
+                          }
+                        }}
+                        className="mt-2 text-xs font-bold text-[#00685f] underline cursor-pointer"
+                      >
+                        Retry pricing calculation
+                      </button>
+                    </div>
+                  ) : (
+                    <OrderPriceSummary
+                      subtotal={pricing.subtotal}
+                      platformFee={pricing.platformFee}
+                      taxes={pricing.taxes}
+                      total={pricing.total}
+                      className="mb-6"
+                    />
+                  )}
 
                   {/* Terms & Conditions Checkbox */}
                   <label className="mb-6 flex items-start gap-3 cursor-pointer text-xs sm:text-sm text-[#565e74]">
@@ -778,10 +1043,15 @@ export default function CheckoutPage() {
                   <button
                     type="button"
                     onClick={handleProceedToPayment}
-                    disabled={!agreedTerms || isExpired || isCheckingOut}
+                    disabled={!agreedTerms || isExpired || isCheckingOut || checkoutLoading || !!checkoutError}
                     className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] disabled:cursor-not-allowed disabled:bg-[#9db5b1] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 cursor-pointer flex items-center justify-center gap-2"
                   >
-                    {isCheckingOut ? (
+                    {checkoutLoading ? (
+                      <>
+                        <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Calculating Total...</span>
+                      </>
+                    ) : isCheckingOut ? (
                       <>
                         <div className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                         <span>Creating Checkout...</span>
@@ -796,6 +1066,15 @@ export default function CheckoutPage() {
                   <p className="mt-4 text-center text-xs text-[#565e74] flex items-center justify-center gap-1.5">
                     <span>♙</span> Temporary hold active
                   </p>
+
+                  <button
+                    type="button"
+                    onClick={handleRequestCancelReservation}
+                    disabled={isExpired || isCheckingOut || isPaying}
+                    className="w-full mt-2 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer disabled:opacity-40 transition-colors"
+                  >
+                    Cancel Reservation
+                  </button>
                 </section>
               </aside>
             </div>
@@ -1025,6 +1304,14 @@ export default function CheckoutPage() {
                     <p className="text-center text-xs text-[#565e74]">
                       Secured by Razorpay. 256-bit SSL encrypted.
                     </p>
+                    <button
+                      type="button"
+                      onClick={handleRequestCancelReservation}
+                      disabled={isExpired || isPaying}
+                      className="w-full mt-2 py-1.5 text-xs font-semibold text-rose-600 hover:text-rose-700 hover:underline cursor-pointer disabled:opacity-40 transition-colors"
+                    >
+                      Cancel Reservation
+                    </button>
                   </div>
                 </section>
 
@@ -1052,9 +1339,20 @@ export default function CheckoutPage() {
                       <span className="text-[#00796d]">▣</span> {eventDateStr}
                     </p>
                     <div className="mt-4 flex items-center gap-2 flex-wrap">
-                      <span className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white">
-                        {quantity}x {selectedTicket || "General Admission"}
-                      </span>
+                      {derivedTickets && derivedTickets.length > 0 ? (
+                        derivedTickets.map((t, idx) => (
+                          <span
+                            key={t.ticketTypeId || idx}
+                            className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white"
+                          >
+                            {t.quantity}x {t.name || "Ticket"}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="rounded-full bg-[#00796d] px-3 py-1 text-xs font-semibold text-white">
+                          {quantity}x {selectedTicket || "General Admission"}
+                        </span>
+                      )}
                       {selectedSeats && selectedSeats.length > 0 && (
                         <span className="text-xs sm:text-sm text-[#565e74]">
                           Seats {selectedSeats.join(", ")}
@@ -1096,7 +1394,7 @@ export default function CheckoutPage() {
               </p>
 
               {/* Booking & Transaction IDs */}
-              <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3 bg-[#f1f3ff] p-4 rounded-xl text-left text-xs sm:text-sm">
+              <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-[#f1f3ff] p-4 rounded-xl text-left text-xs sm:text-sm">
                 <div>
                   <span className="text-[#565e74] block">Booking Reference</span>
                   <strong className="font-mono font-bold text-ink text-sm sm:text-base">
@@ -1107,6 +1405,12 @@ export default function CheckoutPage() {
                   <span className="text-[#565e74] block">Payment ID</span>
                   <strong className="font-mono font-bold text-ink text-sm sm:text-base">
                     {confirmedPayment?.TransactionID || confirmedPayment?.transactionId || "SUCCESS"}
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-[#565e74] block">Receipt Number</span>
+                  <strong className="font-mono font-bold text-[#00796d] text-sm sm:text-base">
+                    {confirmedInvoice?.invoice_number || confirmedInvoice?.InvoiceNumber || "EVH-RECEIPT"}
                   </strong>
                 </div>
               </div>
@@ -1145,6 +1449,22 @@ export default function CheckoutPage() {
                       </div>
                     ))}
                   </div>
+                ) : derivedTickets && derivedTickets.length > 0 ? (
+                  <div className="space-y-2">
+                    {derivedTickets.map((t, idx) => (
+                      <div
+                        key={t.ticketTypeId || idx}
+                        className="flex items-center justify-between rounded-lg bg-[#f9f9ff] border border-[#bcc9c6]/50 px-3.5 py-2.5 text-xs sm:text-sm"
+                      >
+                        <span className="text-ink font-medium">
+                          {t.quantity}x {t.name || "Ticket"}
+                        </span>
+                        <strong className="font-bold text-ink">
+                          ₹{Number(t.lineTotal || (t.price * t.quantity)).toLocaleString("en-IN")}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
                 ) : (
                   <div className="flex items-center justify-between rounded-lg bg-[#f9f9ff] border border-[#bcc9c6]/50 px-3.5 py-2.5 text-xs sm:text-sm">
                     <span className="text-ink font-medium">
@@ -1174,9 +1494,35 @@ export default function CheckoutPage() {
                     >
                       View Tickets
                     </Link>
+                    <button
+                      type="button"
+                      onClick={() => setShowInvoiceModal(true)}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#00796d] bg-white px-5 py-3 text-sm font-bold text-[#00796d] hover:bg-[#e6f4f2] transition-colors cursor-pointer"
+                    >
+                      View Receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const targetId = confirmedBooking.ID || confirmedBooking.id;
+                        setIsDownloadingReceipt(true);
+                        try {
+                          await downloadBookingInvoicePdf(targetId);
+                          notify.success("Booking receipt downloaded successfully.");
+                        } catch (err) {
+                          notify.error(err?.message || "Failed to download receipt.");
+                        } finally {
+                          setIsDownloadingReceipt(false);
+                        }
+                      }}
+                      disabled={isDownloadingReceipt}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#dfe5e3] bg-white px-5 py-3 text-sm font-bold text-[#565e74] hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {isDownloadingReceipt ? "Downloading..." : "Download Receipt (PDF)"}
+                    </button>
                     <Link
                       to={`/bookings/${confirmedBooking.ID || confirmedBooking.id}`}
-                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#00796d] bg-white px-6 py-3 text-sm font-bold text-[#00796d] hover:bg-[#e6f4f2] transition-colors"
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#bcc9c6] bg-white px-6 py-3 text-sm font-bold text-ink hover:bg-slate-50 transition-colors"
                     >
                       Booking Details
                     </Link>
@@ -1200,13 +1546,37 @@ export default function CheckoutPage() {
                   onClick={() => window.print()}
                   className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#bcc9c6] bg-white px-6 py-3 text-sm font-bold text-ink hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  Print Receipt
+                  Print Page
                 </button>
               </div>
             </div>
           </div>
         )}
       </main>
+
+      {/* Cancel Reservation Confirmation Modal */}
+      {showCancelModal && (
+        <CancelReservationModal
+          isOpen={showCancelModal}
+          reservation={reservation}
+          event={event}
+          selectedTickets={derivedTickets || []}
+          selectedSeats={selectedSeats || []}
+          selectedSeatObjects={selectedSeatObjects || []}
+          totalAmount={pricing.total}
+          onClose={() => setShowCancelModal(false)}
+          onSuccess={handleModalCancellationSuccess}
+        />
+      )}
+
+      {/* Booking Receipt Summary Modal */}
+      {showInvoiceModal && (
+        <InvoiceSummaryModal
+          isOpen={showInvoiceModal}
+          bookingId={confirmedBooking?.ID || confirmedBooking?.id}
+          onClose={() => setShowInvoiceModal(false)}
+        />
+      )}
 
       <Footer />
     </div>

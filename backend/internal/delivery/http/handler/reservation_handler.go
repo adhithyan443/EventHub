@@ -27,11 +27,17 @@ func NewReservationHandler(
 	}
 }
 
+type ticketSelectionItem struct {
+	TicketTypeID string `json:"ticket_type_id"`
+	Quantity     int    `json:"quantity"`
+}
+
 type createReservationBody struct {
-	EventID      string   `json:"eventId"`
-	SeatIDs      []string `json:"seat_ids"`
-	TicketTypeID *string  `json:"ticket_type_id"`
-	Quantity     int      `json:"quantity"`
+	EventID      string                `json:"eventId"`
+	SeatIDs      []string              `json:"seat_ids"`
+	TicketTypeID *string               `json:"ticket_type_id"`
+	Quantity     int                   `json:"quantity"`
+	Tickets      []ticketSelectionItem `json:"tickets"`
 }
 
 func (h *ReservationHandler) CreateReservation(c *gin.Context) {
@@ -77,6 +83,22 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 			return
 		}
 		req.SeatIDs = append(req.SeatIDs, seatID)
+	}
+
+	for _, t := range body.Tickets {
+		ticketTypeID, err := uuid.Parse(t.TicketTypeID)
+		if err != nil || ticketTypeID == uuid.Nil {
+			c.Error(appErrors.NewValidationError("invalid ticket type ID"))
+			return
+		}
+		if t.Quantity <= 0 {
+			c.Error(appErrors.NewValidationError("ticket quantity must be positive"))
+			return
+		}
+		req.Tickets = append(req.Tickets, reservation.TicketSelection{
+			TicketTypeID: ticketTypeID,
+			Quantity:     t.Quantity,
+		})
 	}
 
 	if body.TicketTypeID != nil {

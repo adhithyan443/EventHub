@@ -72,6 +72,22 @@ type BookingWithItems struct {
 	QRPayload string        `json:"qr_payload,omitempty"`
 }
 
+type CustomerBookingFilter struct {
+	Page   int
+	Limit  int
+	Status string
+	Search string
+	SortBy string
+}
+
+type CustomerBookingList struct {
+	Bookings   []Booking `json:"bookings"`
+	Total      int64     `json:"total"`
+	Page       int       `json:"page"`
+	Limit      int       `json:"limit"`
+	TotalPages int       `json:"total_pages"`
+}
+
 type BookingRepository interface {
 	Create(
 		ctx context.Context,
@@ -97,6 +113,12 @@ type BookingRepository interface {
 		ctx context.Context,
 		userID uuid.UUID,
 	) ([]Booking, error)
+
+	FindByUserIDPaginated(
+		ctx context.Context,
+		userID uuid.UUID,
+		filter CustomerBookingFilter,
+	) ([]Booking, int64, error)
 
 	FindWithItemsByID(
 		ctx context.Context,

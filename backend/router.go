@@ -89,6 +89,7 @@ func setupRouter(
 		userRepo,
 	)
 	registerCategoryRoutes(router, categoryHandler)
+	registerPublicPricingRoutes(router, adminPricingTaxHandler)
 	registerPublicEventRoutes(router, eventHandler, seatLayoutHandler)
 	registerReservationRoutes(router, reservationHandler, jwtService, userRepo)
 	registerCheckoutRoutes(router, checkoutHandler, jwtService, userRepo)
@@ -339,6 +340,18 @@ func registerCategoryRoutes(
 	)
 }
 
+func registerPublicPricingRoutes(
+	router *gin.Engine,
+	adminPricingTaxHandler *handler.AdminPricingTaxHandler,
+) {
+	api := router.Group("/api/v1")
+
+	api.GET(
+		"/pricing/active",
+		adminPricingTaxHandler.GetPublicActiveConfiguration,
+	)
+}
+
 func registerPublicEventRoutes(
 	router *gin.Engine,
 	eventHandler *handler.EventHandler,
@@ -464,4 +477,6 @@ func registerBookingRoutes(
 	bookings.POST("/:id/cancel", bookingHandler.CancelBooking)
 	bookings.GET("/:id/qr", bookingHandler.GetBookingQR)
 	bookings.GET("/:id/download", bookingHandler.DownloadBookingPDF)
+	bookings.GET("/:id/invoice", bookingHandler.GetBookingInvoice)
+	bookings.GET("/:id/invoice/download", bookingHandler.DownloadBookingInvoicePDF)
 }

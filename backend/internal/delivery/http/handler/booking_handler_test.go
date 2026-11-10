@@ -27,11 +27,12 @@ import (
 
 type stubBookingHandlerRepo struct {
 	domain.BookingRepository
-	findByUserFn        func(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error)
-	findWithItemsFn     func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error)
-	findByIDForUpdateFn func(ctx context.Context, id uuid.UUID) (*domain.Booking, error)
-	updateStatusFn      func(ctx context.Context, id uuid.UUID, status string) error
-	findItemsFn         func(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingItem, error)
+	findByUserFn          func(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error)
+	findByUserPaginatedFn func(ctx context.Context, userID uuid.UUID, filter domain.CustomerBookingFilter) ([]domain.Booking, int64, error)
+	findWithItemsFn       func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error)
+	findByIDForUpdateFn   func(ctx context.Context, id uuid.UUID) (*domain.Booking, error)
+	updateStatusFn        func(ctx context.Context, id uuid.UUID, status string) error
+	findItemsFn           func(ctx context.Context, bookingID uuid.UUID) ([]domain.BookingItem, error)
 }
 
 func (s *stubBookingHandlerRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Booking, error) {
@@ -39,6 +40,24 @@ func (s *stubBookingHandlerRepo) FindByUserID(ctx context.Context, userID uuid.U
 		return s.findByUserFn(ctx, userID)
 	}
 	return nil, nil
+}
+
+func (s *stubBookingHandlerRepo) FindByUserIDPaginated(
+	ctx context.Context,
+	userID uuid.UUID,
+	filter domain.CustomerBookingFilter,
+) ([]domain.Booking, int64, error) {
+	if s.findByUserPaginatedFn != nil {
+		return s.findByUserPaginatedFn(ctx, userID, filter)
+	}
+	if s.findByUserFn != nil {
+		bookings, err := s.findByUserFn(ctx, userID)
+		if err != nil {
+			return nil, 0, err
+		}
+		return bookings, int64(len(bookings)), nil
+	}
+	return nil, 0, nil
 }
 
 func (s *stubBookingHandlerRepo) FindWithItemsByID(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
@@ -137,6 +156,10 @@ type stubPaymentHandlerRepo struct {
 	domain.PaymentRepository
 }
 
+func (s *stubPaymentHandlerRepo) FindByBookingID(ctx context.Context, bookingID string) ([]domain.Payment, error) {
+	return nil, nil
+}
+
 type stubRefundHandlerRepo struct {
 	domain.RefundRepository
 }
@@ -153,9 +176,29 @@ func (s *stubTicketTypeHandlerRepo) ReleaseReservedQuantity(ctx context.Context,
 	return nil
 }
 
+type stubInvoiceHandlerRepo struct {
+	domain.InvoiceRepository
+	findByBookingIDWithItemsFn func(ctx context.Context, bookingID uuid.UUID) (*domain.Invoice, []domain.InvoiceItem, error)
+}
+
+func (s *stubInvoiceHandlerRepo) FindByBookingIDWithItems(ctx context.Context, bookingID uuid.UUID) (*domain.Invoice, []domain.InvoiceItem, error) {
+	if s.findByBookingIDWithItemsFn != nil {
+		return s.findByBookingIDWithItemsFn(ctx, bookingID)
+	}
+	return nil, nil, domain.ErrInvoiceNotFound
+}
+
 type stubTxRepositories struct {
 	domain.TransactionRepositories
 	bookingRepo domain.BookingRepository
+	invoiceRepo domain.InvoiceRepository
+}
+
+func (s *stubTxRepositories) InvoiceRepository() domain.InvoiceRepository {
+	if s.invoiceRepo != nil {
+		return s.invoiceRepo
+	}
+	return &stubInvoiceHandlerRepo{}
 }
 
 func (s *stubTxRepositories) BookingRepository() domain.BookingRepository {
@@ -209,17 +252,19 @@ func (s *stubTxManager) WithinTransaction(fn func(tx domain.TransactionRepositor
 // --- Handler Test Fixture ---
 
 type bookingHandlerFixture struct {
-	repo    *stubBookingHandlerRepo
-	handler *handler.BookingHandler
-	router  *gin.Engine
-	userID  uuid.UUID
+	repo        *stubBookingHandlerRepo
+	invoiceRepo *stubInvoiceHandlerRepo
+	handler     *handler.BookingHandler
+	router      *gin.Engine
+	userID      uuid.UUID
 }
 
 func setupBookingHandlerFixture(t *testing.T) *bookingHandlerFixture {
 	gin.SetMode(gin.TestMode)
 
 	repo := &stubBookingHandlerRepo{}
-	txRepos := &stubTxRepositories{bookingRepo: repo}
+	invoiceRepo := &stubInvoiceHandlerRepo{}
+	txRepos := &stubTxRepositories{bookingRepo: repo, invoiceRepo: invoiceRepo}
 	txManager := &stubTxManager{txRepos: txRepos}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -232,10 +277,11 @@ func setupBookingHandlerFixture(t *testing.T) *bookingHandlerFixture {
 	userID := uuid.New()
 
 	return &bookingHandlerFixture{
-		repo:    repo,
-		handler: bh,
-		router:  router,
-		userID:  userID,
+		repo:        repo,
+		invoiceRepo: invoiceRepo,
+		handler:     bh,
+		router:      router,
+		userID:      userID,
 	}
 }
 
@@ -351,6 +397,91 @@ func TestGetMyBookings_InternalServerError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "database connection pool")
 	assert.Contains(t, rec.Body.String(), "failed to retrieve bookings")
+}
+
+func TestGetMyBookings_Pagination_Success(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+
+	expectedBookings := []domain.Booking{
+		{
+			ID:            uuid.New(),
+			BookingNumber: "BK-2026-0001",
+			UserID:        f.userID,
+			Status:        domain.BookingStatusConfirmed,
+		},
+	}
+
+	var capturedFilter domain.CustomerBookingFilter
+	f.repo.findByUserPaginatedFn = func(ctx context.Context, userID uuid.UUID, filter domain.CustomerBookingFilter) ([]domain.Booking, int64, error) {
+		assert.Equal(t, f.userID, userID)
+		capturedFilter = filter
+		return expectedBookings, 11, nil
+	}
+
+	f.router.GET("/api/v1/bookings", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyBookings(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings?page=2&limit=5&status=CONFIRMED&search=Concert&sort_by=oldest", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, 2, capturedFilter.Page)
+	assert.Equal(t, 5, capturedFilter.Limit)
+	assert.Equal(t, "CONFIRMED", capturedFilter.Status)
+	assert.Equal(t, "Concert", capturedFilter.Search)
+	assert.Equal(t, "oldest", capturedFilter.SortBy)
+
+	var resp struct {
+		Data []domain.Booking `json:"data"`
+		Meta struct {
+			Page       int   `json:"page"`
+			Limit      int   `json:"limit"`
+			Total      int64 `json:"total"`
+			TotalPages int   `json:"total_pages"`
+		} `json:"meta"`
+	}
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Len(t, resp.Data, 1)
+	assert.Equal(t, 2, resp.Meta.Page)
+	assert.Equal(t, 5, resp.Meta.Limit)
+	assert.Equal(t, int64(11), resp.Meta.Total)
+	assert.Equal(t, 3, resp.Meta.TotalPages)
+}
+
+func TestGetMyBookings_Pagination_InvalidPage(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+
+	f.router.GET("/api/v1/bookings", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyBookings(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings?page=0", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid page parameter")
+}
+
+func TestGetMyBookings_Pagination_InvalidLimit(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+
+	f.router.GET("/api/v1/bookings", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyBookings(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings?limit=150", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid limit parameter, must be between 1 and 100")
 }
 
 func TestGetBookingByID_Success(t *testing.T) {
@@ -811,4 +942,139 @@ func TestCancelBooking_CancellationNotAllowed(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Contains(t, rec.Body.String(), "cancellation is not allowed")
+}
+
+func TestGetBookingInvoice_Success(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+	invoiceID := uuid.New()
+
+	f.repo.findWithItemsFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
+		return &domain.Booking{
+			ID:            bookingID,
+			BookingNumber: "BK-20261110-001",
+			UserID:        f.userID,
+			EventID:       uuid.New(),
+			Status:        domain.BookingStatusConfirmed,
+			Total:         decimal.NewFromInt(1500),
+			Subtotal:      decimal.NewFromInt(1300),
+			PlatformFee:   decimal.NewFromInt(50),
+			Tax:           decimal.NewFromInt(150),
+		}, nil, nil
+	}
+
+	f.invoiceRepo.findByBookingIDWithItemsFn = func(ctx context.Context, bID uuid.UUID) (*domain.Invoice, []domain.InvoiceItem, error) {
+		return &domain.Invoice{
+			ID:            invoiceID,
+			InvoiceNumber: "EVH-REC-20261110-000001",
+			BookingID:     bookingID,
+			UserID:        f.userID,
+			Status:        domain.InvoiceStatusIssued,
+			Currency:      "INR",
+			Subtotal:      decimal.NewFromInt(1300),
+			PlatformFee:   decimal.NewFromInt(50),
+			TaxAmount:     decimal.NewFromInt(150),
+			TotalAmount:   decimal.NewFromInt(1500),
+			PaidAmount:    decimal.NewFromInt(1500),
+			CustomerName:  "Jane Doe",
+			CustomerEmail: "jane@example.com",
+			EventTitle:    "Test Festival",
+			EventDate:     "2026-11-20",
+			IssuerName:    "EventHub Bookings",
+			IssuedAt:      time.Now(),
+		}, []domain.InvoiceItem{
+			{
+				ID:           uuid.New(),
+				InvoiceID:    invoiceID,
+				CategoryName: "General Admission",
+				Quantity:     1,
+				UnitPrice:    decimal.NewFromInt(1300),
+				TotalPrice:   decimal.NewFromInt(1300),
+			},
+		}, nil
+	}
+
+	f.router.GET("/api/v1/bookings/:id/invoice", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetBookingInvoice(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/"+bookingID.String()+"/invoice", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var body map[string]interface{}
+	err := json.Unmarshal(rec.Body.Bytes(), &body)
+	require.NoError(t, err)
+	assert.True(t, body["success"].(bool))
+	data := body["data"].(map[string]interface{})
+	assert.Equal(t, "EVH-REC-20261110-000001", data["receipt_number"])
+}
+
+func TestGetBookingInvoice_NotFound(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+
+	f.repo.findWithItemsFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
+		return nil, nil, domain.ErrBookingNotFound
+	}
+
+	f.router.GET("/api/v1/bookings/:id/invoice", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetBookingInvoice(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/"+bookingID.String()+"/invoice", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestDownloadBookingInvoicePDF_Success(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+	invoiceID := uuid.New()
+
+	f.repo.findWithItemsFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, []domain.BookingItem, error) {
+		return &domain.Booking{
+			ID:            bookingID,
+			BookingNumber: "BK-20261110-001",
+			UserID:        f.userID,
+			EventID:       uuid.New(),
+			Status:        domain.BookingStatusConfirmed,
+		}, nil, nil
+	}
+
+	f.invoiceRepo.findByBookingIDWithItemsFn = func(ctx context.Context, bID uuid.UUID) (*domain.Invoice, []domain.InvoiceItem, error) {
+		return &domain.Invoice{
+			ID:            invoiceID,
+			InvoiceNumber: "EVH-REC-20261110-000001",
+			BookingID:     bookingID,
+			UserID:        f.userID,
+			Status:        domain.InvoiceStatusIssued,
+			Currency:      "INR",
+			CustomerName:  "Jane Doe",
+			CustomerEmail: "jane@example.com",
+			EventTitle:    "Test Festival",
+			EventDate:     "2026-11-20",
+			IssuerName:    "EventHub Bookings",
+			IssuedAt:      time.Now(),
+		}, nil, nil
+	}
+
+	f.router.GET("/api/v1/bookings/:id/invoice/download", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.DownloadBookingInvoicePDF(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bookings/"+bookingID.String()+"/invoice/download", nil)
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/pdf", rec.Header().Get("Content-Type"))
+	assert.Contains(t, rec.Header().Get("Content-Disposition"), "attachment; filename=\"receipt-EVH-REC-20261110-000001.pdf\"")
+	assert.True(t, len(rec.Body.Bytes()) > 0)
 }
