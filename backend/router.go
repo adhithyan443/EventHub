@@ -477,4 +477,6 @@ func registerBookingRoutes(
 	bookings.POST("/:id/cancel", bookingHandler.CancelBooking)
 	bookings.GET("/:id/qr", bookingHandler.GetBookingQR)
 	bookings.GET("/:id/download", bookingHandler.DownloadBookingPDF)
+	bookings.GET("/:id/invoice", bookingHandler.GetBookingInvoice)
+	bookings.GET("/:id/invoice/download", bookingHandler.DownloadBookingInvoicePDF)
 }

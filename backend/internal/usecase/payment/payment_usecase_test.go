@@ -549,6 +549,121 @@ func (m *mockSeatRepo) BookReservedSeat(ctx context.Context, seatID uuid.UUID) e
 	return nil
 }
 
+func (m *mockSeatRepo) FindDetailsBySeatIDs(ctx context.Context, seatIDs []uuid.UUID) (map[uuid.UUID]domain.SeatDetail, error) {
+	return make(map[uuid.UUID]domain.SeatDetail), nil
+}
+
+type mockUserRepo struct {
+	domain.UserRepository
+}
+
+func (m *mockUserRepo) FindByID(id uuid.UUID) (*domain.User, error) {
+	return &domain.User{ID: id, FullName: "Test User", Email: "test@example.com"}, nil
+}
+
+type mockEventRepo struct {
+	domain.EventRepository
+}
+
+func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
+	return &domain.Event{ID: id, Title: "Test Event", EventType: domain.EventTypePhysical}, nil
+}
+
+type mockEventScheduleRepo struct {
+	domain.EventScheduleRepository
+}
+
+func (m *mockEventScheduleRepo) FindByEventID(eventID uuid.UUID) (*domain.EventSchedule, error) {
+	return &domain.EventSchedule{EventID: eventID, EventDate: time.Now()}, nil
+}
+
+type mockVenueRepo struct {
+	domain.VenueRepository
+}
+
+func (m *mockVenueRepo) FindByID(id uuid.UUID) (*domain.Venue, error) {
+	return &domain.Venue{ID: id, Name: "Test Venue"}, nil
+}
+
+type mockOrganizerProfileRepo struct {
+	domain.OrganizerProfileRepository
+}
+
+func (m *mockOrganizerProfileRepo) FindByOrganizerID(id uuid.UUID) (*domain.OrganizerProfile, error) {
+	return &domain.OrganizerProfile{OrganizerID: id, BusinessName: "Test Organizer"}, nil
+}
+
+type mockTicketTypeRepo struct {
+	domain.TicketTypeRepository
+}
+
+func (m *mockTicketTypeRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.TicketType, error) {
+	return &domain.TicketType{ID: id, Name: "General Admission"}, nil
+}
+
+type mockInvoiceRepo struct {
+	domain.InvoiceRepository
+	invoicesByBooking map[uuid.UUID]*domain.Invoice
+	seq               int64
+	mu                sync.Mutex
+	createErr         error
+	findByBookingErr  error
+	nextNumberErr     error
+}
+
+func newMockInvoiceRepo() *mockInvoiceRepo {
+	return &mockInvoiceRepo{
+		invoicesByBooking: make(map[uuid.UUID]*domain.Invoice),
+	}
+}
+
+func (m *mockInvoiceRepo) NextReceiptNumber(ctx context.Context, t time.Time) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.nextNumberErr != nil {
+		return "", m.nextNumberErr
+	}
+	m.seq++
+	return fmt.Sprintf("EVH-REC-%s-%06d", t.Format("20060102"), m.seq), nil
+}
+
+func (m *mockInvoiceRepo) Create(ctx context.Context, invoice *domain.Invoice, items []domain.InvoiceItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if _, exists := m.invoicesByBooking[invoice.BookingID]; exists {
+		return domain.ErrInvoiceAlreadyExists
+	}
+	invoice.Items = items
+	m.invoicesByBooking[invoice.BookingID] = invoice
+	return nil
+}
+
+func (m *mockInvoiceRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) (*domain.Invoice, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.findByBookingErr != nil {
+		return nil, m.findByBookingErr
+	}
+	inv, ok := m.invoicesByBooking[bookingID]
+	if !ok {
+		return nil, domain.ErrInvoiceNotFound
+	}
+	return inv, nil
+}
+
+func (m *mockInvoiceRepo) FindByBookingIDWithItems(ctx context.Context, bookingID uuid.UUID) (*domain.Invoice, []domain.InvoiceItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	inv, ok := m.invoicesByBooking[bookingID]
+	if !ok {
+		return nil, nil, domain.ErrInvoiceNotFound
+	}
+	return inv, inv.Items, nil
+}
+
 type mockRazorpayWebhookEventRepo struct {
 	mu     sync.Mutex
 	events map[string]string
@@ -588,6 +703,7 @@ type mockTxRepos struct {
 	seatRepo              *mockSeatRepo
 	webhookEventRepo      *mockRazorpayWebhookEventRepo
 	eventCancellationRepo *mockEventCancellationRepo
+	invoiceRepo           *mockInvoiceRepo
 }
 
 func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository {
@@ -616,6 +732,30 @@ func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepo
 }
 func (m *mockTxRepos) RefundRepository() domain.RefundRepository {
 	return &mockRefundRepo{}
+}
+func (m *mockTxRepos) UserRepository() domain.UserRepository {
+	return &mockUserRepo{}
+}
+func (m *mockTxRepos) EventRepository() domain.EventRepository {
+	return &mockEventRepo{}
+}
+func (m *mockTxRepos) EventScheduleRepository() domain.EventScheduleRepository {
+	return &mockEventScheduleRepo{}
+}
+func (m *mockTxRepos) VenueRepository() domain.VenueRepository {
+	return &mockVenueRepo{}
+}
+func (m *mockTxRepos) OrganizerProfileRepository() domain.OrganizerProfileRepository {
+	return &mockOrganizerProfileRepo{}
+}
+func (m *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
+	return &mockTicketTypeRepo{}
+}
+func (m *mockTxRepos) InvoiceRepository() domain.InvoiceRepository {
+	if m.invoiceRepo == nil {
+		m.invoiceRepo = newMockInvoiceRepo()
+	}
+	return m.invoiceRepo
 }
 
 type mockRefundRepo struct {
@@ -716,6 +856,7 @@ type testFixture struct {
 	checkoutRepo    *mockCheckoutRepo
 	reservationRepo *mockSeatReservationRepo
 	ticketRepo      *mockTicketRepo
+	invoiceRepo     *mockInvoiceRepo
 	provider        *mockPaymentProvider
 	userID          uuid.UUID
 	checkoutID      uuid.UUID
@@ -733,6 +874,7 @@ func setupFixture(t *testing.T) *testFixture {
 	reservationRepo := newMockSeatReservationRepo()
 	ticketRepo := &mockTicketRepo{}
 	seatRepo := &mockSeatRepo{}
+	invoiceRepo := newMockInvoiceRepo()
 	webhookEventRepo := &mockRazorpayWebhookEventRepo{events: make(map[string]string)}
 
 	txRepos := &mockTxRepos{
@@ -742,6 +884,7 @@ func setupFixture(t *testing.T) *testFixture {
 		seatReservationRepo:   reservationRepo,
 		ticketRepo:            ticketRepo,
 		seatRepo:              seatRepo,
+		invoiceRepo:           invoiceRepo,
 		webhookEventRepo:      webhookEventRepo,
 		eventCancellationRepo: &mockEventCancellationRepo{cancellations: make(map[uuid.UUID]*domain.EventCancellation)},
 	}
@@ -793,6 +936,7 @@ func setupFixture(t *testing.T) *testFixture {
 		checkoutRepo:    checkoutRepo,
 		reservationRepo: reservationRepo,
 		ticketRepo:      ticketRepo,
+		invoiceRepo:     invoiceRepo,
 		provider:        provider,
 		userID:          userID,
 		checkoutID:      checkoutID,
@@ -1272,4 +1416,97 @@ func TestRazorpayProvider_FindOrderByReceipt_Validation(t *testing.T) {
 	// Unsupported currency
 	_, err = provider.FindOrderByReceipt(ctx, "valid_receipt_123", decimal.NewFromInt(100), "USD")
 	assert.Error(t, err)
+}
+
+func TestVerifyPayment_InvoiceLookupFailure_FailsClosed(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	// Simulate unexpected database failure when querying invoice
+	dbErr := errors.New("database connection refused")
+	f.invoiceRepo.findByBookingErr = dbErr
+
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_err_123",
+		RazorpaySignature: "sig_dummy",
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, res)
+	assert.Contains(t, err.Error(), "database connection refused")
+}
+
+func TestVerifyPayment_ReceiptHealingFailure_FailsClosed(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// Initial successful verification
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	verifyRes, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_heal_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, verifyRes.Invoice)
+
+	// Simulate missing invoice on subsequent idempotent verification
+	f.invoiceRepo.mu.Lock()
+	delete(f.invoiceRepo.invoicesByBooking, verifyRes.Booking.ID)
+	f.invoiceRepo.mu.Unlock()
+
+	// Inject failure on creation during self-healing
+	healErr := errors.New("snapshot creation disk full")
+	f.invoiceRepo.createErr = healErr
+
+	// Idempotent retry must fail closed, NOT return success with nil invoice
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_heal_123",
+		RazorpaySignature: "sig_dummy",
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, res)
+	assert.Contains(t, err.Error(), "snapshot creation disk full")
+}
+
+func TestVerifyPayment_SuccessReturnsInvoice(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	verifyRes, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_success_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, verifyRes.Invoice)
+	assert.Equal(t, verifyRes.Booking.ID, verifyRes.Invoice.BookingID)
+	assert.NotEmpty(t, verifyRes.Invoice.InvoiceNumber)
 }

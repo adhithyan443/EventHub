@@ -41,4 +41,5 @@ type TransactionRepositories interface {
 	RefundRepository() RefundRepository
 	RazorpayWebhookEventRepository() RazorpayWebhookEventRepository
 	PricingTaxConfigurationRepository() PricingTaxConfigurationRepository
+	InvoiceRepository() InvoiceRepository
 }

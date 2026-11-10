@@ -330,3 +330,97 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		"data":    result,
 	})
 }
+
+// GetBookingInvoice handles GET /api/v1/bookings/:id/invoice.
+func (h *BookingHandler) GetBookingInvoice(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "unauthorized",
+		})
+		return
+	}
+
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil || bookingID == uuid.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid booking ID",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	dto, err := h.bookingUsecase.GetBookingInvoice(ctx, userID, bookingID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBookingNotFound) || errors.Is(err, domain.ErrInvoiceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "invoice not found",
+			})
+			return
+		}
+
+		h.logger.ErrorContext(ctx, "failed to retrieve booking invoice",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("user_id", userID.String()),
+			slog.Any("error", err),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to retrieve booking invoice",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    dto,
+	})
+}
+
+// DownloadBookingInvoicePDF handles GET /api/v1/bookings/:id/invoice/download.
+func (h *BookingHandler) DownloadBookingInvoicePDF(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": "unauthorized",
+		})
+		return
+	}
+
+	bookingID, err := uuid.Parse(c.Param("id"))
+	if err != nil || bookingID == uuid.Nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid booking ID",
+		})
+		return
+	}
+
+	ctx := c.Request.Context()
+	pdfBytes, filename, err := h.bookingUsecase.GetBookingInvoicePDF(ctx, userID, bookingID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBookingNotFound) || errors.Is(err, domain.ErrInvoiceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "invoice not found",
+			})
+			return
+		}
+
+		h.logger.ErrorContext(ctx, "failed to download booking invoice PDF",
+			slog.String("booking_id", bookingID.String()),
+			slog.String("user_id", userID.String()),
+			slog.Any("error", err),
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to generate invoice PDF",
+		})
+		return
+	}
+
+	c.Header("Content-Type", "application/pdf")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	c.Header("Content-Length", strconv.Itoa(len(pdfBytes)))
+	c.Header("Cache-Control", "private, no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+
+	c.Data(http.StatusOK, "application/pdf", pdfBytes)
+}

@@ -14,6 +14,7 @@ import {
 } from "./components/BookingIcons";
 import RefundDetailsModal from "./components/RefundDetailsModal";
 import CancelBookingModal from "./components/CancelBookingModal";
+import InvoiceSummaryModal from "./components/InvoiceSummaryModal";
 import {
   checkCancellationEligibility,
   calculateExpectedRefund,
@@ -56,6 +57,7 @@ export default function MyBookingsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRefundBooking, setSelectedRefundBooking] = useState(null);
   const [cancellingBooking, setCancellingBooking] = useState(null);
+  const [selectedInvoiceBookingId, setSelectedInvoiceBookingId] = useState(null);
 
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -509,12 +511,21 @@ export default function MyBookingsPage() {
                         </Link>
 
                         {(status === "CONFIRMED" || status === "COMPLETED") && (
-                          <Link
-                            to={`/bookings/${bookingId}/ticket`}
-                            className="inline-flex items-center justify-center rounded-lg bg-[#00685f] px-4 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-[#00544c] shadow-xs transition-colors cursor-pointer"
-                          >
-                            View Ticket
-                          </Link>
+                          <>
+                            <Link
+                              to={`/bookings/${bookingId}/ticket`}
+                              className="inline-flex items-center justify-center rounded-lg bg-[#00685f] px-4 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-[#00544c] shadow-xs transition-colors cursor-pointer"
+                            >
+                              View Ticket
+                            </Link>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedInvoiceBookingId(bookingId)}
+                              className="inline-flex items-center justify-center rounded-lg border border-[#dfe5e3] bg-white px-4 py-2 text-xs sm:text-sm font-semibold text-[#00685f] hover:bg-emerald-50/50 hover:border-[#00685f]/40 transition-colors cursor-pointer"
+                            >
+                              Receipt
+                            </button>
+                          </>
                         )}
 
                         {status === "CONFIRMED" && eligibility.eligible && (
@@ -629,6 +640,15 @@ export default function MyBookingsPage() {
           event={cancellingBooking.event}
           onClose={() => setCancellingBooking(null)}
           onSuccess={handleCancellationSuccess}
+        />
+      )}
+
+      {/* Booking Receipt Summary Modal */}
+      {selectedInvoiceBookingId && (
+        <InvoiceSummaryModal
+          isOpen={!!selectedInvoiceBookingId}
+          bookingId={selectedInvoiceBookingId}
+          onClose={() => setSelectedInvoiceBookingId(null)}
         />
       )}
 

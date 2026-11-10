@@ -5,10 +5,12 @@ import Footer from "../../../components/layout/Footer";
 import StepsProgress from "../components/StepsProgress";
 import OrderPriceSummary from "../components/OrderPriceSummary";
 import CancelReservationModal from "../components/CancelReservationModal";
+import InvoiceSummaryModal from "../../bookings/components/InvoiceSummaryModal";
 import { getPublicEventById } from "../../../api/eventApi";
 import { createCheckout } from "../../../api/checkoutApi";
 import { createPayment, verifyPayment } from "../../../api/paymentApi";
 import { cancelReservation, clearStoredReservation } from "../../../api/reservationApi";
+import { downloadBookingInvoicePdf } from "../../../api/bookingApi";
 import { loadRazorpay } from "../../../utils/loadRazorpay";
 import useAuthStore from "../../../store/authStore";
 import notify from "../../../utils/toast";
@@ -190,6 +192,9 @@ export default function CheckoutPage() {
   const changingRef = useRef(false);
   const [confirmedBooking, setConfirmedBooking] = useState(null);
   const [confirmedPayment, setConfirmedPayment] = useState(null);
+  const [confirmedInvoice, setConfirmedInvoice] = useState(null);
+  const [showInvoiceModal, setShowInvoiceModal] = useState(false);
+  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false);
 
   // Cancellation modal state
   const [showCancelModal, setShowCancelModal] = useState(false);
@@ -562,6 +567,7 @@ export default function CheckoutPage() {
 
             setConfirmedBooking(verifyRes?.data?.booking || null);
             setConfirmedPayment(verifyRes?.data?.payment || null);
+            setConfirmedInvoice(verifyRes?.data?.invoice || null);
             notify.success("Payment successful! Your tickets are confirmed.");
             setCurrentStep(4);
             window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1388,7 +1394,7 @@ export default function CheckoutPage() {
               </p>
 
               {/* Booking & Transaction IDs */}
-              <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3 bg-[#f1f3ff] p-4 rounded-xl text-left text-xs sm:text-sm">
+              <div className="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-[#f1f3ff] p-4 rounded-xl text-left text-xs sm:text-sm">
                 <div>
                   <span className="text-[#565e74] block">Booking Reference</span>
                   <strong className="font-mono font-bold text-ink text-sm sm:text-base">
@@ -1399,6 +1405,12 @@ export default function CheckoutPage() {
                   <span className="text-[#565e74] block">Payment ID</span>
                   <strong className="font-mono font-bold text-ink text-sm sm:text-base">
                     {confirmedPayment?.TransactionID || confirmedPayment?.transactionId || "SUCCESS"}
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-[#565e74] block">Receipt Number</span>
+                  <strong className="font-mono font-bold text-[#00796d] text-sm sm:text-base">
+                    {confirmedInvoice?.invoice_number || confirmedInvoice?.InvoiceNumber || "EVH-RECEIPT"}
                   </strong>
                 </div>
               </div>
@@ -1482,9 +1494,35 @@ export default function CheckoutPage() {
                     >
                       View Tickets
                     </Link>
+                    <button
+                      type="button"
+                      onClick={() => setShowInvoiceModal(true)}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#00796d] bg-white px-5 py-3 text-sm font-bold text-[#00796d] hover:bg-[#e6f4f2] transition-colors cursor-pointer"
+                    >
+                      View Receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const targetId = confirmedBooking.ID || confirmedBooking.id;
+                        setIsDownloadingReceipt(true);
+                        try {
+                          await downloadBookingInvoicePdf(targetId);
+                          notify.success("Booking receipt downloaded successfully.");
+                        } catch (err) {
+                          notify.error(err?.message || "Failed to download receipt.");
+                        } finally {
+                          setIsDownloadingReceipt(false);
+                        }
+                      }}
+                      disabled={isDownloadingReceipt}
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#dfe5e3] bg-white px-5 py-3 text-sm font-bold text-[#565e74] hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {isDownloadingReceipt ? "Downloading..." : "Download Receipt (PDF)"}
+                    </button>
                     <Link
                       to={`/bookings/${confirmedBooking.ID || confirmedBooking.id}`}
-                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#00796d] bg-white px-6 py-3 text-sm font-bold text-[#00796d] hover:bg-[#e6f4f2] transition-colors"
+                      className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#bcc9c6] bg-white px-6 py-3 text-sm font-bold text-ink hover:bg-slate-50 transition-colors"
                     >
                       Booking Details
                     </Link>
@@ -1508,7 +1546,7 @@ export default function CheckoutPage() {
                   onClick={() => window.print()}
                   className="w-full sm:w-auto inline-flex items-center justify-center rounded-lg border border-[#bcc9c6] bg-white px-6 py-3 text-sm font-bold text-ink hover:bg-slate-50 transition-colors cursor-pointer"
                 >
-                  Print Receipt
+                  Print Page
                 </button>
               </div>
             </div>
@@ -1528,6 +1566,15 @@ export default function CheckoutPage() {
           totalAmount={pricing.total}
           onClose={() => setShowCancelModal(false)}
           onSuccess={handleModalCancellationSuccess}
+        />
+      )}
+
+      {/* Booking Receipt Summary Modal */}
+      {showInvoiceModal && (
+        <InvoiceSummaryModal
+          isOpen={showInvoiceModal}
+          bookingId={confirmedBooking?.ID || confirmedBooking?.id}
+          onClose={() => setShowInvoiceModal(false)}
         />
       )}
 

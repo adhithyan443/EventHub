@@ -34,6 +34,8 @@ type Config struct {
 	RazorpayKeyID         string
 	RazorpayKeySecret     string
 	RazorpayWebhookSecret string
+
+	ReceiptIssuerName string
 }
 
 func Load() (Config, error) {
@@ -157,6 +159,8 @@ func Load() (Config, error) {
 		RazorpayKeyID:         razorpayKeyID,
 		RazorpayKeySecret:     razorpayKeySecret,
 		RazorpayWebhookSecret: razorpayWebhookSecret,
+
+		ReceiptIssuerName: getEnv("RECEIPT_ISSUER_NAME", "EventHub Bookings"),
 	}, nil
 }
 

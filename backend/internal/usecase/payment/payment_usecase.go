@@ -438,6 +438,7 @@ type VerifyPaymentRequest struct {
 type VerifyPaymentResult struct {
 	Payment *domain.Payment
 	Booking *domain.Booking
+	Invoice *domain.Invoice
 }
 
 func (u *PaymentUsecase) VerifyPayment(
@@ -454,6 +455,7 @@ func (u *PaymentUsecase) VerifyPayment(
 	var (
 		payment          *domain.Payment
 		confirmedBooking *domain.Booking
+		invoice          *domain.Invoice
 	)
 
 	// Step 1: Load payment and verify booking ownership.
@@ -502,9 +504,47 @@ func (u *PaymentUsecase) VerifyPayment(
 	if payment.Status == domain.PaymentStatusSuccess {
 		if payment.TransactionID != nil &&
 			*payment.TransactionID == req.RazorpayPaymentID {
+			bookingID, parseErr := uuid.Parse(payment.BookingID)
+			if parseErr != nil {
+				return nil, domain.ErrInvalidPayment
+			}
+
+			err = u.transactionManager.WithinTransaction(
+				func(tx domain.TransactionRepositories) error {
+					inv, findErr := tx.InvoiceRepository().FindByBookingID(ctx, bookingID)
+					if findErr == nil {
+						invoice = inv
+						return nil
+					}
+					if !errors.Is(findErr, domain.ErrInvoiceNotFound) {
+						u.logger.ErrorContext(ctx, "failed to query existing invoice on idempotent payment verification",
+							slog.String("booking_id", bookingID.String()),
+							slog.Any("error", findErr),
+						)
+						return findErr
+					}
+
+					// Self-heal: generate receipt snapshot
+					inv, healErr := u.createReceiptSnapshot(ctx, tx, confirmedBooking, payment, time.Now())
+					if healErr != nil {
+						u.logger.ErrorContext(ctx, "failed to self-heal missing receipt snapshot on idempotent verification",
+							slog.String("booking_id", bookingID.String()),
+							slog.Any("error", healErr),
+						)
+						return healErr
+					}
+					invoice = inv
+					return nil
+				},
+			)
+			if err != nil {
+				return nil, err
+			}
+
 			return &VerifyPaymentResult{
 				Payment: payment,
 				Booking: confirmedBooking,
+				Invoice: invoice,
 			}, nil
 		}
 
@@ -585,6 +625,20 @@ func (u *PaymentUsecase) VerifyPayment(
 
 				payment = current
 				confirmedBooking = booking
+
+				inv, findErr := tx.InvoiceRepository().FindByBookingID(ctx, bookingID)
+				if findErr == nil {
+					invoice = inv
+				} else if errors.Is(findErr, domain.ErrInvoiceNotFound) {
+					inv, healErr := u.createReceiptSnapshot(ctx, tx, booking, payment, now)
+					if healErr != nil {
+						return healErr
+					}
+					invoice = inv
+				} else {
+					return findErr
+				}
+
 				return nil
 			}
 
@@ -672,6 +726,13 @@ func (u *PaymentUsecase) VerifyPayment(
 				return nil
 			}
 
+			// Load the newly generated invoice
+			inv, findErr := tx.InvoiceRepository().FindByBookingID(ctx, booking.ID)
+			if findErr != nil {
+				return findErr
+			}
+			invoice = inv
+
 			// Update returned objects to reflect the committed state.
 			current.Status = domain.PaymentStatusSuccess
 			current.TransactionID = &req.RazorpayPaymentID
@@ -716,6 +777,7 @@ func (u *PaymentUsecase) VerifyPayment(
 	return &VerifyPaymentResult{
 		Payment: payment,
 		Booking: confirmedBooking,
+		Invoice: invoice,
 	}, nil
 }
 
@@ -1025,6 +1087,17 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		slog.Int("ticket_count", len(tickets)),
 	)
 
+	// Step 8: Generate booking receipt snapshot in the same atomic transaction.
+	if _, err := u.createReceiptSnapshot(ctx, tx, booking, payment, now); err != nil {
+		u.logger.ErrorContext(
+			ctx,
+			"failed to create booking receipt snapshot",
+			slog.String("booking_id", booking.ID.String()),
+			slog.Any("error", err),
+		)
+		return false, err
+	}
+
 	return false, nil
 }
 
@@ -1185,6 +1258,24 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 					if payment.Status == domain.PaymentStatusSuccess {
 						if payment.TransactionID != nil &&
 							*payment.TransactionID == entity.ID {
+							bookingID, parseErr := uuid.Parse(payment.BookingID)
+							if parseErr != nil {
+								return domain.ErrInvalidPayment
+							}
+							_, findErr := tx.InvoiceRepository().FindByBookingID(ctx, bookingID)
+							if findErr != nil {
+								if errors.Is(findErr, domain.ErrInvoiceNotFound) {
+									booking, bErr := tx.BookingRepository().FindByID(ctx, bookingID)
+									if bErr != nil {
+										return bErr
+									}
+									if _, healErr := u.createReceiptSnapshot(ctx, tx, booking, payment, time.Now()); healErr != nil {
+										return healErr
+									}
+								} else {
+									return findErr
+								}
+							}
 							return nil
 						}
 
@@ -1401,4 +1492,245 @@ func isSupportedPaymentMethod(method domain.PaymentMethod) bool {
 	default:
 		return false
 	}
+}
+
+// createReceiptSnapshot creates an immutable booking receipt and line items snapshot
+// within an active database transaction. It is safe for concurrent calls and idempotent.
+func (u *PaymentUsecase) createReceiptSnapshot(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	booking *domain.Booking,
+	payment *domain.Payment,
+	now time.Time,
+) (*domain.Invoice, error) {
+	if booking == nil || payment == nil {
+		return nil, errors.New("booking and payment are required to create receipt snapshot")
+	}
+
+	// Idempotency: if invoice already exists for this booking, return it immediately
+	existing, err := tx.InvoiceRepository().FindByBookingID(ctx, booking.ID)
+	if err == nil && existing != nil {
+		return existing, nil
+	}
+	if err != nil && !errors.Is(err, domain.ErrInvoiceNotFound) {
+		return nil, fmt.Errorf("failed to query existing invoice: %w", err)
+	}
+
+	paymentUUID, err := uuid.Parse(payment.ID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid payment id %s: %w", payment.ID, err)
+	}
+
+	receiptNumber, err := tx.InvoiceRepository().NextReceiptNumber(ctx, now)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate receipt number: %w", err)
+	}
+
+	// 1. Customer details snapshot
+	customerName := "Customer"
+	customerEmail := ""
+	var customerPhone *string
+	user, userErr := tx.UserRepository().FindByID(booking.UserID)
+	if userErr == nil && user != nil {
+		if strings.TrimSpace(user.FullName) != "" {
+			customerName = strings.TrimSpace(user.FullName)
+		} else if strings.TrimSpace(user.Email) != "" {
+			customerName = strings.TrimSpace(user.Email)
+		}
+		customerEmail = strings.TrimSpace(user.Email)
+		if strings.TrimSpace(user.Phone) != "" {
+			phone := strings.TrimSpace(user.Phone)
+			customerPhone = &phone
+		}
+	}
+
+	// 2. Event details snapshot
+	eventTitle := "Event"
+	isOnline := false
+	var onlineDetails *string
+	var venueName *string
+	var venueAddress *string
+	var organizerName *string
+
+	event, eventErr := tx.EventRepository().FindByID(booking.EventID)
+	if eventErr == nil && event != nil {
+		if strings.TrimSpace(event.Title) != "" {
+			eventTitle = strings.TrimSpace(event.Title)
+		}
+		isOnline = event.EventType == domain.EventTypeOnline || event.EventType == domain.EventTypeHybrid
+		if event.OnlineURL != "" {
+			onlineDetails = &event.OnlineURL
+		}
+
+		if event.EventType != domain.EventTypeOnline && event.VenueID != nil && *event.VenueID != uuid.Nil {
+			venue, vErr := tx.VenueRepository().FindByID(*event.VenueID)
+			if vErr == nil && venue != nil {
+				vName := strings.TrimSpace(venue.Name)
+				if vName != "" {
+					venueName = &vName
+				}
+				var addrParts []string
+				if strings.TrimSpace(venue.Address) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.Address))
+				}
+				if strings.TrimSpace(venue.City) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.City))
+				}
+				if strings.TrimSpace(venue.State) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.State))
+				}
+				if strings.TrimSpace(venue.PostalCode) != "" {
+					addrParts = append(addrParts, strings.TrimSpace(venue.PostalCode))
+				}
+				if len(addrParts) > 0 {
+					vAddr := strings.Join(addrParts, ", ")
+					venueAddress = &vAddr
+				}
+			}
+		}
+
+		if event.OrganizerID != uuid.Nil {
+			profile, pErr := tx.OrganizerProfileRepository().FindByOrganizerID(event.OrganizerID)
+			if pErr == nil && profile != nil && strings.TrimSpace(profile.BusinessName) != "" {
+				bName := strings.TrimSpace(profile.BusinessName)
+				organizerName = &bName
+			}
+		}
+	}
+
+	// 3. Schedule details snapshot
+	eventDate := now.Format("2006-01-02")
+	var eventTimeStr *string
+	schedule, sErr := tx.EventScheduleRepository().FindByEventID(booking.EventID)
+	if sErr == nil && schedule != nil && !schedule.EventDate.IsZero() {
+		eventDate = schedule.EventDate.Format("2006-01-02")
+		if !schedule.StartTime.IsZero() {
+			tStr := schedule.StartTime.Format("03:04 PM")
+			if !schedule.EndTime.IsZero() {
+				tStr = fmt.Sprintf("%s - %s", tStr, schedule.EndTime.Format("03:04 PM"))
+			}
+			eventTimeStr = &tStr
+		} else if schedule.IsAllDay {
+			allDay := "All Day"
+			eventTimeStr = &allDay
+		}
+	}
+
+	// 4. Line items snapshot
+	bookingItems, bErr := tx.BookingRepository().FindItemsByBookingID(ctx, booking.ID)
+	if bErr != nil {
+		return nil, fmt.Errorf("failed to fetch booking items: %w", bErr)
+	}
+
+	var seatIDs []uuid.UUID
+	for _, it := range bookingItems {
+		if it.SeatID != nil && *it.SeatID != uuid.Nil {
+			seatIDs = append(seatIDs, *it.SeatID)
+		}
+	}
+
+	var seatDetailsMap map[uuid.UUID]domain.SeatDetail
+	if len(seatIDs) > 0 {
+		seatDetailsMap, _ = tx.SeatRepository().FindDetailsBySeatIDs(ctx, seatIDs)
+	}
+
+	ticketTypeCache := make(map[uuid.UUID]string)
+
+	invoiceID := uuid.New()
+	invoiceItems := make([]domain.InvoiceItem, 0, len(bookingItems))
+
+	for _, it := range bookingItems {
+		categoryName := "Admission"
+		if it.TicketTypeID != nil && *it.TicketTypeID != uuid.Nil {
+			if name, ok := ticketTypeCache[*it.TicketTypeID]; ok {
+				categoryName = name
+			} else {
+				tt, ttErr := tx.TicketTypeRepository().FindByID(ctx, *it.TicketTypeID)
+				if ttErr == nil && tt != nil && strings.TrimSpace(tt.Name) != "" {
+					categoryName = strings.TrimSpace(tt.Name)
+					ticketTypeCache[*it.TicketTypeID] = categoryName
+				}
+			}
+		}
+
+		var seatLabel *string
+		if it.SeatID != nil && seatDetailsMap != nil {
+			if sd, ok := seatDetailsMap[*it.SeatID]; ok && strings.TrimSpace(sd.Label) != "" {
+				label := strings.TrimSpace(sd.Label)
+				seatLabel = &label
+			}
+		}
+
+		itemTotalPrice := it.UnitPrice.Mul(decimal.NewFromInt(int64(it.Quantity)))
+		itemID := it.ID
+		invoiceItems = append(invoiceItems, domain.InvoiceItem{
+			ID:            uuid.New(),
+			InvoiceID:     invoiceID,
+			BookingItemID: &itemID,
+			CategoryName:  categoryName,
+			SeatLabel:     seatLabel,
+			Quantity:      it.Quantity,
+			UnitPrice:     it.UnitPrice,
+			TotalPrice:    itemTotalPrice,
+			CreatedAt:     now,
+		})
+	}
+
+	if len(invoiceItems) == 0 {
+		invoiceItems = append(invoiceItems, domain.InvoiceItem{
+			ID:           uuid.New(),
+			InvoiceID:    invoiceID,
+			CategoryName: "General Admission",
+			Quantity:     1,
+			UnitPrice:    booking.Total,
+			TotalPrice:   booking.Total,
+			CreatedAt:    now,
+		})
+	}
+
+	invoice := &domain.Invoice{
+		ID:             invoiceID,
+		InvoiceNumber:  receiptNumber,
+		BookingID:      booking.ID,
+		PaymentID:      paymentUUID,
+		UserID:         booking.UserID,
+		EventID:        booking.EventID,
+		Status:         domain.InvoiceStatusIssued,
+		Currency:       "INR",
+		Subtotal:       booking.Subtotal,
+		PlatformFee:    booking.PlatformFee,
+		TaxAmount:      booking.Tax,
+		DiscountAmount: booking.Discount,
+		TotalAmount:    booking.Total,
+		PaidAmount:     payment.Amount,
+		CustomerName:   customerName,
+		CustomerEmail:  customerEmail,
+		CustomerPhone:  customerPhone,
+		EventTitle:     eventTitle,
+		EventDate:      eventDate,
+		EventTimeStr:   eventTimeStr,
+		VenueName:      venueName,
+		VenueAddress:   venueAddress,
+		IsOnline:       isOnline,
+		OnlineDetails:  onlineDetails,
+		IssuerName:     "EventHub Bookings",
+		OrganizerName:  organizerName,
+		IssuedAt:       now,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+		Items:          invoiceItems,
+	}
+
+	if err := tx.InvoiceRepository().Create(ctx, invoice, invoiceItems); err != nil {
+		if errors.Is(err, domain.ErrInvoiceAlreadyExists) {
+			existing, getErr := tx.InvoiceRepository().FindByBookingID(ctx, booking.ID)
+			if getErr == nil {
+				return existing, nil
+			}
+			return nil, fmt.Errorf("failed to retrieve existing invoice after duplicate error: %w", getErr)
+		}
+		return nil, fmt.Errorf("failed to save invoice: %w", err)
+	}
+
+	return invoice, nil
 }
