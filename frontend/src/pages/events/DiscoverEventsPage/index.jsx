@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import HeroSearch from "./HeroSearch";
 import CategoryPills from "./CategoryPills";
@@ -48,15 +49,28 @@ const mapEvent = (event) => {
 };
 
 export default function DiscoverEventsPage() {
+    const [searchParams, setSearchParams] = useSearchParams();
+    const selectedCategoryId =
+        searchParams.get("category_id") ||
+        searchParams.get("category") ||
+        searchParams.get("categoryId") ||
+        "";
+
     const [events, setEvents] = useState([]);
     const [categories, setCategories] = useState([]);
     const [categoriesLoading, setCategoriesLoading] = useState(true);
     const [categoriesError, setCategoriesError] = useState("");
 
-    const [selectedCategoryId, setSelectedCategoryId] = useState("");
-    const [selectedCategoryName, setSelectedCategoryName] = useState("All Events");
-    const [activeFilter, setActiveFilter] = useState("categories");
+    const selectedCategoryName = (() => {
+        if (!selectedCategoryId) return "All Events";
+        const found = categories.find(
+            (c) => (c.ID || c.id) === selectedCategoryId
+        );
+        if (found) return found.Name || found.name;
+        return searchParams.get("name") || "All Events";
+    })();
 
+    const [activeFilter, setActiveFilter] = useState("categories");
     const [currentPage, setCurrentPage] = useState(1);
 
     const [keyword, setKeyword] = useState("");
@@ -83,15 +97,13 @@ export default function DiscoverEventsPage() {
 
     const isInitialMount = useRef(true);
 
-    // Fetch categories on mount or retry
+    // Fetch categories on retry
     const loadCategories = useCallback(() => {
-        let cancelled = false;
         setCategoriesLoading(true);
         setCategoriesError("");
 
         getCategories()
             .then((res) => {
-                if (cancelled) return;
                 const list = Array.isArray(res?.data?.categories)
                     ? res.data.categories
                     : Array.isArray(res?.data)
@@ -100,19 +112,12 @@ export default function DiscoverEventsPage() {
                 setCategories(list);
             })
             .catch((err) => {
-                if (cancelled) return;
                 console.error("Failed to load categories:", err);
                 setCategoriesError("Unable to load event categories.");
             })
             .finally(() => {
-                if (!cancelled) {
-                    setCategoriesLoading(false);
-                }
+                setCategoriesLoading(false);
             });
-
-        return () => {
-            cancelled = true;
-        };
     }, []);
 
     useEffect(() => {
@@ -233,8 +238,23 @@ export default function DiscoverEventsPage() {
 
     // Category selection handler (used by both CategoryPills and FiltersSidebar)
     const handleSelectCategory = (categoryId, categoryName) => {
-        setSelectedCategoryId(categoryId || "");
-        setSelectedCategoryName(categoryName || "All Events");
+        setSearchParams((prev) => {
+            const next = new URLSearchParams(prev);
+            if (categoryId) {
+                next.set("category_id", categoryId);
+                if (categoryName && categoryName !== "All Events") {
+                    next.set("name", categoryName);
+                } else {
+                    next.delete("name");
+                }
+            } else {
+                next.delete("category_id");
+                next.delete("category");
+                next.delete("categoryId");
+                next.delete("name");
+            }
+            return next;
+        }, { replace: true });
     };
 
     // Hero search handler
@@ -257,8 +277,7 @@ export default function DiscoverEventsPage() {
 
     // Reset All filters
     const handleReset = () => {
-        setSelectedCategoryId("");
-        setSelectedCategoryName("All Events");
+        setSearchParams({}, { replace: true });
         setActiveFilter("categories");
         setKeyword("");
         setCity("");

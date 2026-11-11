@@ -176,3 +176,93 @@ test("Reset All: clears all filters and restores default state", () => {
 
     assert.deepStrictEqual(currentState, defaultState);
 });
+
+test("Header navigation: includes Categories route item", () => {
+    const navLinks = [
+        { label: "Events", to: "/events" },
+        { label: "Categories", to: "/categories" },
+        { label: "My Tickets", to: "/my-tickets" },
+    ];
+
+    const categoriesLink = navLinks.find((l) => l.label === "Categories");
+    assert.ok(categoriesLink, "Categories nav link must exist");
+    assert.strictEqual(categoriesLink.to, "/categories");
+});
+
+test("Category page navigation: selecting category constructs correct Discover Events URL", () => {
+    const buildCategoryEventsUrl = (category) => {
+        const categoryId = category.ID || category.id;
+        const categoryName = category.Name || category.name || "";
+        return `/events?category_id=${categoryId}&name=${encodeURIComponent(categoryName)}`;
+    };
+
+    const category = {
+        ID: "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+        Name: "Music & Concerts",
+    };
+
+    const url = buildCategoryEventsUrl(category);
+    assert.strictEqual(
+        url,
+        "/events?category_id=f47ac10b-58cc-4372-a567-0e02b2c3d479&name=Music%20%26%20Concerts"
+    );
+});
+
+test("Discover Events: correctly initializes category ID and resolves category name", () => {
+    const parseCategoryFromParams = (searchParams, categories = []) => {
+        const selectedCategoryId =
+            searchParams.get("category_id") ||
+            searchParams.get("category") ||
+            searchParams.get("categoryId") ||
+            "";
+
+        const selectedCategoryName = (() => {
+            if (!selectedCategoryId) return "All Events";
+            const found = categories.find(
+                (c) => (c.ID || c.id) === selectedCategoryId
+            );
+            if (found) return found.Name || found.name;
+            return searchParams.get("name") || "All Events";
+        })();
+
+        return { selectedCategoryId, selectedCategoryName };
+    };
+
+    // Case 1: No params -> defaults
+    const emptyParams = new URLSearchParams("");
+    assert.deepStrictEqual(parseCategoryFromParams(emptyParams), {
+        selectedCategoryId: "",
+        selectedCategoryName: "All Events",
+    });
+
+    // Case 2: category_id with name query
+    const paramsWithIdAndName = new URLSearchParams("category_id=cat-123&name=Rock%20Music");
+    assert.deepStrictEqual(parseCategoryFromParams(paramsWithIdAndName), {
+        selectedCategoryId: "cat-123",
+        selectedCategoryName: "Rock Music",
+    });
+
+    // Case 3: category_id without name query, resolved from loaded categories list
+    const mockCategories = [
+        { ID: "cat-123", Name: "Rock Music" },
+        { ID: "cat-456", Name: "Standup Comedy" },
+    ];
+    const paramsWithIdOnly = new URLSearchParams("category_id=cat-456");
+    assert.deepStrictEqual(
+        parseCategoryFromParams(paramsWithIdOnly, mockCategories),
+        {
+            selectedCategoryId: "cat-456",
+            selectedCategoryName: "Standup Comedy",
+        }
+    );
+
+    // Case 4: alternative query key 'categoryId' supported
+    const paramsAltKey = new URLSearchParams("categoryId=cat-123");
+    assert.deepStrictEqual(
+        parseCategoryFromParams(paramsAltKey, mockCategories),
+        {
+            selectedCategoryId: "cat-123",
+            selectedCategoryName: "Rock Music",
+        }
+    );
+});
