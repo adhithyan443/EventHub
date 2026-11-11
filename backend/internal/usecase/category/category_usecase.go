@@ -15,6 +15,9 @@ func NewCategoryUsecase(
 	categoryRepository domain.CategoryRepository,
 	logger *slog.Logger,
 ) *CategoryUsecase {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &CategoryUsecase{
 		categoryRepository: categoryRepository,
 		logger:             logger,

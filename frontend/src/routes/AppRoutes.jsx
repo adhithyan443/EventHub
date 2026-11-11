@@ -7,6 +7,7 @@ import OAuthCallbackPage from "../pages/auth/OAuthCallbackPage";
 import ForgotPasswordPage from "../pages/auth/ForgotPasswordPage";
 import ResetPasswordPage from "../pages/auth/ResetPasswordPage";
 import DiscoverEventsPage from "../pages/events/DiscoverEventsPage";
+import CategoriesPage from "../pages/events/CategoriesPage";
 import CustomerEventDetailsPage from "../pages/events/CustomerEventDetailsPage";
 import SeatSelectionPage from "../pages/events/SeatSelectionPage";
 import CheckoutPage from "../pages/events/CheckoutPage";
@@ -67,6 +68,7 @@ export default function AppRoutes() {
 
             {/* Preserved User Index / Events Discovery Routes */}
             <Route path="/events" element={<DiscoverEventsPage />} />
+            <Route path="/categories" element={<CategoriesPage />} />
             <Route path="/users" element={<DiscoverEventsPage />} />
             <Route path="/profile" element={<ProfilePage />} />
 

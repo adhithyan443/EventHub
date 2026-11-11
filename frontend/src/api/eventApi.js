@@ -1,4 +1,4 @@
-import apiClient from "./client";
+import apiClient from "./client.js";
 
 export const getPublicEvents = async ({
     page = 1,
@@ -7,13 +7,18 @@ export const getPublicEvents = async ({
     categoryId = "",
     city = "",
     date = "",
+    startDate = "",
+    endDate = "",
+    minPrice = "",
+    maxPrice = "",
+    sort = "",
 } = {}) => {
     const params = {
         page,
         limit,
     };
 
-    if (keyword.trim()) {
+    if (keyword && typeof keyword === "string" && keyword.trim()) {
         params.keyword = keyword.trim();
     }
 
@@ -21,7 +26,7 @@ export const getPublicEvents = async ({
         params.category_id = categoryId;
     }
 
-    if (city.trim()) {
+    if (city && typeof city === "string" && city.trim()) {
         params.city = city.trim();
     }
 
@@ -29,10 +34,35 @@ export const getPublicEvents = async ({
         params.date = date;
     }
 
+    if (startDate) {
+        params.start_date = startDate;
+    }
+
+    if (endDate) {
+        params.end_date = endDate;
+    }
+
+    if (minPrice !== "" && minPrice !== null && minPrice !== undefined) {
+        params.min_price = minPrice;
+    }
+
+    if (maxPrice !== "" && maxPrice !== null && maxPrice !== undefined) {
+        params.max_price = maxPrice;
+    }
+
+    if (sort) {
+        params.sort = sort;
+    }
+
     const response = await apiClient.get("/events", {
         params,
     });
 
+    return response.data;
+};
+
+export const getCategories = async () => {
+    const response = await apiClient.get("/categories");
     return response.data;
 };
 
