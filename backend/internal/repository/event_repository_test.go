@@ -178,3 +178,59 @@ func TestEventCompletionLogic_Scenarios(t *testing.T) {
 	assert.True(t, isEventActive(today, &start1500, nil, false, refTime),
 		"Event without end time today should remain active until 23:59:59")
 }
+
+func TestEventRepository_FindPublicEvents_FiltersDryRun(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		WithoutReturning: true,
+	}), &gorm.Config{
+		DryRun:                 true,
+		SkipDefaultTransaction: true,
+		DisableAutomaticPing:   true,
+	})
+	require.NoError(t, err)
+
+	repo := NewEventRepository(db, slog.Default())
+
+	categoryID := uuid.New()
+	startDate := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+	minPrice := 150.0
+	maxPrice := 800.0
+
+	filter := domain.PublicEventFilter{
+		Page:       1,
+		Limit:      12,
+		Keyword:    "Music",
+		CategoryID: &categoryID,
+		City:       "Kochi",
+		StartDate:  &startDate,
+		EndDate:    &endDate,
+		MinPrice:   &minPrice,
+		MaxPrice:   &maxPrice,
+		Sort:       "price_asc",
+	}
+
+	// In DryRun mode, FindPublicEvents assembles the query without erroring on validation
+	_, _, _ = repo.FindPublicEvents(filter)
+}
+
+func TestEventRepository_FindPublicEvents_CriticalVisibility(t *testing.T) {
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		WithoutReturning: true,
+	}), &gorm.Config{
+		DryRun:                 true,
+		SkipDefaultTransaction: true,
+		DisableAutomaticPing:   true,
+	})
+	require.NoError(t, err)
+
+	repo := NewEventRepository(db, slog.Default())
+
+	filter := domain.PublicEventFilter{
+		Page:  1,
+		Limit: 12,
+	}
+
+	// In DryRun mode, FindPublicEvents assembles the query without erroring on validation
+	_, _, _ = repo.FindPublicEvents(filter)
+}

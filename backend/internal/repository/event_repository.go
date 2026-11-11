@@ -463,17 +463,79 @@ func (r *EventRepository) FindPublicEvents(
 	}
 
 	if filter.City != "" {
+		cityPattern := "%" + strings.ToLower(filter.City) + "%"
 		baseQuery = baseQuery.Where(
-			"LOWER(COALESCE(v.city, '')) = ?",
+			`(LOWER(COALESCE(v.city, '')) = ? OR LOWER(COALESCE(v.city, '')) LIKE ? OR LOWER(COALESCE(v.name, '')) LIKE ?)`,
 			strings.ToLower(filter.City),
+			cityPattern,
+			cityPattern,
 		)
 	}
 
-	if filter.EventDate != nil {
+	if filter.StartDate != nil && filter.EndDate != nil {
+		baseQuery = baseQuery.Where(
+			"es.event_date >= ? AND es.event_date <= ?",
+			*filter.StartDate,
+			*filter.EndDate,
+		)
+	} else if filter.StartDate != nil {
+		baseQuery = baseQuery.Where(
+			"es.event_date >= ?",
+			*filter.StartDate,
+		)
+	} else if filter.EndDate != nil {
+		baseQuery = baseQuery.Where(
+			"es.event_date <= ?",
+			*filter.EndDate,
+		)
+	} else if filter.EventDate != nil {
 		baseQuery = baseQuery.Where(
 			"es.event_date = ?",
-			filter.EventDate,
+			*filter.EventDate,
 		)
+	}
+
+	if filter.MinPrice != nil || filter.MaxPrice != nil {
+		if filter.MinPrice != nil && filter.MaxPrice != nil {
+			baseQuery = baseQuery.Where(
+				`((eset.seat_layout_type = 'SEATED' AND EXISTS (
+					SELECT 1 FROM seat_sections ss
+					INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+					WHERE sl.event_id = e.id AND ss.price >= ? AND ss.price <= ?
+				)) OR (COALESCE(eset.seat_layout_type, '') != 'SEATED' AND EXISTS (
+					SELECT 1 FROM ticket_types tt
+					WHERE tt.event_id = e.id AND tt.price >= ? AND tt.price <= ?
+				)))`,
+				*filter.MinPrice, *filter.MaxPrice,
+				*filter.MinPrice, *filter.MaxPrice,
+			)
+		} else if filter.MinPrice != nil {
+			baseQuery = baseQuery.Where(
+				`((eset.seat_layout_type = 'SEATED' AND EXISTS (
+					SELECT 1 FROM seat_sections ss
+					INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+					WHERE sl.event_id = e.id AND ss.price >= ?
+				)) OR (COALESCE(eset.seat_layout_type, '') != 'SEATED' AND EXISTS (
+					SELECT 1 FROM ticket_types tt
+					WHERE tt.event_id = e.id AND tt.price >= ?
+				)))`,
+				*filter.MinPrice,
+				*filter.MinPrice,
+			)
+		} else if filter.MaxPrice != nil {
+			baseQuery = baseQuery.Where(
+				`((eset.seat_layout_type = 'SEATED' AND EXISTS (
+					SELECT 1 FROM seat_sections ss
+					INNER JOIN seat_layouts sl ON sl.id = ss.seat_layout_id
+					WHERE sl.event_id = e.id AND ss.price <= ?
+				)) OR (COALESCE(eset.seat_layout_type, '') != 'SEATED' AND EXISTS (
+					SELECT 1 FROM ticket_types tt
+					WHERE tt.event_id = e.id AND tt.price <= ?
+				)))`,
+				*filter.MaxPrice,
+				*filter.MaxPrice,
+			)
+		}
 	}
 
 	if err := baseQuery.Count(&total).Error; err != nil {
@@ -528,12 +590,24 @@ func (r *EventRepository) FindPublicEvents(
 
 			e.created_at,
 			e.updated_at
-		`).
-		Order("es.event_date ASC").
-		Order("es.start_time ASC").
-		Order("e.created_at DESC").
-		Offset(offset).
-		Limit(filter.Limit)
+		`)
+
+	switch strings.ToLower(strings.TrimSpace(filter.Sort)) {
+	case "price_asc":
+		query = query.Order("starting_price ASC").Order("es.event_date ASC")
+	case "price_desc":
+		query = query.Order("starting_price DESC").Order("es.event_date ASC")
+	case "date_desc":
+		query = query.Order("es.event_date DESC").Order("es.start_time DESC").Order("e.created_at DESC")
+	case "newest":
+		query = query.Order("e.created_at DESC")
+	case "date_asc":
+		fallthrough
+	default:
+		query = query.Order("es.event_date ASC").Order("es.start_time ASC").Order("e.created_at DESC")
+	}
+
+	query = query.Offset(offset).Limit(filter.Limit)
 
 	if err := query.Scan(&events).Error; err != nil {
 		r.logger.Error(

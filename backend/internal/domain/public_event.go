@@ -38,6 +38,11 @@ type PublicEventFilter struct {
 	CategoryID *uuid.UUID
 	City       string
 	EventDate  *time.Time
+	StartDate  *time.Time
+	EndDate    *time.Time
+	MinPrice   *float64
+	MaxPrice   *float64
+	Sort       string
 }
 
 type PublicEventDetails struct {

@@ -3201,6 +3201,7 @@ func (u *EventUsecase) DiscoverEvents(
 
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
 	filter.City = strings.TrimSpace(filter.City)
+	filter.Sort = strings.TrimSpace(filter.Sort)
 
 	var (
 		events []*domain.PublicEvent

@@ -1517,11 +1517,17 @@ func (h *EventHandler) ListPublicEvents(c *gin.Context) {
 		limit = parsed
 	}
 
+	city := strings.TrimSpace(c.Query("city"))
+	if city == "" {
+		city = strings.TrimSpace(c.Query("location"))
+	}
+
 	filter := domain.PublicEventFilter{
 		Page:    page,
 		Limit:   limit,
 		Keyword: strings.TrimSpace(c.Query("keyword")),
-		City:    strings.TrimSpace(c.Query("city")),
+		City:    city,
+		Sort:    strings.TrimSpace(c.Query("sort")),
 	}
 
 	if value := strings.TrimSpace(c.Query("category_id")); value != "" {
@@ -1542,6 +1548,106 @@ func (h *EventHandler) ListPublicEvents(c *gin.Context) {
 		filter.CategoryID = &categoryID
 	}
 
+	if value := strings.TrimSpace(c.Query("min_price")); value != "" {
+		minPrice, err := strconv.ParseFloat(value, 64)
+		if err != nil || minPrice < 0 {
+			h.logger.Warn(
+				"public_event_invalid_min_price",
+				"min_price", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid min_price",
+			})
+			return
+		}
+
+		filter.MinPrice = &minPrice
+	}
+
+	if value := strings.TrimSpace(c.Query("max_price")); value != "" {
+		maxPrice, err := strconv.ParseFloat(value, 64)
+		if err != nil || maxPrice < 0 {
+			h.logger.Warn(
+				"public_event_invalid_max_price",
+				"max_price", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid max_price",
+			})
+			return
+		}
+
+		filter.MaxPrice = &maxPrice
+	}
+
+	if filter.MinPrice != nil && filter.MaxPrice != nil && *filter.MinPrice > *filter.MaxPrice {
+		h.logger.Warn(
+			"public_event_min_price_exceeds_max_price",
+			"min_price", *filter.MinPrice,
+			"max_price", *filter.MaxPrice,
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "min_price cannot be greater than max_price",
+		})
+		return
+	}
+
+	if value := strings.TrimSpace(c.Query("start_date")); value != "" {
+		startDate, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			h.logger.Warn(
+				"public_event_invalid_start_date",
+				"start_date", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid start_date",
+			})
+			return
+		}
+
+		filter.StartDate = &startDate
+	}
+
+	if value := strings.TrimSpace(c.Query("end_date")); value != "" {
+		endDate, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			h.logger.Warn(
+				"public_event_invalid_end_date",
+				"end_date", value,
+			)
+
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "invalid end_date",
+			})
+			return
+		}
+
+		filter.EndDate = &endDate
+	}
+
+	if filter.StartDate != nil && filter.EndDate != nil && filter.StartDate.After(*filter.EndDate) {
+		h.logger.Warn(
+			"public_event_start_date_after_end_date",
+			"start_date", filter.StartDate,
+			"end_date", filter.EndDate,
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "start_date cannot be after end_date",
+		})
+		return
+	}
+
 	if value := strings.TrimSpace(c.Query("date")); value != "" {
 		eventDate, err := time.Parse("2006-01-02", value)
 		if err != nil {
@@ -1558,6 +1664,10 @@ func (h *EventHandler) ListPublicEvents(c *gin.Context) {
 		}
 
 		filter.EventDate = &eventDate
+		if filter.StartDate == nil && filter.EndDate == nil {
+			filter.StartDate = &eventDate
+			filter.EndDate = &eventDate
+		}
 	}
 
 	output, err := h.eventUsecase.DiscoverEvents(
