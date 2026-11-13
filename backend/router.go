@@ -30,6 +30,7 @@ func setupRouter(
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	adminEventHandler *handler.AdminEventHandler,
+	profileHandler *handler.ProfileHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) *gin.Engine {
@@ -96,6 +97,7 @@ func setupRouter(
 	registerBookingRoutes(router, bookingHandler, jwtService, userRepo)
 	registerPaymentRoutes(router, paymentHandler, jwtService, userRepo)
 	registerTicketRoutes(router, ticketHandler, jwtService, userRepo)
+	registerProfileRoutes(router, profileHandler, jwtService, userRepo)
 
 	return router
 }
@@ -479,4 +481,25 @@ func registerBookingRoutes(
 	bookings.GET("/:id/download", bookingHandler.DownloadBookingPDF)
 	bookings.GET("/:id/invoice", bookingHandler.GetBookingInvoice)
 	bookings.GET("/:id/invoice/download", bookingHandler.DownloadBookingInvoicePDF)
+}
+
+func registerProfileRoutes(
+	router *gin.Engine,
+	profileHandler *handler.ProfileHandler,
+	jwtService *token.JWTService,
+	userRepo domain.UserRepository,
+) {
+	profile := router.Group("/api/v1/profile")
+	profile.Use(
+		middleware.Auth(jwtService),
+		middleware.RequireActiveUser(userRepo),
+	)
+
+	profile.GET("", profileHandler.GetProfile)
+	profile.PUT("", profileHandler.UpdateProfile)
+	profile.POST("/email/request-change", profileHandler.RequestEmailChange)
+	profile.POST("/email/resend-otp", profileHandler.ResendEmailChangeOTP)
+	profile.POST("/email/verify-change", profileHandler.VerifyEmailChange)
+	profile.POST("/avatar", profileHandler.UploadAvatar)
+	profile.DELETE("/avatar", profileHandler.RemoveAvatar)
 }

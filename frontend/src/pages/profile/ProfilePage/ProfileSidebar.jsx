@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { UserIcon, TicketIcon, HeartIcon, SettingsIcon } from "../../../components/layout/icons";
 import useAuthStore from "../../../store/authStore";
@@ -11,31 +12,46 @@ const navItems = [
 ];
 
 export default function ProfileSidebar({ user }) {
-    const avatarUrl = user?.avatar || "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80";
+    const [imgError, setImgError] = useState(false);
     const navigate = useNavigate();
 
     const authUser = useAuthStore((state) => state.user);
     const applicationStatus = useOrganizerStore((state) => state.applicationStatus);
     const isOrganizer = user?.role === "ORGANIZER" || authUser?.role === "ORGANIZER" || applicationStatus === "APPROVED";
 
+    const displayName = authUser?.fullName || authUser?.full_name || user?.fullName || "User";
+    const avatarUrl = authUser?.profileImage || authUser?.ProfileImage || user?.avatar || "";
+    const initial = displayName.charAt(0).toUpperCase() || "U";
+
+    const memberDate = user?.memberSince || authUser?.createdAt;
+    const formattedDate = memberDate
+        ? new Date(memberDate).toLocaleDateString("en-GB", {
+            day: "2-digit",
+            month: "short",
+            year: "numeric",
+        })
+        : "Recently";
+
     return (
         <aside className="w-full lg:w-64 shrink-0 bg-[#f0f4fa] border border-slate-200/70 rounded-2xl p-4 sm:p-5 flex flex-col justify-between self-stretch gap-6">
             <div className="flex flex-col gap-4 sm:gap-6">
                 <div className="flex items-center gap-3">
-                    <img
-                        src={avatarUrl}
-                        alt={user.fullName}
-                        className="h-11 w-11 rounded-full object-cover shrink-0 border border-slate-200"
-                    />
+                    <div className="h-11 w-11 rounded-full overflow-hidden shrink-0 border border-slate-200 bg-white flex items-center justify-center font-bold text-slate-700 shadow-2xs">
+                        {avatarUrl && !imgError ? (
+                            <img
+                                src={avatarUrl}
+                                alt={displayName}
+                                onError={() => setImgError(true)}
+                                className="h-full w-full object-cover"
+                            />
+                        ) : (
+                            <span>{initial}</span>
+                        )}
+                    </div>
                     <div className="min-w-0">
-                        <p className="font-bold text-slate-900 text-sm truncate">{user.fullName}</p>
+                        <p className="font-bold text-slate-900 text-sm truncate">{displayName}</p>
                         <p className="text-xs text-slate-500">
-                            Member since{" "}
-                            {new Date(user.memberSince).toLocaleDateString("en-GB", {
-                                day: "2-digit",
-                                month: "short",
-                                year: "numeric",
-                            })}
+                            Member since {formattedDate}
                         </p>
                     </div>
                 </div>

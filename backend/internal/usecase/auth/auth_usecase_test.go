@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +21,8 @@ import (
 
 type mockUserRepoForAuth struct {
 	domain.UserRepository
-	users map[uuid.UUID]*domain.User
+	users     map[uuid.UUID]*domain.User
+	createErr error
 }
 
 func (m *mockUserRepoForAuth) FindByID(id uuid.UUID) (*domain.User, error) {
@@ -28,6 +30,28 @@ func (m *mockUserRepoForAuth) FindByID(id uuid.UUID) (*domain.User, error) {
 		return u, nil
 	}
 	return nil, domain.ErrUserNotFound
+}
+
+func (m *mockUserRepoForAuth) FindByEmail(email string) (*domain.User, error) {
+	norm := strings.ToLower(strings.TrimSpace(email))
+	for _, u := range m.users {
+		if strings.ToLower(u.Email) == norm {
+			c := *u
+			return &c, nil
+		}
+	}
+	return nil, domain.ErrUserNotFound
+}
+
+func (m *mockUserRepoForAuth) Create(u *domain.User) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
+	if m.users == nil {
+		m.users = make(map[uuid.UUID]*domain.User)
+	}
+	m.users[u.ID] = u
+	return nil
 }
 
 type mockRefreshTokenRepoForAuth struct {
@@ -288,4 +312,402 @@ func TestRefreshToken_UserInactive(t *testing.T) {
 		assert.Equal(t, "UNAUTHORIZED", appErr.Code)
 	}
 	assert.Equal(t, "user account is not active", err.Error())
+}
+
+// --- VerifyOTP Tests with Advisory Lock & Email Reservation Integrity ---
+
+type mockPendingRegRepoForAuth struct {
+	domain.PendingRegistrationRepository
+	registrations map[string]*domain.PendingRegistration
+	updateErr     error
+	deleteErr     error
+}
+
+func (m *mockPendingRegRepoForAuth) FindByEmail(email string) (*domain.PendingRegistration, error) {
+	norm := strings.ToLower(strings.TrimSpace(email))
+	if reg, ok := m.registrations[norm]; ok {
+		c := *reg
+		return &c, nil
+	}
+	return nil, domain.ErrPendingRegistrationNotFound
+}
+
+func (m *mockPendingRegRepoForAuth) Update(reg *domain.PendingRegistration) error {
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	norm := strings.ToLower(strings.TrimSpace(reg.Email))
+	c := *reg
+	m.registrations[norm] = &c
+	return nil
+}
+
+func (m *mockPendingRegRepoForAuth) Delete(id uuid.UUID) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	for email, reg := range m.registrations {
+		if reg.ID == id {
+			delete(m.registrations, email)
+			break
+		}
+	}
+	return nil
+}
+
+type mockEmailChangeRepoForAuth struct {
+	domain.EmailChangeRequestRepository
+	requests   map[string]*domain.EmailChangeRequest
+	deletedIDs []uuid.UUID
+	deleteErr  error
+	findErr    error
+}
+
+func (m *mockEmailChangeRepoForAuth) FindByNewEmail(email string) (*domain.EmailChangeRequest, error) {
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	norm := strings.ToLower(strings.TrimSpace(email))
+	if req, ok := m.requests[norm]; ok {
+		c := *req
+		return &c, nil
+	}
+	return nil, domain.ErrEmailChangeRequestNotFound
+}
+
+func (m *mockEmailChangeRepoForAuth) DeleteByID(id uuid.UUID) error {
+	if m.deleteErr != nil {
+		return m.deleteErr
+	}
+	m.deletedIDs = append(m.deletedIDs, id)
+	for email, req := range m.requests {
+		if req.ID == id {
+			delete(m.requests, email)
+			break
+		}
+	}
+	return nil
+}
+
+type mockTxReposForAuth struct {
+	domain.TransactionRepositories
+	userRepo        domain.UserRepository
+	pendingRegRepo  domain.PendingRegistrationRepository
+	emailChangeRepo domain.EmailChangeRequestRepository
+	lockErr         error
+	lockedEmails    []string
+}
+
+func (r *mockTxReposForAuth) UserRepository() domain.UserRepository {
+	return r.userRepo
+}
+
+func (r *mockTxReposForAuth) PendingRegistrationRepository() domain.PendingRegistrationRepository {
+	return r.pendingRegRepo
+}
+
+func (r *mockTxReposForAuth) EmailChangeRequestRepository() domain.EmailChangeRequestRepository {
+	return r.emailChangeRepo
+}
+
+func (r *mockTxReposForAuth) AcquireEmailAdvisoryLock(email string) error {
+	if r.lockErr != nil {
+		return r.lockErr
+	}
+	r.lockedEmails = append(r.lockedEmails, email)
+	return nil
+}
+
+type mockTxManagerForAuth struct {
+	repos *mockTxReposForAuth
+}
+
+func (m *mockTxManagerForAuth) WithinTransaction(fn func(tx domain.TransactionRepositories) error) error {
+	return fn(m.repos)
+}
+
+func setupVerifyOTPTest() (
+	*auth.AuthUsecase,
+	*mockUserRepoForAuth,
+	*mockPendingRegRepoForAuth,
+	*mockEmailChangeRepoForAuth,
+	*mockTxReposForAuth,
+) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	userRepo := &mockUserRepoForAuth{users: make(map[uuid.UUID]*domain.User)}
+	pendingRepo := &mockPendingRegRepoForAuth{registrations: make(map[string]*domain.PendingRegistration)}
+	emailChangeRepo := &mockEmailChangeRepoForAuth{requests: make(map[string]*domain.EmailChangeRequest)}
+
+	txRepos := &mockTxReposForAuth{
+		userRepo:        userRepo,
+		pendingRegRepo:  pendingRepo,
+		emailChangeRepo: emailChangeRepo,
+	}
+	txManager := &mockTxManagerForAuth{repos: txRepos}
+
+	uc := auth.NewAuthUsecase(
+		userRepo,
+		pendingRepo,
+		nil,
+		nil,
+		nil,
+		txManager,
+		nil,
+		nil,
+		logger,
+	)
+
+	return uc, userRepo, pendingRepo, emailChangeRepo, txRepos
+}
+
+func hashAuthOTPForTest(otp string) string {
+	h := sha256.Sum256([]byte(otp))
+	return hex.EncodeToString(h[:])
+}
+
+func TestVerifyOTP_Success(t *testing.T) {
+	uc, userRepo, pendingRepo, _, txRepos := setupVerifyOTPTest()
+
+	regID := uuid.New()
+	email := "newuser@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           regID,
+		FullName:     "New User",
+		Email:        email,
+		Phone:        "+919876543210",
+		PasswordHash: "hashed-pw",
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+		OTPAttempts:  0,
+	}
+
+	createdUser, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, createdUser)
+	assert.Equal(t, "New User", createdUser.FullName)
+	assert.Equal(t, email, createdUser.Email)
+	assert.Equal(t, "CUSTOMER", createdUser.Role)
+	assert.Equal(t, "ACTIVE", createdUser.Status)
+
+	// Verify advisory lock was acquired
+	assert.Contains(t, txRepos.lockedEmails, email)
+
+	// Verify user persisted
+	persisted, err := userRepo.FindByID(createdUser.ID)
+	require.NoError(t, err)
+	assert.Equal(t, email, persisted.Email)
+
+	// Verify pending registration deleted
+	_, findErr := pendingRepo.FindByEmail(email)
+	assert.Equal(t, domain.ErrPendingRegistrationNotFound, findErr)
+}
+
+func TestVerifyOTP_ConcurrentEmailClaiming_UserAlreadyExists(t *testing.T) {
+	uc, userRepo, pendingRepo, _, _ := setupVerifyOTPTest()
+
+	regID := uuid.New()
+	email := "concurrent@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           regID,
+		FullName:     "Pending User",
+		Email:        email,
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+
+	// Concurrent flow already created user with this email
+	existingID := uuid.New()
+	userRepo.users[existingID] = &domain.User{
+		ID:       existingID,
+		FullName: "Existing User",
+		Email:    email,
+		Status:   "ACTIVE",
+	}
+
+	_, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.Error(t, err)
+	var appErr *appErrors.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, "CONFLICT", appErr.Code)
+	assert.Equal(t, "email already exists", appErr.Message)
+
+	// Pending registration must NOT be deleted
+	p, findErr := pendingRepo.FindByEmail(email)
+	require.NoError(t, findErr)
+	assert.Equal(t, regID, p.ID)
+}
+
+func TestVerifyOTP_ActiveEmailChangeReservation_Conflict(t *testing.T) {
+	uc, userRepo, pendingRepo, emailChangeRepo, _ := setupVerifyOTPTest()
+
+	regID := uuid.New()
+	email := "reserved@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           regID,
+		FullName:     "Pending User",
+		Email:        email,
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+
+	// Another user has an active, unexpired email change reservation
+	changeReqID := uuid.New()
+	emailChangeRepo.requests[email] = &domain.EmailChangeRequest{
+		ID:           changeReqID,
+		UserID:       uuid.New(),
+		NewEmail:     email,
+		OTPExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+
+	_, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.Error(t, err)
+	var appErr *appErrors.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, "CONFLICT", appErr.Code)
+	assert.Equal(t, "email is reserved by another pending request", appErr.Message)
+
+	// Pending registration preserved, user not created, change request not deleted
+	assert.Len(t, userRepo.users, 0)
+	assert.NotContains(t, emailChangeRepo.deletedIDs, changeReqID)
+	_, findErr := pendingRepo.FindByEmail(email)
+	require.NoError(t, findErr)
+}
+
+func TestVerifyOTP_ExpiredEmailChangeReservation_CleanedUp(t *testing.T) {
+	uc, userRepo, pendingRepo, emailChangeRepo, txRepos := setupVerifyOTPTest()
+
+	regID := uuid.New()
+	email := "expiredreservation@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           regID,
+		FullName:     "New User",
+		Email:        email,
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+
+	// Reservation has expired
+	changeReqID := uuid.New()
+	emailChangeRepo.requests[email] = &domain.EmailChangeRequest{
+		ID:           changeReqID,
+		UserID:       uuid.New(),
+		NewEmail:     email,
+		OTPExpiresAt: time.Now().Add(-5 * time.Minute),
+	}
+
+	createdUser, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, createdUser)
+
+	// Expired reservation was cleaned up
+	assert.Contains(t, emailChangeRepo.deletedIDs, changeReqID)
+
+	// User created and lock acquired
+	assert.Contains(t, txRepos.lockedEmails, email)
+	assert.Equal(t, 1, len(userRepo.users))
+}
+
+func TestVerifyOTP_RepositoryFailure_CreateUserError(t *testing.T) {
+	uc, userRepo, pendingRepo, _, _ := setupVerifyOTPTest()
+
+	email := "failcreate@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           uuid.New(),
+		Email:        email,
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+
+	userRepo.createErr = errors.New("db write timeout")
+
+	_, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "db write timeout", err.Error())
+
+	// Pending registration must NOT be deleted if user create failed
+	_, findErr := pendingRepo.FindByEmail(email)
+	require.NoError(t, findErr)
+}
+
+func TestVerifyOTP_AdvisoryLockFailure_Propagated(t *testing.T) {
+	uc, _, pendingRepo, _, txRepos := setupVerifyOTPTest()
+
+	email := "lockfail@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           uuid.New(),
+		Email:        email,
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+
+	txRepos.lockErr = errors.New("postgres advisory lock deadlock")
+
+	_, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "postgres advisory lock deadlock", err.Error())
+}
+
+func TestVerifyOTP_ExpiredReservation_DeleteError_Propagated(t *testing.T) {
+	uc, _, pendingRepo, emailChangeRepo, _ := setupVerifyOTPTest()
+
+	email := "deletefail@example.com"
+	rawOTP := "123456"
+
+	pendingRepo.registrations[email] = &domain.PendingRegistration{
+		ID:           uuid.New(),
+		Email:        email,
+		OTPHash:      hashAuthOTPForTest(rawOTP),
+		OTPExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+
+	emailChangeRepo.requests[email] = &domain.EmailChangeRequest{
+		ID:           uuid.New(),
+		NewEmail:     email,
+		OTPExpiresAt: time.Now().Add(-5 * time.Minute),
+	}
+	emailChangeRepo.deleteErr = errors.New("failed to delete expired reservation")
+
+	_, err := uc.VerifyOTP(auth.VerifyOTPInput{
+		Email: email,
+		OTP:   rawOTP,
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, "failed to delete expired reservation", err.Error())
 }

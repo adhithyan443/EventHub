@@ -1,7 +1,9 @@
 import { useState } from "react";
 import useOrganizerStore from "../../store/organizerStore";
+import UnifiedProfileCard from "../../components/profile/UnifiedProfileCard";
 
 export default function OrganizerProfilePage() {
+  const [activeTab, setActiveTab] = useState("organization");
   const [logoError, setLogoError] = useState(false);
 
   const profile = useOrganizerStore((state) => state.profile);
@@ -47,6 +49,41 @@ export default function OrganizerProfilePage() {
         </p>
       </div>
 
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-[#bcc9c6]/40">
+        <button
+          type="button"
+          onClick={() => setActiveTab("organization")}
+          className={`px-4 py-2.5 text-sm font-semibold rounded-t-xl transition-all cursor-pointer ${
+            activeTab === "organization"
+              ? "border-b-2 border-[#00685f] text-[#00685f] bg-white shadow-2xs"
+              : "text-[#565e74] hover:text-[#141b2b]"
+          }`}
+        >
+          Organization Profile
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("personal")}
+          className={`px-4 py-2.5 text-sm font-semibold rounded-t-xl transition-all cursor-pointer ${
+            activeTab === "personal"
+              ? "border-b-2 border-[#00685f] text-[#00685f] bg-white shadow-2xs"
+              : "text-[#565e74] hover:text-[#141b2b]"
+          }`}
+        >
+          Personal Account Profile
+        </button>
+      </div>
+
+      {activeTab === "personal" ? (
+        <div className="max-w-4xl">
+          <UnifiedProfileCard
+            title="Organizer Personal Account"
+            subtitle="Manage your personal full name, phone number, login email, and avatar."
+          />
+        </div>
+      ) : (
+        <>
       {/* Profile Header Card */}
       <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-5">
         <div className="flex items-center gap-4 sm:gap-5 min-w-0">
@@ -412,6 +449,8 @@ export default function OrganizerProfilePage() {
           </div>
         </div>
       </section>
+        </>
+      )}
     </div>
   );
 }

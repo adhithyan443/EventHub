@@ -29,6 +29,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
+	profileUC "github.com/adhithyan443/EventHub/backend/internal/usecase/profile"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
@@ -125,6 +126,7 @@ func main() {
 	refreshTokenRepo := repository.NewRefreshTokenRepository(db)
 	pendingRegistrationRepo := repository.NewPendingRegistrationRepository(db)
 	passwordResetTokenRepo := repository.NewPasswordResetTokenRepository(db)
+	emailChangeRepo := repository.NewEmailChangeRequestRepository(db)
 
 	txManager := repository.NewTransactionManager(db, logger)
 
@@ -265,6 +267,23 @@ func main() {
 		authUsecase,
 		cfg.FrontendURL,
 	)
+	authHandler.SetStorageService(s3Service)
+
+	// Profile dependencies.
+	profileUsecase := profileUC.NewProfileUsecase(
+		userRepo,
+		emailChangeRepo,
+		pendingRegistrationRepo,
+		txManager,
+		emailService,
+		s3Service,
+		cfg.JWTSecret,
+		logger,
+	)
+	profileHandler := handler.NewProfileHandler(
+		profileUsecase,
+		logger,
+	)
 
 	// Organizer repositories.
 	organizerApplicationRepo := repository.NewOrganizerApplicationRepository(
@@ -354,6 +373,7 @@ func main() {
 		adminUserHandler,
 		adminOrganizerHandler,
 		adminEventHandler,
+		profileHandler,
 		jwtService,
 		userRepo,
 	)
