@@ -302,6 +302,7 @@ func main() {
 		organizerProfileRepo,
 		organizerAddressRepo,
 		organizerBankAccountRepo,
+		s3Service,
 		logger,
 	)
 
@@ -349,7 +350,7 @@ func main() {
 	adminUserUsecase := userUC.NewAdminUserUsecase(userRepo, refreshTokenRepo, txManager, logger)
 	adminUserHandler := handler.NewAdminUserHandler(adminUserUsecase, logger)
 
-	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(organizerRepo, logger)
+	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(organizerRepo, s3Service, logger)
 	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
 
 	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)

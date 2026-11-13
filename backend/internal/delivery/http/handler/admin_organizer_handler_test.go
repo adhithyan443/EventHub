@@ -43,7 +43,7 @@ func setupAdminOrganizerTestRouter(repo domain.OrganizerRepository, jwtService *
 		middleware.ErrorHandler(logger),
 	)
 
-	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(repo, logger)
+	adminOrganizerUsecase := organizer.NewAdminOrganizerUsecase(repo, nil, logger)
 	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
 
 	api := router.Group("/api/v1")

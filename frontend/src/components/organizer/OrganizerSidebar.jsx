@@ -156,6 +156,10 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
                   src={profile?.logo_url || imgUserAvatar}
                   alt="EventHub Portal"
                   className="size-full object-cover"
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = imgUserAvatar;
+                  }}
                 />
               </div>
               <div className="flex flex-col">
@@ -223,6 +227,10 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
                 src={profile?.logo_url || imgUserAvatar}
                 alt="Organizer"
                 className="size-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = imgUserAvatar;
+                }}
               />
             </div>
             <div className="flex flex-col min-w-0">

@@ -53,7 +53,7 @@ func (h *AdminOrganizerHandler) ListOrganizers(ctx *gin.Context) {
 	search := ctx.Query("search")
 	status := ctx.Query("status")
 
-	result, err := h.adminOrganizerUsecase.ListOrganizers(page, limit, search, status)
+	result, err := h.adminOrganizerUsecase.ListOrganizers(ctx.Request.Context(), page, limit, search, status)
 	if err != nil {
 		ctx.Error(appErrors.NewValidationError(err.Error()))
 		return

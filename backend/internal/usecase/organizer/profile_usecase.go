@@ -1,9 +1,11 @@
 package organizer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
@@ -15,6 +17,7 @@ type ProfileUsecase struct {
 	profileRepository     domain.OrganizerProfileRepository
 	addressRepository     domain.OrganizerAddressRepository
 	bankAccountRepository domain.OrganizerBankAccountRepository
+	storageService        StoragePresigner
 	logger                *slog.Logger
 }
 
@@ -23,18 +26,24 @@ func NewProfileUsecase(
 	profileRepository domain.OrganizerProfileRepository,
 	addressRepository domain.OrganizerAddressRepository,
 	bankAccountRepository domain.OrganizerBankAccountRepository,
+	storageService StoragePresigner,
 	logger *slog.Logger,
 ) *ProfileUsecase {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &ProfileUsecase{
 		organizerRepository:   organizerRepository,
 		profileRepository:     profileRepository,
 		addressRepository:     addressRepository,
 		bankAccountRepository: bankAccountRepository,
+		storageService:        storageService,
 		logger:                logger,
 	}
 }
 
 func (u *ProfileUsecase) GetProfile(
+	ctx context.Context,
 	userID uuid.UUID,
 ) (*OrganizerProfileResponse, error) {
 	organizer, err := u.organizerRepository.FindByUserID(userID)
@@ -128,11 +137,14 @@ func (u *ProfileUsecase) GetProfile(
 		return nil, fmt.Errorf("failed to retrieve organizer bank account")
 	}
 
+	logoURL := u.resolveLogoURL(ctx, profile.LogoURL, organizer.ID, userID)
+
 	response := toOrganizerProfileResponse(
 		organizer,
 		profile,
 		address,
 		bankAccount,
+		logoURL,
 	)
 
 	u.logger.Info(
@@ -142,4 +154,37 @@ func (u *ProfileUsecase) GetProfile(
 	)
 
 	return &response, nil
+}
+
+func (u *ProfileUsecase) resolveLogoURL(
+	ctx context.Context,
+	rawLogo string,
+	organizerID uuid.UUID,
+	userID uuid.UUID,
+) string {
+	cleanLogo := strings.TrimSpace(rawLogo)
+	if cleanLogo == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(cleanLogo, "http://") || strings.HasPrefix(cleanLogo, "https://") {
+		return cleanLogo
+	}
+
+	if u.storageService == nil {
+		return ""
+	}
+
+	presigned, err := u.storageService.GetPresignedURL(ctx, cleanLogo)
+	if err != nil {
+		u.logger.Warn(
+			"organizer_profile_logo_presign_failed",
+			"user_id", userID,
+			"organizer_id", organizerID,
+			"error", err,
+		)
+		return ""
+	}
+
+	return presigned
 }

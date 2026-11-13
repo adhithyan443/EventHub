@@ -1,6 +1,7 @@
 package organizer_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -30,7 +31,7 @@ func (m *mockOrganizerRepoForAdmin) List(filter domain.AdminOrganizerListFilter)
 func TestAdminOrganizerUsecase_ListOrganizers(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	t.Run("successful list returns mapped response", func(t *testing.T) {
+	t.Run("successful list returns mapped response with preserved external logo", func(t *testing.T) {
 		orgID := uuid.New()
 		userID := uuid.New()
 		now := time.Now()
@@ -63,8 +64,8 @@ func TestAdminOrganizerUsecase_ListOrganizers(t *testing.T) {
 			},
 		}
 
-		uc := organizer.NewAdminOrganizerUsecase(repo, logger)
-		resp, err := uc.ListOrganizers(1, 10, "", "")
+		uc := organizer.NewAdminOrganizerUsecase(repo, nil, logger)
+		resp, err := uc.ListOrganizers(context.Background(), 1, 10, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, resp)
@@ -78,28 +79,130 @@ func TestAdminOrganizerUsecase_ListOrganizers(t *testing.T) {
 		assert.Equal(t, "Bob Jones", resp.Organizers[0].UserName)
 		assert.Equal(t, "bob@techevents.in", resp.Organizers[0].UserEmail)
 		assert.Equal(t, "ACTIVE", resp.Organizers[0].Status)
+		assert.Equal(t, "https://example.com/logo.png", resp.Organizers[0].LogoURL)
+	})
+
+	t.Run("resolves private S3 logo key to presigned URL", func(t *testing.T) {
+		orgID := uuid.New()
+		s3Key := "organizer-applications/abc/logo.png"
+		expectedPresigned := "https://s3.example.com/organizer-applications/abc/logo.png?presigned=true"
+
+		repo := &mockOrganizerRepoForAdmin{
+			listResult: &domain.AdminOrganizerList{
+				Organizers: []*domain.AdminOrganizerItem{
+					{
+						ID:           orgID,
+						BusinessName: "S3 Org",
+						LogoURL:      s3Key,
+						Status:       "ACTIVE",
+					},
+				},
+				Total: 1,
+				Page:  1,
+				Limit: 10,
+			},
+		}
+
+		storage := &mockStoragePresigner{
+			presignedURL: expectedPresigned,
+		}
+
+		uc := organizer.NewAdminOrganizerUsecase(repo, storage, logger)
+		resp, err := uc.ListOrganizers(context.Background(), 1, 10, "", "")
+
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Len(t, resp.Organizers, 1)
+		assert.Equal(t, expectedPresigned, resp.Organizers[0].LogoURL)
+		assert.Equal(t, s3Key, storage.calledWithKey)
+	})
+
+	t.Run("presigning error falls back to empty logo without failing list response", func(t *testing.T) {
+		orgID := uuid.New()
+		s3Key := "organizer-applications/broken/logo.png"
+
+		repo := &mockOrganizerRepoForAdmin{
+			listResult: &domain.AdminOrganizerList{
+				Organizers: []*domain.AdminOrganizerItem{
+					{
+						ID:           orgID,
+						BusinessName: "Broken Logo Org",
+						LogoURL:      s3Key,
+						Status:       "ACTIVE",
+					},
+				},
+				Total: 1,
+				Page:  1,
+				Limit: 10,
+			},
+		}
+
+		storage := &mockStoragePresigner{
+			err: errors.New("s3 connection failed"),
+		}
+
+		uc := organizer.NewAdminOrganizerUsecase(repo, storage, logger)
+		resp, err := uc.ListOrganizers(context.Background(), 1, 10, "", "")
+
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Len(t, resp.Organizers, 1)
+		assert.Equal(t, "", resp.Organizers[0].LogoURL)
+	})
+
+	t.Run("empty logo key remains empty and does not call storage", func(t *testing.T) {
+		orgID := uuid.New()
+
+		repo := &mockOrganizerRepoForAdmin{
+			listResult: &domain.AdminOrganizerList{
+				Organizers: []*domain.AdminOrganizerItem{
+					{
+						ID:           orgID,
+						BusinessName: "No Logo Org",
+						LogoURL:      "",
+						Status:       "ACTIVE",
+					},
+				},
+				Total: 1,
+				Page:  1,
+				Limit: 10,
+			},
+		}
+
+		storage := &mockStoragePresigner{
+			presignedURL: "https://unexpected.url",
+		}
+
+		uc := organizer.NewAdminOrganizerUsecase(repo, storage, logger)
+		resp, err := uc.ListOrganizers(context.Background(), 1, 10, "", "")
+
+		require.NoError(t, err)
+		require.NotNil(t, resp)
+		require.Len(t, resp.Organizers, 1)
+		assert.Equal(t, "", resp.Organizers[0].LogoURL)
+		assert.Equal(t, 0, storage.callCount)
 	})
 
 	t.Run("page less than 1 returns error", func(t *testing.T) {
 		repo := &mockOrganizerRepoForAdmin{}
-		uc := organizer.NewAdminOrganizerUsecase(repo, logger)
-		_, err := uc.ListOrganizers(0, 10, "", "")
+		uc := organizer.NewAdminOrganizerUsecase(repo, nil, logger)
+		_, err := uc.ListOrganizers(context.Background(), 0, 10, "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "page must be greater than zero")
 	})
 
 	t.Run("limit out of range returns error", func(t *testing.T) {
 		repo := &mockOrganizerRepoForAdmin{}
-		uc := organizer.NewAdminOrganizerUsecase(repo, logger)
-		_, err := uc.ListOrganizers(1, 150, "", "")
+		uc := organizer.NewAdminOrganizerUsecase(repo, nil, logger)
+		_, err := uc.ListOrganizers(context.Background(), 1, 150, "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "limit must be between 1 and 100")
 	})
 
 	t.Run("invalid status filter returns error", func(t *testing.T) {
 		repo := &mockOrganizerRepoForAdmin{}
-		uc := organizer.NewAdminOrganizerUsecase(repo, logger)
-		_, err := uc.ListOrganizers(1, 10, "", "INVALID_STATUS")
+		uc := organizer.NewAdminOrganizerUsecase(repo, nil, logger)
+		_, err := uc.ListOrganizers(context.Background(), 1, 10, "", "INVALID_STATUS")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid status filter")
 	})
@@ -108,8 +211,8 @@ func TestAdminOrganizerUsecase_ListOrganizers(t *testing.T) {
 		repo := &mockOrganizerRepoForAdmin{
 			listErr: errors.New("db query timeout"),
 		}
-		uc := organizer.NewAdminOrganizerUsecase(repo, logger)
-		_, err := uc.ListOrganizers(1, 10, "", "")
+		uc := organizer.NewAdminOrganizerUsecase(repo, nil, logger)
+		_, err := uc.ListOrganizers(context.Background(), 1, 10, "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to retrieve organizers")
 	})

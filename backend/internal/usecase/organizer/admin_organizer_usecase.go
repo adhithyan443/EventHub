@@ -1,6 +1,7 @@
 package organizer
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -37,24 +38,28 @@ type AdminOrganizerListResponse struct {
 }
 
 type AdminOrganizerUsecase struct {
-	organizerRepo domain.OrganizerRepository
-	logger        *slog.Logger
+	organizerRepo  domain.OrganizerRepository
+	storageService StoragePresigner
+	logger         *slog.Logger
 }
 
 func NewAdminOrganizerUsecase(
 	organizerRepo domain.OrganizerRepository,
+	storageService StoragePresigner,
 	logger *slog.Logger,
 ) *AdminOrganizerUsecase {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &AdminOrganizerUsecase{
-		organizerRepo: organizerRepo,
-		logger:        logger,
+		organizerRepo:  organizerRepo,
+		storageService: storageService,
+		logger:         logger,
 	}
 }
 
 func (u *AdminOrganizerUsecase) ListOrganizers(
+	ctx context.Context,
 	page int,
 	limit int,
 	search string,
@@ -99,6 +104,8 @@ func (u *AdminOrganizerUsecase) ListOrganizers(
 
 	organizers := make([]AdminOrganizerResponse, len(list.Organizers))
 	for i, o := range list.Organizers {
+		logoURL := u.resolveLogoURL(ctx, o.LogoURL, o.ID)
+
 		organizers[i] = AdminOrganizerResponse{
 			ID:                  o.ID,
 			UserID:              o.UserID,
@@ -111,7 +118,7 @@ func (u *AdminOrganizerUsecase) ListOrganizers(
 			BusinessPhone:       o.BusinessPhone,
 			BusinessEmail:       o.BusinessEmail,
 			Website:             o.Website,
-			LogoURL:             o.LogoURL,
+			LogoURL:             logoURL,
 			GSTNumber:           o.GSTNumber,
 			PANNumber:           o.PANNumber,
 			Status:              o.Status,
@@ -132,4 +139,35 @@ func (u *AdminOrganizerUsecase) ListOrganizers(
 		Page:       list.Page,
 		Limit:      list.Limit,
 	}, nil
+}
+
+func (u *AdminOrganizerUsecase) resolveLogoURL(
+	ctx context.Context,
+	rawLogo string,
+	organizerID uuid.UUID,
+) string {
+	cleanLogo := strings.TrimSpace(rawLogo)
+	if cleanLogo == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(cleanLogo, "http://") || strings.HasPrefix(cleanLogo, "https://") {
+		return cleanLogo
+	}
+
+	if u.storageService == nil {
+		return ""
+	}
+
+	presigned, err := u.storageService.GetPresignedURL(ctx, cleanLogo)
+	if err != nil {
+		u.logger.Warn(
+			"admin_organizer_logo_presign_failed",
+			"organizer_id", organizerID,
+			"error", err,
+		)
+		return ""
+	}
+
+	return presigned
 }

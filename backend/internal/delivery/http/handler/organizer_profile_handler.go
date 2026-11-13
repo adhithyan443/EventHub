@@ -44,7 +44,7 @@ func (h *OrganizerProfileHandler) GetProfile(
 		return
 	}
 
-	profile, err := h.usecase.GetProfile(userID)
+	profile, err := h.usecase.GetProfile(ctx.Request.Context(), userID)
 	if err != nil {
 		ctx.Error(err)
 		return

@@ -109,6 +109,10 @@ export default function OrganizerTopBar({ showCreateButton = true, onMenuToggle 
               src={profile?.logo_url || imgUserAvatar}
               alt="Profile"
               className="size-full object-cover"
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = imgUserAvatar;
+              }}
             />
           </div>
           <span className="text-[13px] font-medium text-[#141b2b] group-hover:text-[#00685f] transition-colors hidden md:inline-block truncate max-w-[120px]">

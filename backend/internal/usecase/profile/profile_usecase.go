@@ -233,11 +233,11 @@ func (u *ProfileUsecase) RequestEmailChange(ctx context.Context, userID uuid.UUI
 	}
 
 	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
-		if err := tx.AcquireEmailAdvisoryLock(normalizedEmail); err != nil {
+		if err := tx.AcquireEmailAdvisoryLock(normalizedEmail); err != nil { //DB lock so different user cannot use same email
 			return err
 		}
 
-		if existingUserReq, err := tx.EmailChangeRequestRepository().FindByUserID(userID); err == nil && existingUserReq != nil {
+		if existingUserReq, err := tx.EmailChangeRequestRepository().FindByUserID(userID); err == nil && existingUserReq != nil { //checks whether the user has requested an email-change OTP recently.
 			if time.Now().Before(existingUserReq.ResendAvailableAt) {
 				waitSecs := int(time.Until(existingUserReq.ResendAvailableAt).Seconds())
 				if waitSecs < 1 {

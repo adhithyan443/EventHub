@@ -42,6 +42,7 @@ func toOrganizerProfileResponse(
 	profile *domain.OrganizerProfile,
 	address *domain.OrganizerAddress,
 	bankAccount *domain.OrganizerBankAccount,
+	logoURL string,
 ) OrganizerProfileResponse {
 	response := OrganizerProfileResponse{
 		OrganizerID:  organizer.ID.String(),
@@ -52,7 +53,7 @@ func toOrganizerProfileResponse(
 		Phone:        profile.Phone,
 		Email:        profile.Email,
 		Website:      profile.Website,
-		LogoURL:      profile.LogoURL,
+		LogoURL:      logoURL,
 	}
 
 	if address != nil {
