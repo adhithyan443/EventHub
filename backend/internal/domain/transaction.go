@@ -7,6 +7,8 @@ type TransactionManager interface {
 type TransactionRepositories interface {
 	UserRepository() UserRepository
 	PendingRegistrationRepository() PendingRegistrationRepository
+	EmailChangeRequestRepository() EmailChangeRequestRepository
+	AcquireEmailAdvisoryLock(email string) error
 	PasswordResetTokenRepository() PasswordResetTokenRepository
 	RefreshTokenRepository() RefreshTokenRepository
 

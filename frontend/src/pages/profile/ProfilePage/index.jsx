@@ -4,7 +4,7 @@ import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import LogoutConfirmationModal from "../../../components/layout/LogoutConfirmationModal";
 import ProfileSidebar from "./ProfileSidebar";
-import PersonalInfoCard from "./PersonalInfoCard";
+import UnifiedProfileCard from "../../../components/profile/UnifiedProfileCard";
 import AccountSettingsCard from "./AccountSettingsCard";
 import ActivityCard from "./ActivityCard";
 import OrganizerPromoCard from "./OrganizerPromoCard";
@@ -56,7 +56,7 @@ export default function ProfilePage() {
 
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 w-full items-start">
                     <div className="lg:col-span-5 flex flex-col gap-6">
-                        <PersonalInfoCard user={displayUser} />
+                        <UnifiedProfileCard />
                         <AccountSettingsCard onLogout={() => setShowLogoutModal(true)} />
                     </div>
 

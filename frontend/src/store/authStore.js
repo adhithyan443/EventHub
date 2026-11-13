@@ -137,6 +137,30 @@ const useAuthStore = create((set, get) => ({
     }));
   },
 
+  updateUser: (partialUser) => {
+    const current = get();
+    if (!current.user) return;
+    const profileImage =
+      partialUser.profile_image ??
+      partialUser.profileImage ??
+      partialUser.ProfileImage ??
+      current.user.profileImage ??
+      current.user.ProfileImage ??
+      "";
+    const mergedUser = {
+      ...current.user,
+      ...partialUser,
+      profileImage,
+      ProfileImage: profileImage,
+    };
+    setStoredAuth(mergedUser, current.accessToken, current.refreshToken);
+    set((state) => ({
+      user: mergedUser,
+      sessionVersion: state.sessionVersion + 1,
+    }));
+    return mergedUser;
+  },
+
   // Synchronize in-memory auth state with localStorage across browser tabs
   syncFromStorage: () => {
     const stored = getStoredAuth();

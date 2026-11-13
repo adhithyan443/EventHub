@@ -1,7 +1,15 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
+import useAuthStore from "../../store/authStore";
 
 export default function AdminTopBar({ onMenuToggle }) {
   const [searchValue, setSearchValue] = useState("");
+  const [imgError, setImgError] = useState(false);
+  const user = useAuthStore((state) => state.user);
+
+  const avatarUrl = user?.profileImage || user?.ProfileImage || "";
+  const displayName = user?.fullName || user?.full_name || "Admin User";
+  const initial = displayName.charAt(0).toUpperCase() || "A";
 
   return (
     <header className="bg-white border-b border-[#bcc9c6] h-16 flex items-center justify-between px-3 sm:px-6 shrink-0 shadow-[0px_1px_1px_rgba(0,0,0,0.05)] z-10 gap-2">
@@ -77,16 +85,29 @@ export default function AdminTopBar({ onMenuToggle }) {
 
         <div className="w-px h-8 bg-[#bcc9c6] hidden sm:block" />
 
-        {/* Admin Avatar */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] flex items-center justify-center text-[#5c6bc0] font-bold text-xs sm:text-sm select-none shadow-sm">
-            A
+        {/* Admin Avatar & Profile Link */}
+        <Link
+          to="/admin/profile"
+          className="flex items-center gap-2 sm:gap-3 hover:opacity-85 transition-opacity cursor-pointer group"
+          title="View profile"
+        >
+          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-[#e8eaf6] border border-[#bcc9c6] overflow-hidden flex items-center justify-center text-[#5c6bc0] font-bold text-xs sm:text-sm select-none shadow-xs shrink-0">
+            {avatarUrl && !imgError ? (
+              <img
+                src={avatarUrl}
+                alt={displayName}
+                onError={() => setImgError(true)}
+                className="size-full object-cover"
+              />
+            ) : (
+              <span>{initial}</span>
+            )}
           </div>
           <div className="hidden sm:block text-left">
-            <div className="text-[#141b2b] text-xs font-semibold">Admin User</div>
+            <div className="text-[#141b2b] text-xs font-semibold group-hover:text-[#00685f] transition-colors">{displayName}</div>
             <div className="text-[#6d7a77] text-[10px]">Super Administrator</div>
           </div>
-        </div>
+        </Link>
       </div>
     </header>
   );

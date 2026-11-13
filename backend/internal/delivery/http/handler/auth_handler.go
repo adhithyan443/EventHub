@@ -4,16 +4,19 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"strings"
 
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
+	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
 type AuthHandler struct {
-	authUsecase *auth.AuthUsecase
-	frontendURL string
+	authUsecase    *auth.AuthUsecase
+	frontendURL    string
+	storageService *storage.S3Service
 }
 
 func NewAuthHandler(authUsecase *auth.AuthUsecase, frontendURL string) *AuthHandler {
@@ -21,6 +24,10 @@ func NewAuthHandler(authUsecase *auth.AuthUsecase, frontendURL string) *AuthHand
 		authUsecase: authUsecase,
 		frontendURL: frontendURL,
 	}
+}
+
+func (h *AuthHandler) SetStorageService(storageService *storage.S3Service) {
+	h.storageService = storageService
 }
 
 type registerRequest struct {
@@ -432,16 +439,23 @@ func (h *AuthHandler) Me(ctx *gin.Context) {
 		return
 	}
 
+	avatarURL := user.ProfileImage
+	if avatarURL != "" && !strings.HasPrefix(avatarURL, "http://") && !strings.HasPrefix(avatarURL, "https://") && h.storageService != nil {
+		if presigned, err := h.storageService.GetPresignedURL(ctx.Request.Context(), avatarURL); err == nil && presigned != "" {
+			avatarURL = presigned
+		}
+	}
+
 	ctx.JSON(http.StatusOK, gin.H{
 		"user": gin.H{
 			"id":           user.ID,
 			"fullName":     user.FullName,
 			"email":        user.Email,
 			"phone":        user.Phone,
-			"profileImage": user.ProfileImage,
+			"profileImage": avatarURL,
 			"role":         user.Role,
 			"status":       user.Status,
-			"created_At" : user.CreatedAt,
+			"created_At":   user.CreatedAt,
 		},
 	})
 }

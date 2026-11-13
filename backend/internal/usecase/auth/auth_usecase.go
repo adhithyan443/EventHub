@@ -175,6 +175,27 @@ func (u *AuthUsecase) Register(input RegisterInput) error {
 		return err
 	}
 
+	if u.txManager != nil {
+		txErr := u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+			if err := tx.AcquireEmailAdvisoryLock(input.Email); err != nil {
+				return err
+			}
+			if activeChange, err := tx.EmailChangeRequestRepository().FindByNewEmail(input.Email); err == nil && activeChange != nil {
+				if time.Now().Before(activeChange.OTPExpiresAt) {
+					return appErrors.NewConflictError("email is reserved by another pending request")
+				}
+			}
+			return nil
+		})
+		if txErr != nil {
+			u.logger.Warn(
+				"user_registration_failed",
+				"reason", "email_reserved_by_change_request",
+			)
+			return txErr
+		}
+	}
+
 	pendingRegistration, err := u.pendingRegistrationRepo.FindByEmail(input.Email)
 
 	if err == nil && pendingRegistration != nil {
@@ -655,6 +676,29 @@ func (u *AuthUsecase) VerifyOTP(input VerifyOTPInput) (*domain.User, error) {
 	}
 
 	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+		if err := tx.AcquireEmailAdvisoryLock(pendingRegistration.Email); err != nil {
+			return err
+		}
+
+		existingUser, err := tx.UserRepository().FindByEmail(pendingRegistration.Email)
+		if err == nil && existingUser != nil {
+			return appErrors.NewConflictError("email already exists")
+		}
+		if err != nil && !errors.Is(err, domain.ErrUserNotFound) {
+			return err
+		}
+
+		activeChange, err := tx.EmailChangeRequestRepository().FindByNewEmail(pendingRegistration.Email)
+		if err == nil && activeChange != nil {
+			if time.Now().Before(activeChange.OTPExpiresAt) {
+				return appErrors.NewConflictError("email is reserved by another pending request")
+			}
+			if delErr := tx.EmailChangeRequestRepository().DeleteByID(activeChange.ID); delErr != nil {
+				return delErr
+			}
+		} else if err != nil && !errors.Is(err, domain.ErrEmailChangeRequestNotFound) {
+			return err
+		}
 
 		if err := tx.UserRepository().Create(newUser); err != nil {
 			return err
@@ -1009,23 +1053,73 @@ func (u *AuthUsecase) HandleGoogleCallback(
 
 		now := time.Now()
 
-		user = &domain.User{
-			ID:           uuid.New(),
-			FullName:     strings.TrimSpace(googleUser.Name),
-			Email:        email,
-			ProfileImage: googleUser.AvatarURL,
-			Role:         "CUSTOMER",
-			Status:       "ACTIVE",
-			CreatedAt:    now,
-			UpdatedAt:    now,
-		}
+		var createdUser *domain.User
+		if u.txManager != nil {
+			txErr := u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+				if err := tx.AcquireEmailAdvisoryLock(email); err != nil {
+					return err
+				}
 
-		if err := u.userRepo.Create(user); err != nil {
-			u.logger.Error(
-				"google_oauth_failed",
-				"error", err,
-			)
-			return nil, "", "", err
+				if existing, err := tx.UserRepository().FindByEmail(email); err == nil && existing != nil {
+					createdUser = existing
+					return nil
+				}
+
+				if activeChange, err := tx.EmailChangeRequestRepository().FindByNewEmail(email); err == nil && activeChange != nil {
+					if time.Now().Before(activeChange.OTPExpiresAt) {
+						return appErrors.NewConflictError("email is currently reserved by a pending email-change request")
+					}
+					_ = tx.EmailChangeRequestRepository().DeleteByID(activeChange.ID)
+				}
+
+				if pendingReg, err := tx.PendingRegistrationRepository().FindByEmail(email); err == nil && pendingReg != nil {
+					_ = tx.PendingRegistrationRepository().Delete(pendingReg.ID)
+				}
+
+				newUser := &domain.User{
+					ID:           uuid.New(),
+					FullName:     strings.TrimSpace(googleUser.Name),
+					Email:        email,
+					ProfileImage: googleUser.AvatarURL,
+					Role:         "CUSTOMER",
+					Status:       "ACTIVE",
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				}
+
+				if err := tx.UserRepository().Create(newUser); err != nil {
+					return err
+				}
+				createdUser = newUser
+				return nil
+			})
+			if txErr != nil {
+				u.logger.Error(
+					"google_oauth_failed",
+					"error", txErr,
+				)
+				return nil, "", "", txErr
+			}
+			user = createdUser
+		} else {
+			user = &domain.User{
+				ID:           uuid.New(),
+				FullName:     strings.TrimSpace(googleUser.Name),
+				Email:        email,
+				ProfileImage: googleUser.AvatarURL,
+				Role:         "CUSTOMER",
+				Status:       "ACTIVE",
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+
+			if err := u.userRepo.Create(user); err != nil {
+				u.logger.Error(
+					"google_oauth_failed",
+					"error", err,
+				)
+				return nil, "", "", err
+			}
 		}
 
 		u.logger.Info(

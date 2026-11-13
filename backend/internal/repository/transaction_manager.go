@@ -2,6 +2,7 @@ package repository
 
 import (
 	"log/slog"
+	"strings"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"gorm.io/gorm"
@@ -13,8 +14,10 @@ type TransactionManager struct {
 }
 
 type transactionRepositories struct {
+	txDB                     *gorm.DB
 	userRepo                 *UserRepository
 	pendingRegistrationRepo  *PendingRegistrationRepository
+	emailChangeRequestRepo   *EmailChangeRequestRepository
 	passwordResetTokenRepo   domain.PasswordResetTokenRepository
 	refreshTokenRepo         domain.RefreshTokenRepository
 	organizerApplicationRepo domain.OrganizerApplicationRepository
@@ -67,8 +70,10 @@ func (m *TransactionManager) WithinTransaction(
 ) error {
 	return m.db.Transaction(func(txDB *gorm.DB) error {
 		txRepos := &transactionRepositories{
+			txDB:                    txDB,
 			userRepo:                NewUserRepository(txDB, m.logger),
 			pendingRegistrationRepo: NewPendingRegistrationRepository(txDB),
+			emailChangeRequestRepo:  NewEmailChangeRequestRepository(txDB),
 			passwordResetTokenRepo:  NewPasswordResetTokenRepository(txDB),
 			refreshTokenRepo:        NewRefreshTokenRepository(txDB),
 			organizerApplicationRepo: NewOrganizerApplicationRepository(
@@ -160,6 +165,15 @@ func (r *transactionRepositories) UserRepository() domain.UserRepository {
 
 func (r *transactionRepositories) PendingRegistrationRepository() domain.PendingRegistrationRepository {
 	return r.pendingRegistrationRepo
+}
+
+func (r *transactionRepositories) EmailChangeRequestRepository() domain.EmailChangeRequestRepository {
+	return r.emailChangeRequestRepo
+}
+
+func (r *transactionRepositories) AcquireEmailAdvisoryLock(email string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	return r.txDB.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", normalized).Error
 }
 
 func (r *transactionRepositories) PasswordResetTokenRepository() domain.PasswordResetTokenRepository {
