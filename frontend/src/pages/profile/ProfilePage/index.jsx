@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import AppHeader from "../../../components/layout/AppHeader";
 import Footer from "../../../components/layout/Footer";
 import LogoutConfirmationModal from "../../../components/layout/LogoutConfirmationModal";
@@ -64,8 +64,12 @@ export default function ProfilePage() {
                         <div>
                             <h2 className="font-display text-lg font-bold text-slate-900 mb-3">My Activity</h2>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                <ActivityCard icon={CalendarIcon} title="My Bookings" description="View upcoming and past events." tone="primary" />
-                                <ActivityCard icon={TicketIcon} title="My Tickets" description="Access your event passes." tone="soft" />
+                                <Link to="/my-bookings">
+                                    <ActivityCard icon={CalendarIcon} title="My Bookings" description="View upcoming and past events." tone="primary" />
+                                </Link>
+                                <Link to="/my-tickets">
+                                    <ActivityCard icon={TicketIcon} title="My Tickets" description="Access your event passes." tone="soft" />
+                                </Link>
                                 <ActivityCard icon={RefreshIcon} title="Refunds & Transactions" description="Track refund status and billing history." tone="soft" wide />
                             </div>
                         </div>
