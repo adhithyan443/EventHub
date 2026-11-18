@@ -30,7 +30,7 @@ type SubmitApplicationInput struct {
 	// Uploaded files are populated by the HTTP handler.
 	LogoReader                 io.Reader `form:"-" json:"-"`
 	LogoContentType            string    `form:"-" json:"-"`
-	LogoSize                   int64     `form:"-" json:"-"`
+	// LogoSize                   int64     `form:"-" json:"-"`
 	VerificationDocumentReader io.Reader `form:"-" json:"-"`
 	VerificationDocumentType   string    `form:"-" json:"-"`
 	VerificationDocumentSize   int64     `form:"-" json:"-"`

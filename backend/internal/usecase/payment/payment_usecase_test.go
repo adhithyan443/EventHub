@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	domainfinance "github.com/adhithyan443/EventHub/backend/internal/domain/finance"
 	bookinguc "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/google/uuid"
@@ -178,6 +179,19 @@ func (m *mockPaymentRepo) UpdateProviderOrderID(ctx context.Context, paymentID s
 	}
 	p.ProviderOrderID = &providerOrderID
 	return nil
+}
+
+func (m *mockPaymentRepo) FindAdminPayments(
+	ctx context.Context,
+	filter domain.AdminPaymentFilter,
+) (*domain.AdminPaymentListResult, error) {
+	return &domain.AdminPaymentListResult{
+		Payments:     []domain.AdminPaymentListItem{},
+		TotalRecords: 0,
+		Page:         filter.Page,
+		Limit:        filter.Limit,
+		TotalPages:   0,
+	}, nil
 }
 
 type mockBookingRepo struct {
@@ -406,6 +420,7 @@ type mockSeatReservationRepo struct {
 	mu           sync.Mutex
 	reservations map[uuid.UUID]*domain.SeatReservation
 	items        map[uuid.UUID][]domain.SeatReservationItem
+	cancelErr    error
 }
 
 func newMockSeatReservationRepo() *mockSeatReservationRepo {
@@ -443,7 +458,18 @@ func (m *mockSeatReservationRepo) CompleteIfActive(ctx context.Context, id uuid.
 }
 
 func (m *mockSeatReservationRepo) CancelIfActive(ctx context.Context, id uuid.UUID, userID uuid.UUID) (bool, error) {
-	return true, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cancelErr != nil {
+		return false, m.cancelErr
+	}
+	if r, ok := m.reservations[id]; ok {
+		if r.Status == domain.ReservationStatusActive {
+			r.Status = domain.ReservationStatusCancelled
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (m *mockSeatReservationRepo) ExpireIfActive(ctx context.Context, id uuid.UUID, now time.Time) (bool, error) {
@@ -555,9 +581,22 @@ func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) 
 
 type mockSeatRepo struct {
 	domain.SeatRepository
+	releasedSeats []uuid.UUID
+	releaseErr    error
+	mu            sync.Mutex
 }
 
 func (m *mockSeatRepo) BookReservedSeat(ctx context.Context, seatID uuid.UUID) error {
+	return nil
+}
+
+func (m *mockSeatRepo) ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.releaseErr != nil {
+		return m.releaseErr
+	}
+	m.releasedSeats = append(m.releasedSeats, seatID)
 	return nil
 }
 
@@ -575,10 +614,19 @@ func (m *mockUserRepo) FindByID(id uuid.UUID) (*domain.User, error) {
 
 type mockEventRepo struct {
 	domain.EventRepository
+	organizerID uuid.UUID
+	findErr     error
 }
 
 func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
-	return &domain.Event{ID: id, Title: "Test Event", EventType: domain.EventTypePhysical}, nil
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	orgID := m.organizerID
+	if orgID == uuid.Nil {
+		orgID = uuid.New()
+	}
+	return &domain.Event{ID: id, OrganizerID: orgID, Title: "Test Event", EventType: domain.EventTypePhysical}, nil
 }
 
 type mockEventScheduleRepo struct {
@@ -607,10 +655,60 @@ func (m *mockOrganizerProfileRepo) FindByOrganizerID(id uuid.UUID) (*domain.Orga
 
 type mockTicketTypeRepo struct {
 	domain.TicketTypeRepository
+	releasedQuantities map[uuid.UUID]int
+	releaseErr         error
+	mu                 sync.Mutex
 }
 
 func (m *mockTicketTypeRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.TicketType, error) {
 	return &domain.TicketType{ID: id, Name: "General Admission"}, nil
+}
+
+func (m *mockTicketTypeRepo) ReleaseReservedQuantity(ctx context.Context, ticketTypeID uuid.UUID, quantity int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.releaseErr != nil {
+		return m.releaseErr
+	}
+	if m.releasedQuantities == nil {
+		m.releasedQuantities = make(map[uuid.UUID]int)
+	}
+	m.releasedQuantities[ticketTypeID] += quantity
+	return nil
+}
+
+type mockFinanceUsecase struct {
+	mu                      sync.Mutex
+	recordCaptureWithinTxFn func(ctx context.Context, txRepos domain.TransactionRepositories, in domain.RecordPaymentCaptureInput) (*domainfinance.JournalTransaction, error)
+	recordCaptureFn         func(ctx context.Context, in domain.RecordPaymentCaptureInput) (*domainfinance.JournalTransaction, error)
+	capturedInputs          []domain.RecordPaymentCaptureInput
+}
+
+func (m *mockFinanceUsecase) RecordPaymentCaptureWithinTx(
+	ctx context.Context,
+	txRepos domain.TransactionRepositories,
+	in domain.RecordPaymentCaptureInput,
+) (*domainfinance.JournalTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordCaptureWithinTxFn != nil {
+		return m.recordCaptureWithinTxFn(ctx, txRepos, in)
+	}
+	m.capturedInputs = append(m.capturedInputs, in)
+	return nil, nil
+}
+
+func (m *mockFinanceUsecase) RecordPaymentCapture(
+	ctx context.Context,
+	in domain.RecordPaymentCaptureInput,
+) (*domainfinance.JournalTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordCaptureFn != nil {
+		return m.recordCaptureFn(ctx, in)
+	}
+	m.capturedInputs = append(m.capturedInputs, in)
+	return nil, nil
 }
 
 type mockInvoiceRepo struct {
@@ -707,15 +805,18 @@ func (m *mockEventCancellationRepo) FindByEventID(eventID uuid.UUID) (*domain.Ev
 
 type mockTxRepos struct {
 	domain.TransactionRepositories
-	paymentRepo           *mockPaymentRepo
-	bookingRepo           *mockBookingRepo
-	checkoutRepo          *mockCheckoutRepo
-	seatReservationRepo   *mockSeatReservationRepo
-	ticketRepo            *mockTicketRepo
-	seatRepo              *mockSeatRepo
-	webhookEventRepo      *mockRazorpayWebhookEventRepo
-	eventCancellationRepo *mockEventCancellationRepo
-	invoiceRepo           *mockInvoiceRepo
+	paymentRepo            *mockPaymentRepo
+	bookingRepo            *mockBookingRepo
+	checkoutRepo           *mockCheckoutRepo
+	seatReservationRepo    *mockSeatReservationRepo
+	ticketRepo             *mockTicketRepo
+	seatRepo               *mockSeatRepo
+	ticketTypeRepo         *mockTicketTypeRepo
+	webhookEventRepo       *mockRazorpayWebhookEventRepo
+	eventCancellationRepo  *mockEventCancellationRepo
+	eventRepo              *mockEventRepo
+	invoiceRepo            *mockInvoiceRepo
+	executeWithSavepointFn func(name domain.SavepointName, fn func() error) (domain.SavepointResult, error)
 }
 
 func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository {
@@ -749,7 +850,10 @@ func (m *mockTxRepos) UserRepository() domain.UserRepository {
 	return &mockUserRepo{}
 }
 func (m *mockTxRepos) EventRepository() domain.EventRepository {
-	return &mockEventRepo{}
+	if m.eventRepo == nil {
+		m.eventRepo = &mockEventRepo{}
+	}
+	return m.eventRepo
 }
 func (m *mockTxRepos) EventScheduleRepository() domain.EventScheduleRepository {
 	return &mockEventScheduleRepo{}
@@ -761,13 +865,39 @@ func (m *mockTxRepos) OrganizerProfileRepository() domain.OrganizerProfileReposi
 	return &mockOrganizerProfileRepo{}
 }
 func (m *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
-	return &mockTicketTypeRepo{}
+	if m.ticketTypeRepo == nil {
+		m.ticketTypeRepo = &mockTicketTypeRepo{}
+	}
+	return m.ticketTypeRepo
 }
 func (m *mockTxRepos) InvoiceRepository() domain.InvoiceRepository {
 	if m.invoiceRepo == nil {
 		m.invoiceRepo = newMockInvoiceRepo()
 	}
 	return m.invoiceRepo
+}
+
+func (m *mockTxRepos) ExecuteWithSavepoint(name domain.SavepointName, fn func() error) (domain.SavepointResult, error) {
+	if m.executeWithSavepointFn != nil {
+		return m.executeWithSavepointFn(name, fn)
+	}
+	if fn == nil {
+		return domain.SavepointResult{}, domain.ErrNilSavepointCallback
+	}
+	if name != domain.SavepointTaxRefundInventory {
+		return domain.SavepointResult{}, domain.ErrInvalidSavepointName
+	}
+	fnErr := fn()
+	if fnErr != nil {
+		return domain.SavepointResult{
+			Status:      domain.SavepointStatusRolledBack,
+			CallbackErr: fnErr,
+		}, nil
+	}
+	return domain.SavepointResult{
+		Status:      domain.SavepointStatusCommitted,
+		CallbackErr: nil,
+	}, nil
 }
 
 type mockRefundRepo struct {
@@ -868,7 +998,11 @@ type testFixture struct {
 	checkoutRepo    *mockCheckoutRepo
 	reservationRepo *mockSeatReservationRepo
 	ticketRepo      *mockTicketRepo
+	seatRepo        *mockSeatRepo
+	ticketTypeRepo  *mockTicketTypeRepo
 	invoiceRepo     *mockInvoiceRepo
+	financeUsecase  *mockFinanceUsecase
+	txRepos         *mockTxRepos
 	provider        *mockPaymentProvider
 	userID          uuid.UUID
 	checkoutID      uuid.UUID
@@ -886,8 +1020,11 @@ func setupFixture(t *testing.T) *testFixture {
 	reservationRepo := newMockSeatReservationRepo()
 	ticketRepo := &mockTicketRepo{}
 	seatRepo := &mockSeatRepo{}
+	ticketTypeRepo := &mockTicketTypeRepo{releasedQuantities: make(map[uuid.UUID]int)}
+	eventRepo := &mockEventRepo{organizerID: uuid.New()}
 	invoiceRepo := newMockInvoiceRepo()
 	webhookEventRepo := &mockRazorpayWebhookEventRepo{events: make(map[string]string)}
+	financeUC := &mockFinanceUsecase{}
 
 	txRepos := &mockTxRepos{
 		paymentRepo:           paymentRepo,
@@ -896,6 +1033,8 @@ func setupFixture(t *testing.T) *testFixture {
 		seatReservationRepo:   reservationRepo,
 		ticketRepo:            ticketRepo,
 		seatRepo:              seatRepo,
+		ticketTypeRepo:        ticketTypeRepo,
+		eventRepo:              eventRepo,
 		invoiceRepo:           invoiceRepo,
 		webhookEventRepo:      webhookEventRepo,
 		eventCancellationRepo: &mockEventCancellationRepo{cancellations: make(map[uuid.UUID]*domain.EventCancellation)},
@@ -904,7 +1043,8 @@ func setupFixture(t *testing.T) *testFixture {
 
 	provider := newMockPaymentProvider()
 	bookingUC := bookinguc.NewBookingUsecase(tm, provider, logger)
-	paymentUC := payment.NewPaymentUsecase(tm, bookingUC, provider, logger)
+	paymentUC, err := payment.NewPaymentUsecase(tm, bookingUC, financeUC, provider, logger)
+	require.NoError(t, err)
 
 	userID := uuid.New()
 	eventID := uuid.New()
@@ -948,7 +1088,11 @@ func setupFixture(t *testing.T) *testFixture {
 		checkoutRepo:    checkoutRepo,
 		reservationRepo: reservationRepo,
 		ticketRepo:      ticketRepo,
+		seatRepo:        seatRepo,
+		ticketTypeRepo:  ticketTypeRepo,
 		invoiceRepo:     invoiceRepo,
+		financeUsecase:  financeUC,
+		txRepos:         txRepos,
 		provider:        provider,
 		userID:          userID,
 		checkoutID:      checkoutID,
@@ -1405,6 +1549,204 @@ func TestUpdateProviderOrderID_ZeroRowReconciliation(t *testing.T) {
 	// Calling with non-existent payment ID must return ErrPaymentNotFound
 	err = f.paymentRepo.UpdateProviderOrderID(ctx, uuid.NewString(), "order_random")
 	assert.ErrorIs(t, err, domain.ErrPaymentNotFound)
+}
+
+func TestNewPaymentUsecase_Validation(t *testing.T) {
+	tm := &mockTransactionManager{}
+	provider := newMockPaymentProvider()
+	bookingUC := bookinguc.NewBookingUsecase(tm, provider, slog.Default())
+	financeUC := &mockFinanceUsecase{}
+	logger := slog.Default()
+
+	t.Run("Rejects nil transactionManager", func(t *testing.T) {
+		uc, err := payment.NewPaymentUsecase(nil, bookingUC, financeUC, provider, logger)
+		require.Error(t, err)
+		assert.Nil(t, uc)
+		assert.Contains(t, err.Error(), "transactionManager cannot be nil")
+	})
+
+	t.Run("Rejects nil bookingUsecase", func(t *testing.T) {
+		uc, err := payment.NewPaymentUsecase(tm, nil, financeUC, provider, logger)
+		require.Error(t, err)
+		assert.Nil(t, uc)
+		assert.Contains(t, err.Error(), "bookingUsecase cannot be nil")
+	})
+
+	t.Run("Rejects nil financeUsecase", func(t *testing.T) {
+		uc, err := payment.NewPaymentUsecase(tm, bookingUC, nil, provider, logger)
+		require.Error(t, err)
+		assert.Nil(t, uc)
+		assert.Contains(t, err.Error(), "financeUsecase cannot be nil")
+	})
+
+	t.Run("Rejects nil provider", func(t *testing.T) {
+		uc, err := payment.NewPaymentUsecase(tm, bookingUC, financeUC, nil, logger)
+		require.Error(t, err)
+		assert.Nil(t, uc)
+		assert.Contains(t, err.Error(), "provider cannot be nil")
+	})
+
+	t.Run("Accepts valid dependencies and defaults nil logger", func(t *testing.T) {
+		uc, err := payment.NewPaymentUsecase(tm, bookingUC, financeUC, provider, nil)
+		require.NoError(t, err)
+		assert.NotNil(t, uc)
+	})
+}
+
+func TestVerifyPayment_NormalPaymentCaptureCreatesFinancialJournal(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	verifyRes, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_normal_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, verifyRes)
+	assert.Equal(t, domain.PaymentStatusSuccess, verifyRes.Payment.Status)
+	assert.Equal(t, domain.BookingStatusConfirmed, verifyRes.Booking.Status)
+
+	// Verify that financeUsecase recorded the payment capture
+	require.Len(t, f.financeUsecase.capturedInputs, 1)
+	captured := f.financeUsecase.capturedInputs[0]
+	assert.Equal(t, p1.ID, captured.PaymentID.String())
+	assert.Equal(t, verifyRes.Booking.ID, captured.BookingID)
+	assert.True(t, verifyRes.Booking.Total.Equal(captured.Total))
+	assert.True(t, verifyRes.Booking.Subtotal.Equal(captured.Subtotal))
+	assert.True(t, verifyRes.Booking.Tax.Equal(captured.Tax))
+	assert.Equal(t, "INR", captured.Currency)
+}
+
+func TestVerifyPayment_TaxAnomalyRoutesToRefundRequired(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	// Tamper booking to have positive tax (tax anomaly scenario)
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+	b := f.bookingRepo.bookings[bookingID]
+	b.Tax = decimal.NewFromInt(50)
+	b.Total = b.Subtotal.Add(b.PlatformFee).Add(b.Tax).Sub(b.Discount)
+
+	// VerifyPayment must return domain.ErrPaymentRefundRequired
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_tax_anomaly_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.Nil(t, res)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired), "Must return ErrPaymentRefundRequired")
+	assert.Equal(t, "Payment received, but booking could not be completed. Your refund is pending processing.", err.Error())
+
+	// Payment must be marked REFUND_REQUIRED in DB
+	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+	assert.Equal(t, "pay_tax_anomaly_123", *paymentInDB.TransactionID)
+
+	// Booking must be marked CANCELLED in DB
+	bookingInDB, err := f.bookingRepo.FindByID(ctx, bookingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BookingStatusCancelled, bookingInDB.Status)
+
+	// Reservation must be cancelled
+	resInDB, err := f.reservationRepo.FindByID(ctx, f.reservationID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.ReservationStatusCancelled, resInDB.Status)
+
+	// Finance journal must NOT have been recorded
+	assert.Empty(t, f.financeUsecase.capturedInputs)
+}
+
+func TestVerifyPayment_TaxAnomalyInventoryFailureDefersToWorker(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+	b := f.bookingRepo.bookings[bookingID]
+	b.Tax = decimal.NewFromInt(50)
+	b.Total = b.Subtotal.Add(b.PlatformFee).Add(b.Tax).Sub(b.Discount)
+
+	// Simulate inventory release failure inside savepoint
+	f.seatRepo.releaseErr = errors.New("seat lock timeout during release")
+
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_tax_inv_fail_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.Nil(t, res)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
+
+	// Outer transaction still committed REFUND_REQUIRED!
+	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+
+	bookingInDB, err := f.bookingRepo.FindByID(ctx, bookingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BookingStatusCancelled, bookingInDB.Status)
+}
+
+func TestVerifyPayment_TaxAnomalySavepointControlFailureAborts(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+	b2 := f.bookingRepo.bookings[bookingID]
+	b2.Tax = decimal.NewFromInt(50)
+	b2.Total = b2.Subtotal.Add(b2.PlatformFee).Add(b2.Tax).Sub(b2.Discount)
+
+	// Simulate savepoint creation fatal error
+	f.txRepos.executeWithSavepointFn = func(name domain.SavepointName, fn func() error) (domain.SavepointResult, error) {
+		return domain.SavepointResult{}, domain.ErrSavepointCreateFailed
+	}
+
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_sp_fail_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.Nil(t, res)
+	assert.True(t, errors.Is(err, domain.ErrSavepointCreateFailed))
 }
 
 func TestRazorpayProvider_FindOrderByReceipt_Validation(t *testing.T) {

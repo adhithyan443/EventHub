@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	domainfinance "github.com/adhithyan443/EventHub/backend/internal/domain/finance"
 	bookingusecase "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -18,6 +19,7 @@ import (
 type PaymentUsecase struct {
 	transactionManager domain.TransactionManager
 	bookingUsecase     *bookingusecase.BookingUsecase
+	financeUsecase     domain.FinanceUsecase
 	provider           PaymentProvider
 	logger             *slog.Logger
 }
@@ -25,15 +27,32 @@ type PaymentUsecase struct {
 func NewPaymentUsecase(
 	transactionManager domain.TransactionManager,
 	bookingUsecase *bookingusecase.BookingUsecase,
+	financeUsecase domain.FinanceUsecase,
 	provider PaymentProvider,
 	logger *slog.Logger,
-) *PaymentUsecase {
+) (*PaymentUsecase, error) {
+	if transactionManager == nil {
+		return nil, errors.New("transactionManager cannot be nil")
+	}
+	if bookingUsecase == nil {
+		return nil, errors.New("bookingUsecase cannot be nil")
+	}
+	if financeUsecase == nil {
+		return nil, errors.New("financeUsecase cannot be nil")
+	}
+	if provider == nil {
+		return nil, errors.New("provider cannot be nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &PaymentUsecase{
 		transactionManager: transactionManager,
 		bookingUsecase:     bookingUsecase,
+		financeUsecase:     financeUsecase,
 		provider:           provider,
 		logger:             logger,
-	}
+	}, nil
 }
 
 type CreatePaymentRequest struct {
@@ -99,7 +118,7 @@ func (u *PaymentUsecase) CreatePayment(
 				return domain.ErrPaymentAlreadyComplete
 			}
 			if currentBooking.Status != domain.BookingStatusPending {
-				return domain.ErrReservationExpired
+				return domain.ErrPaymentRefundRequired
 			}
 
 			var validationErr error
@@ -403,7 +422,7 @@ func (u *PaymentUsecase) retireAndCreatePayment(
 				return domain.ErrPaymentAlreadyComplete
 			}
 			if currentBooking.Status != domain.BookingStatusPending {
-				return domain.ErrReservationExpired
+				return domain.ErrPaymentRefundRequired
 			}
 
 			if err := tx.PaymentRepository().MarkFailed(ctx, oldPaymentID); err != nil {
@@ -552,7 +571,7 @@ func (u *PaymentUsecase) VerifyPayment(
 	}
 
 	if payment.Status == domain.PaymentStatusRefundRequired {
-		return nil, domain.ErrReservationExpired
+		return nil, domain.ErrPaymentRefundRequired
 	}
 
 	if payment.Status != domain.PaymentStatusPending {
@@ -650,7 +669,7 @@ func (u *PaymentUsecase) VerifyPayment(
 					return nil
 				}
 
-				return domain.ErrReservationExpired
+				return domain.ErrPaymentRefundRequired
 			}
 
 			if current.Status != domain.PaymentStatusPending ||
@@ -764,7 +783,7 @@ func (u *PaymentUsecase) VerifyPayment(
 			slog.String("payment_id", payment.ID),
 			slog.String("booking_id", payment.BookingID),
 		)
-		return nil, domain.ErrReservationExpired
+		return nil, domain.ErrPaymentRefundRequired
 	}
 
 	u.logger.InfoContext(
@@ -831,6 +850,91 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			slog.String("booking_id", booking.ID.String()),
 			slog.String("transaction_id", transactionID),
 		)
+
+		return true, nil
+	}
+
+	// Tax Anomaly Check: Tax configuration is unmapped in the v1 chart of accounts.
+	// If a booking contains a positive tax amount, route immediately to REFUND_REQUIRED,
+	// cancel the booking, and isolate inventory release inside a savepoint so captured payment
+	// state is never rolled back by transient inventory errors.
+	if booking.Tax.IsPositive() {
+		u.logger.ErrorContext(ctx, "tax_booking_refund_required: booking has positive tax but tax account is not configured",
+			slog.String("payment_id", payment.ID),
+			slog.String("booking_id", booking.ID.String()),
+			slog.String("tax", booking.Tax.String()),
+		)
+
+		if err := tx.PaymentRepository().MarkRefundRequired(
+			ctx,
+			payment.ID,
+			transactionID,
+			now,
+		); err != nil {
+			return false, err
+		}
+
+		if currentBooking.Status == domain.BookingStatusPending {
+			if err := tx.BookingRepository().UpdateStatus(
+				ctx,
+				booking.ID,
+				domain.BookingStatusCancelled,
+			); err != nil {
+				return false, err
+			}
+		}
+
+		if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
+			reservationID := *booking.ReservationID
+			spResult, spErr := tx.ExecuteWithSavepoint(domain.SavepointTaxRefundInventory, func() error {
+				cancelled, err := tx.SeatReservationRepository().CancelIfActive(ctx, reservationID, booking.UserID)
+				if err != nil {
+					return fmt.Errorf("failed to cancel reservation %s: %w", reservationID, err)
+				}
+				if !cancelled {
+					return nil
+				}
+
+				if _, err := tx.CheckoutRepository().ExpireActiveByReservationID(ctx, reservationID); err != nil {
+					return fmt.Errorf("failed to expire checkout for reservation %s: %w", reservationID, err)
+				}
+
+				items, err := tx.SeatReservationRepository().FindItemsByReservationID(ctx, reservationID)
+				if err != nil {
+					return fmt.Errorf("failed to find items for reservation %s: %w", reservationID, err)
+				}
+
+				for _, item := range items {
+					if item.SeatID != nil && *item.SeatID != uuid.Nil {
+						if err := tx.SeatRepository().ReleaseReservedSeat(ctx, *item.SeatID); err != nil {
+							return fmt.Errorf("failed to release reserved seat %s: %w", item.SeatID, err)
+						}
+					}
+					if item.TicketTypeID != nil && *item.TicketTypeID != uuid.Nil && item.Quantity > 0 {
+						if err := tx.TicketTypeRepository().ReleaseReservedQuantity(ctx, *item.TicketTypeID, item.Quantity); err != nil {
+							return fmt.Errorf("failed to release reserved quantity for ticket type %s: %w", item.TicketTypeID, err)
+						}
+					}
+				}
+				return nil
+			})
+
+			if spErr != nil {
+				u.logger.ErrorContext(ctx, "fatal savepoint transaction control error during tax refund inventory cancellation",
+					slog.String("reservation_id", reservationID.String()),
+					slog.Any("error", spErr),
+				)
+				return false, spErr
+			}
+
+			if spResult.Status == domain.SavepointStatusRolledBack {
+				u.logger.WarnContext(ctx, "tax_anomaly_inventory_cleanup_deferred_to_expiry_worker",
+					slog.String("booking_id", booking.ID.String()),
+					slog.String("reservation_id", reservationID.String()),
+					slog.Any("callback_error", spResult.CallbackErr),
+				)
+			}
+		}
 
 		return true, nil
 	}
@@ -966,6 +1070,50 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 				return false, err
 			}
 		}
+	}
+
+	// Finance Ledger Recording: Atomically post double-entry financial journal for payment capture.
+	event, err := tx.EventRepository().FindByID(booking.EventID)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "failed to find event for payment capture finance journal",
+			slog.String("event_id", booking.EventID.String()),
+			slog.Any("error", err),
+		)
+		return false, err
+	}
+
+	paymentUUID, err := uuid.Parse(payment.ID)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "invalid payment ID UUID for finance journal",
+			slog.String("payment_id", payment.ID),
+			slog.Any("error", err),
+		)
+		return false, fmt.Errorf("invalid payment UUID %s: %w", payment.ID, err)
+	}
+
+	financeInput := domain.RecordPaymentCaptureInput{
+		PaymentID:     paymentUUID,
+		PaymentAmount: payment.Amount,
+		Currency:      domainfinance.CurrencyINR,
+		BookingID:     booking.ID,
+		Subtotal:      booking.Subtotal,
+		PlatformFee:   booking.PlatformFee,
+		Tax:           booking.Tax,
+		Discount:      booking.Discount,
+		Total:         booking.Total,
+		EventID:       booking.EventID,
+		OrganizerID:   event.OrganizerID,
+		UserID:        booking.UserID,
+		CapturedAt:    now,
+	}
+
+	if _, err := u.financeUsecase.RecordPaymentCaptureWithinTx(ctx, tx, financeInput); err != nil {
+		u.logger.ErrorContext(ctx, "failed to record payment capture in financial ledger",
+			slog.String("payment_id", payment.ID),
+			slog.String("booking_id", booking.ID.String()),
+			slog.Any("error", err),
+		)
+		return false, err
 	}
 
 	// Step 2: Mark payment successful.

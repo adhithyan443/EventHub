@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -53,6 +54,9 @@ type transactionRepositories struct {
 	razorpayWebhookEventRepo domain.RazorpayWebhookEventRepository
 	pricingTaxRepo           domain.PricingTaxConfigurationRepository
 	invoiceRepo              domain.InvoiceRepository
+
+	financeAccountRepo domain.FinanceAccountRepository
+	financeJournalRepo domain.FinanceJournalRepository
 }
 
 func NewTransactionManager(
@@ -153,6 +157,9 @@ func (m *TransactionManager) WithinTransaction(
 			razorpayWebhookEventRepo: NewRazorpayWebhookEventRepository(txDB, m.logger),
 			pricingTaxRepo:           NewPricingTaxRepository(txDB, m.logger),
 			invoiceRepo:              NewInvoiceRepository(txDB, m.logger),
+
+			financeAccountRepo: NewFinanceAccountRepository(txDB, m.logger),
+			financeJournalRepo: NewFinanceJournalRepository(txDB, m.logger),
 		}
 
 		return fn(txRepos)
@@ -290,4 +297,63 @@ func (r *transactionRepositories) PricingTaxConfigurationRepository() domain.Pri
 
 func (r *transactionRepositories) InvoiceRepository() domain.InvoiceRepository {
 	return r.invoiceRepo
+}
+
+func (r *transactionRepositories) FinanceAccountRepository() domain.FinanceAccountRepository {
+	return r.financeAccountRepo
+}
+
+func (r *transactionRepositories) FinanceJournalRepository() domain.FinanceJournalRepository {
+	return r.financeJournalRepo
+}
+
+var trustedSavepoints = map[domain.SavepointName]struct{}{
+	domain.SavepointTaxRefundInventory: {},
+}
+
+func (r *transactionRepositories) ExecuteWithSavepoint(
+	name domain.SavepointName,
+	fn func() error,
+) (domain.SavepointResult, error) {
+	if fn == nil {
+		return domain.SavepointResult{}, domain.ErrNilSavepointCallback
+	}
+
+	if _, ok := trustedSavepoints[name]; !ok {
+		return domain.SavepointResult{}, domain.ErrInvalidSavepointName
+	}
+
+	// 1. Establish savepoint
+	if err := r.txDB.Exec(fmt.Sprintf("SAVEPOINT %s", name)).Error; err != nil {
+		return domain.SavepointResult{}, fmt.Errorf("%w: %w", domain.ErrSavepointCreateFailed, err)
+	}
+
+	// 2. Execute callback
+	fnErr := fn()
+	if fnErr == nil {
+		// 3. Success path: release savepoint
+		if err := r.txDB.Exec(fmt.Sprintf("RELEASE SAVEPOINT %s", name)).Error; err != nil {
+			return domain.SavepointResult{}, fmt.Errorf("%w: %w", domain.ErrSavepointReleaseFail, err)
+		}
+		return domain.SavepointResult{
+			Status:      domain.SavepointStatusCommitted,
+			CallbackErr: nil,
+		}, nil
+	}
+
+	// 4. Failure path: rollback to savepoint
+	if rbErr := r.txDB.Exec(fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", name)).Error; rbErr != nil {
+		return domain.SavepointResult{}, fmt.Errorf("%w: %w (callback error: %v)", domain.ErrSavepointRollbackFail, rbErr, fnErr)
+	}
+
+	// 5. Post-rollback explicit release of savepoint
+	if relErr := r.txDB.Exec(fmt.Sprintf("RELEASE SAVEPOINT %s", name)).Error; relErr != nil {
+		return domain.SavepointResult{}, fmt.Errorf("%w: %w (callback error: %v)", domain.ErrSavepointReleaseFail, relErr, fnErr)
+	}
+
+	// 6. Return recoverable rolled-back status with the original callback error
+	return domain.SavepointResult{
+		Status:      domain.SavepointStatusRolledBack,
+		CallbackErr: fnErr,
+	}, nil
 }

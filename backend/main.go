@@ -26,6 +26,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/checkout"
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
+	financeusecase "github.com/adhithyan443/EventHub/backend/internal/usecase/finance"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
@@ -81,6 +82,13 @@ func main() {
 	}
 
 	logger.Info("category seeding completed")
+
+	if err := database.SeedFinanceAccounts(db, logger); err != nil {
+		logger.Error("finance accounts seeding failed", "error", err)
+		return
+	}
+
+	logger.Info("finance accounts seeding completed")
 
 	qrService, err := ticket.NewQRService(cfg.QRSecret)
 	if err != nil {
@@ -183,13 +191,28 @@ func main() {
 		logger,
 	)
 
+	// Finance dependencies.
+	financeUsecase, err := financeusecase.NewFinanceUsecase(
+		txManager,
+		logger,
+	)
+	if err != nil {
+		logger.Error("finance usecase initialization failed", "error", err)
+		return
+	}
+
 	// Payment dependencies.
-	paymentUsecase := payment.NewPaymentUsecase(
+	paymentUsecase, err := payment.NewPaymentUsecase(
 		txManager,
 		bookingUsecase,
+		financeUsecase,
 		razorpayProvider,
 		logger,
 	)
+	if err != nil {
+		logger.Error("payment usecase initialization failed", "error", err)
+		return
+	}
 
 	paymentHandler := handler.NewPaymentHandler(
 		paymentUsecase,
@@ -356,6 +379,15 @@ func main() {
 	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)
 	adminEventHandler := handler.NewAdminEventHandler(adminEventUsecase, logger)
 
+	// Admin payments dependencies.
+	paymentRepo := repository.NewPaymentRepository(db, logger)
+	adminPaymentUsecase, err := payment.NewAdminPaymentUsecase(paymentRepo, logger)
+	if err != nil {
+		logger.Error("admin payment usecase initialization failed", "error", err)
+		return
+	}
+	adminPaymentHandler := handler.NewAdminPaymentHandler(adminPaymentUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -374,6 +406,7 @@ func main() {
 		adminUserHandler,
 		adminOrganizerHandler,
 		adminEventHandler,
+		adminPaymentHandler,
 		profileHandler,
 		jwtService,
 		userRepo,

@@ -30,6 +30,7 @@ func setupRouter(
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	adminEventHandler *handler.AdminEventHandler,
+	adminPaymentHandler *handler.AdminPaymentHandler,
 	profileHandler *handler.ProfileHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
@@ -86,6 +87,7 @@ func setupRouter(
 		adminUserHandler,
 		adminOrganizerHandler,
 		adminEventHandler,
+		adminPaymentHandler,
 		jwtService,
 		userRepo,
 	)
@@ -274,6 +276,7 @@ func registerAdminRoutes(
 	adminUserHandler *handler.AdminUserHandler,
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	adminEventHandler *handler.AdminEventHandler,
+	adminPaymentHandler *handler.AdminPaymentHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -285,6 +288,9 @@ func registerAdminRoutes(
 		middleware.RequireActiveUser(userRepo),
 		middleware.RequireRole("ADMIN"),
 	)
+
+	// Payment management endpoints
+	admin.GET("/payments", adminPaymentHandler.ListPayments)
 
 	// User management endpoints
 	admin.GET("/users", adminUserHandler.ListUsers)

@@ -126,7 +126,7 @@ func (h *OrganizerApplicationHandler) SubmitApplication(ctx *gin.Context) {
 
 			req.LogoReader = logoFile
 			req.LogoContentType = logoType
-			req.LogoSize = logoHeader.Size
+			// req.LogoSize = logoHeader.Size
 		} else if strings.TrimSpace(logoHeader.Filename) != "" && logoHeader.Size <= 0 {
 			// A file was explicitly named, but its content is 0 bytes.
 			ctx.Error(appErrors.NewValidationError("uploaded file is empty"))
