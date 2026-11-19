@@ -27,6 +27,7 @@ export const ORGANIZER_ROUTES = Object.freeze({
   EDIT_EVENT: "/organizer/events/:eventId/edit",
   BOOKINGS: "/organizer/bookings",
   ATTENDEES: "/organizer/attendees",
+  PAYMENTS: "/organizer/payments",
   REPORTS: "/organizer/reports",
   SETTINGS: "/organizer/settings",
   PROFILE: "/organizer/profile",

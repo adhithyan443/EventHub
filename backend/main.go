@@ -388,12 +388,26 @@ func main() {
 	}
 	adminPaymentHandler := handler.NewAdminPaymentHandler(adminPaymentUsecase, logger)
 
+	// Organizer payments dependencies.
+	organizerPaymentUsecase, err := payment.NewOrganizerPaymentUsecase(
+		paymentRepo,
+		organizerRepo,
+		eventRepository,
+		logger,
+	)
+	if err != nil {
+		logger.Error("organizer payment usecase initialization failed", "error", err)
+		return
+	}
+	organizerPaymentHandler := handler.NewOrganizerPaymentHandler(organizerPaymentUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
 		authHandler,
 		organizerApplicationHandler,
 		organizerProfileHandler,
+		organizerPaymentHandler,
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,

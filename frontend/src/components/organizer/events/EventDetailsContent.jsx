@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import StatusBadge from "./StatusBadge";
 import ProgressBar from "./ProgressBar";
 import {
@@ -8,12 +9,17 @@ import {
   TicketDetailIcon,
   CheckCircleIcon,
 } from "./OrganizerEventsIcons";
+import { formatCurrency } from "../../../utils/formatters";
+import { ORGANIZER_ROUTES } from "../../../constants/eventConstants";
 
 export default function EventDetailsContent({
   event,
   isPreview = false,
   rightColumnExtra = null,
+  paymentSummary = null,
+  loadingPaymentSummary = false,
 }) {
+  const navigate = useNavigate();
   const eventData = event?.Event || {};
   const schedule = event?.Schedule || {};
   const venue = event?.Venue || {};
@@ -138,17 +144,18 @@ export default function EventDetailsContent({
     );
 
   const ticketsSold =
-    statistics?.TicketsSold ??
-    ticketTypes.reduce(
-      (total, ticket) => total + Number(ticket.SoldQuantity || 0),
-      0
-    );
+    paymentSummary !== null && paymentSummary !== undefined
+      ? Number(paymentSummary.tickets_sold ?? 0)
+      : statistics?.TicketsSold ??
+        ticketTypes.reduce(
+          (total, ticket) => total + Number(ticket.SoldQuantity || 0),
+          0
+        );
 
   const percentageSold =
     statistics?.PercentageSold ??
     (ticketCapacity > 0 ? Math.round((ticketsSold / ticketCapacity) * 100) : 0);
 
-  const revenue = statistics?.Revenue ?? 0;
   const highlights = parseHighlights(eventData?.Highlights);
 
   return (
@@ -198,14 +205,16 @@ export default function EventDetailsContent({
 
           <div className="flex flex-col">
             <span className="text-2xl sm:text-3xl font-bold text-[#141b2b]">
-              ₹{Number(revenue).toLocaleString("en-IN")}
+              {loadingPaymentSummary
+                ? "—"
+                : formatCurrency(paymentSummary?.gross_captured_amount ?? 0)}
             </span>
             <span className="text-xs text-[#565e74] mt-0.5">
               {isPreview
                 ? "Pre-launch estimate"
-                : statistics?.IsMock
-                ? "Mock value — payments not implemented"
-                : "Gross sales to date"}
+                : paymentSummary
+                ? `Net Earnings: ${formatCurrency(paymentSummary.organizer_earnings ?? 0)}`
+                : "No ticket sales recorded yet"}
             </span>
           </div>
         </div>
@@ -347,6 +356,122 @@ export default function EventDetailsContent({
               )}
             </div>
           </div>
+
+          {/* Financial Performance & Revenue Card */}
+          {!isPreview && (
+            <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#bcc9c6]/40">
+                <div className="flex flex-col">
+                  <h2 className="text-lg font-bold text-[#141b2b]">
+                    Financial Performance & Revenue
+                  </h2>
+                  <span className="text-xs text-[#565e74]">
+                    Event-scoped ledger allocation and payment metrics
+                  </span>
+                </div>
+
+                {eventData?.ID && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate(
+                        `${ORGANIZER_ROUTES.PAYMENTS}?event_id=${eventData.ID}&view=ALL_PAYMENTS`
+                      )
+                    }
+                    className="text-xs font-semibold text-[#00685f] hover:underline flex items-center gap-1 self-start sm:self-auto cursor-pointer"
+                  >
+                    <span>View Event Transactions</span>
+                    <span>→</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-4 bg-[#f9f9ff] border border-[#bcc9c6]/40 rounded-lg flex flex-col justify-between">
+                  <span className="text-xs font-medium text-[#565e74]">
+                    Gross Captured Revenue
+                  </span>
+                  <span className="text-xl font-bold text-[#141b2b] mt-1">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : formatCurrency(
+                          paymentSummary?.gross_captured_amount ?? 0
+                        )}
+                  </span>
+                  <span className="text-[11px] text-[#565e74] mt-1">
+                    Total attendee payments
+                  </span>
+                </div>
+
+                <div className="p-4 bg-[#f9f9ff] border border-[#bcc9c6]/40 rounded-lg flex flex-col justify-between">
+                  <span className="text-xs font-medium text-[#565e74]">
+                    Platform Service Fee
+                  </span>
+                  <span className="text-xl font-bold text-[#ba1a1a] mt-1">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : formatCurrency(paymentSummary?.platform_fees ?? 0)}
+                  </span>
+                  <span className="text-[11px] text-[#565e74] mt-1">
+                    Platform commission
+                  </span>
+                </div>
+
+                <div className="p-4 bg-emerald-50/70 border border-emerald-200/60 rounded-lg flex flex-col justify-between">
+                  <span className="text-xs font-medium text-emerald-800">
+                    Organizer Allocated Earnings
+                  </span>
+                  <span className="text-xl font-bold text-emerald-900 mt-1">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : formatCurrency(
+                          paymentSummary?.organizer_earnings ?? 0
+                        )}
+                  </span>
+                  <span className="text-[11px] text-emerald-700 mt-1">
+                    Net earnings payable
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2 text-xs">
+                <div className="p-2.5 rounded-lg border border-[#bcc9c6]/30 bg-white">
+                  <span className="text-[#565e74] block">Completed Payments</span>
+                  <span className="text-sm font-bold text-[#141b2b]">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : paymentSummary?.successfully_completed_payments_count ??
+                        0}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg border border-[#bcc9c6]/30 bg-white">
+                  <span className="text-[#565e74] block">Pending Payments</span>
+                  <span className="text-sm font-bold text-amber-700">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : paymentSummary?.pending_payments_count ?? 0}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg border border-[#bcc9c6]/30 bg-white">
+                  <span className="text-[#565e74] block">Failed Payments</span>
+                  <span className="text-sm font-bold text-red-600">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : paymentSummary?.failed_payments_count ?? 0}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg border border-[#bcc9c6]/30 bg-white">
+                  <span className="text-[#565e74] block">Refunded</span>
+                  <span className="text-sm font-bold text-purple-700">
+                    {loadingPaymentSummary
+                      ? "—"
+                      : paymentSummary?.payments_with_successful_refunds_count ??
+                        0}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Ticket Tiers Breakdown Card */}
           <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-4">

@@ -19,6 +19,7 @@ import {
   deleteOrganizerEvent,
   publishOrganizerEvent,
 } from "../../api/organizerApi";
+import { getOrganizerEventPaymentSummaries } from "../../api/organizerPaymentApi";
 
 import notify from "../../utils/toast";
 import DeleteEventConfirmationModal from "../../components/organizer/events/DeleteEventConfirmationModal";
@@ -31,6 +32,10 @@ export default function EventDetailsPage() {
   const location = useLocation();
 
   const [event, setEvent] = useState(null);
+  const [paymentSummary, setPaymentSummary] = useState(null);
+  const [loadingPaymentSummary, setLoadingPaymentSummary] = useState(
+    Boolean(eventId)
+  );
 
   const [loading, setLoading] = useState(Boolean(eventId));
   const [error, setError] = useState(
@@ -105,26 +110,58 @@ export default function EventDetailsPage() {
   useEffect(() => {
     let isMounted = true;
     if (eventId) {
-      getOrganizerEventById(eventId)
-        .then((response) => {
-          if (!isMounted) return;
-          if (!response?.success || !response?.data) {
-            throw new Error("Unable to load event details.");
-          }
-          setEvent(response.data);
-          setLoading(false);
-        })
-        .catch((err) => {
-          if (!isMounted) return;
-          console.error("Failed to fetch organizer event details:", err);
-          setError(
-            err?.response?.data?.message ||
-              err?.response?.data?.error ||
-              err?.message ||
-              "Unable to load event details."
-          );
-          setLoading(false);
-        });
+      const timer = setTimeout(() => {
+        setLoadingPaymentSummary(true);
+        setPaymentSummary(null);
+
+        getOrganizerEventById(eventId)
+          .then((response) => {
+            if (!isMounted) return;
+            if (!response?.success || !response?.data) {
+              throw new Error("Unable to load event details.");
+            }
+            setEvent(response.data);
+            setLoading(false);
+          })
+          .catch((err) => {
+            if (!isMounted) return;
+            console.error("Failed to fetch organizer event details:", err);
+            setError(
+              err?.response?.data?.message ||
+                err?.response?.data?.error ||
+                err?.message ||
+                "Unable to load event details."
+            );
+            setLoading(false);
+          });
+
+        getOrganizerEventPaymentSummaries({ eventId })
+          .then((data) => {
+            if (!isMounted) return;
+            const summaries = Array.isArray(data?.summaries)
+              ? data.summaries
+              : Array.isArray(data)
+              ? data
+              : [];
+            const match =
+              summaries.find((s) => String(s.event_id) === String(eventId)) ||
+              summaries[0] ||
+              null;
+            setPaymentSummary(match);
+            setLoadingPaymentSummary(false);
+          })
+          .catch((err) => {
+            if (!isMounted) return;
+            console.error("Failed to fetch event payment summary:", err);
+            setPaymentSummary(null);
+            setLoadingPaymentSummary(false);
+          });
+      }, 0);
+
+      return () => {
+        isMounted = false;
+        clearTimeout(timer);
+      };
     }
     return () => {
       isMounted = false;
@@ -350,6 +387,8 @@ export default function EventDetailsPage() {
       {/* Event Details Content */}
       <EventDetailsContent
         event={event}
+        paymentSummary={paymentSummary}
+        loadingPaymentSummary={loadingPaymentSummary}
         rightColumnExtra={
           <div className="bg-white border border-[#bcc9c6] rounded-xl p-5 sm:p-6 shadow-2xs flex flex-col gap-3">
             <h3 className="text-base font-bold text-[#141b2b] pb-2 border-b border-[#bcc9c6]/40">

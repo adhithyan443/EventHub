@@ -18,6 +18,7 @@ func setupRouter(
 	authHandler *handler.AuthHandler,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	organizerProfileHandler *handler.OrganizerProfileHandler,
+	organizerPaymentHandler *handler.OrganizerPaymentHandler,
 	categoryHandler *handler.CategoryHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
@@ -74,6 +75,7 @@ func setupRouter(
 		router,
 		organizerApplicationHandler,
 		organizerProfileHandler,
+		organizerPaymentHandler,
 		eventHandler,
 		seatLayoutHandler,
 		jwtService,
@@ -197,6 +199,7 @@ func registerOrganizerRoutes(
 	router *gin.Engine,
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	organizerProfileHandler *handler.OrganizerProfileHandler,
+	organizerPaymentHandler *handler.OrganizerPaymentHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	jwtService *token.JWTService,
@@ -226,6 +229,17 @@ func registerOrganizerRoutes(
 		"/profile",
 		organizerProfileHandler.GetProfile,
 	)
+
+	// Organizer payment endpoints (protected by role ORGANIZER).
+	if organizerPaymentHandler != nil {
+		payments := organizer.Group("/payments")
+		payments.Use(middleware.RequireRole("ORGANIZER"))
+		{
+			payments.GET("/overview", organizerPaymentHandler.GetPaymentOverview)
+			payments.GET("/summary-by-event", organizerPaymentHandler.GetEventPaymentSummaries)
+			payments.GET("", organizerPaymentHandler.ListPayments)
+		}
+	}
 
 	// Organizer event endpoints.
 	organizer.POST(
