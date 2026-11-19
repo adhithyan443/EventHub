@@ -194,6 +194,19 @@ func (m *mockPaymentRepo) FindAdminPayments(
 	}, nil
 }
 
+func (m *mockPaymentRepo) GetEventPaymentSummaries(
+	ctx context.Context,
+	filter domain.AdminPaymentFilter,
+) (*domain.AdminEventPaymentSummaryResult, error) {
+	return &domain.AdminEventPaymentSummaryResult{
+		Summaries:    []domain.AdminEventPaymentSummary{},
+		TotalRecords: 0,
+		Page:         filter.Page,
+		Limit:        filter.Limit,
+		TotalPages:   0,
+	}, nil
+}
+
 type mockBookingRepo struct {
 	mu           sync.Mutex
 	bookings     map[uuid.UUID]*domain.Booking

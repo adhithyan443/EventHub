@@ -87,7 +87,50 @@ func (u *AdminPaymentUsecase) ListPayments(
 		slog.String("status", filter.Status),
 		slog.String("allocation_status", filter.AllocationStatus),
 		slog.Bool("has_search", filter.Search != ""),
+		slog.Bool("has_event_id", filter.EventID != nil),
 	)
 
 	return u.paymentRepo.FindAdminPayments(ctx, filter)
+}
+
+func (u *AdminPaymentUsecase) GetEventPaymentSummaries(
+	ctx context.Context,
+	filter domain.AdminPaymentFilter,
+) (*domain.AdminEventPaymentSummaryResult, error) {
+	const maxSafePage = 100_000
+	if filter.Page < 1 {
+		filter.Page = 1
+	} else if filter.Page > maxSafePage {
+		filter.Page = maxSafePage
+	}
+
+	if filter.Limit < 1 {
+		filter.Limit = 10
+	} else if filter.Limit > 100 {
+		filter.Limit = 100
+	}
+
+	filter.Search = strings.TrimSpace(filter.Search)
+
+	if filter.From != nil {
+		fromUTC := filter.From.UTC()
+		filter.From = &fromUTC
+	}
+	if filter.To != nil {
+		toUTC := filter.To.UTC()
+		filter.To = &toUTC
+	}
+
+	if filter.From != nil && filter.To != nil && filter.From.After(*filter.To) {
+		return nil, ErrInvalidDateRange
+	}
+
+	u.logger.InfoContext(ctx, "admin_event_payment_summary_requested",
+		slog.Int("page", filter.Page),
+		slog.Int("limit", filter.Limit),
+		slog.Bool("has_search", filter.Search != ""),
+		slog.Bool("has_event_id", filter.EventID != nil),
+	)
+
+	return u.paymentRepo.GetEventPaymentSummaries(ctx, filter)
 }

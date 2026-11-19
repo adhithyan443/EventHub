@@ -290,6 +290,7 @@ func registerAdminRoutes(
 	)
 
 	// Payment management endpoints
+	admin.GET("/payments/summary-by-event", adminPaymentHandler.GetEventPaymentSummaries)
 	admin.GET("/payments", adminPaymentHandler.ListPayments)
 
 	// User management endpoints

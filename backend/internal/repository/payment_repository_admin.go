@@ -146,6 +146,10 @@ func (r *paymentRepository) buildAdminPaymentQuery(
 		)
 	}
 
+	if filter.EventID != nil {
+		query = query.Where("b.event_id = ?", *filter.EventID)
+	}
+
 	return query
 }
 
@@ -310,5 +314,211 @@ func (r *paymentRepository) FindAdminPayments(
 		Page:         page,
 		Limit:        limit,
 		TotalPages:   totalPages,
+	}, nil
+}
+
+type adminOverallPaymentSummaryRow struct {
+	TotalEvents              int64           `gorm:"column:total_events"`
+	GrossCapturedAmount      decimal.Decimal `gorm:"column:gross_captured_amount"`
+	RefundRequiredCount      int64           `gorm:"column:refund_required_count"`
+	UnallocatedCapturedCount int64           `gorm:"column:unallocated_captured_count"`
+}
+
+type adminEventPaymentSummaryRow struct {
+	EventID                            uuid.UUID       `gorm:"column:event_id"`
+	EventTitle                         string          `gorm:"column:event_title"`
+	OrganizerID                        uuid.UUID       `gorm:"column:organizer_id"`
+	OrganizerBusinessName              string          `gorm:"column:organizer_business_name"`
+	TotalPaymentsCount                 int64           `gorm:"column:total_payments_count"`
+	SuccessfullyCompletedPaymentsCount int64           `gorm:"column:successfully_completed_payments_count"`
+	GrossCapturedAmount                decimal.Decimal `gorm:"column:gross_captured_amount"`
+	PendingPaymentsCount               int64           `gorm:"column:pending_payments_count"`
+	FailedPaymentsCount                int64           `gorm:"column:failed_payments_count"`
+	RefundRequiredCount                int64           `gorm:"column:refund_required_count"`
+	PaymentsWithSuccessfulRefundsCount int64           `gorm:"column:payments_with_successful_refunds_count"`
+	UnallocatedCapturedCount           int64           `gorm:"column:unallocated_captured_count"`
+}
+
+func (r *paymentRepository) buildAdminEventSummaryBaseQuery(
+	ctx context.Context,
+	filter domain.AdminPaymentFilter,
+) *gorm.DB {
+	query := r.db.WithContext(ctx).Table("events AS e").
+		Joins("JOIN organizers AS o ON o.id = e.organizer_id").
+		Joins("LEFT JOIN organizer_profiles AS op ON op.organizer_id = o.id").
+		Joins("JOIN bookings AS b ON b.event_id = e.id").
+		Joins("JOIN payments AS p ON p.booking_id = b.id")
+
+	if filter.From != nil {
+		fromUTC := filter.From.UTC()
+		query = query.Where("COALESCE(p.paid_at, p.created_at) >= ?", fromUTC)
+	}
+
+	if filter.To != nil {
+		toUTC := filter.To.UTC()
+		query = query.Where("COALESCE(p.paid_at, p.created_at) <= ?", toUTC)
+	}
+
+	if filter.EventID != nil {
+		query = query.Where("e.id = ?", *filter.EventID)
+	}
+
+	if strings.TrimSpace(filter.Search) != "" {
+		searchTerm := "%" + strings.ToLower(strings.TrimSpace(filter.Search)) + "%"
+		query = query.Where(
+			`(LOWER(COALESCE(e.title, '')) LIKE ? OR
+			  LOWER(COALESCE(op.business_name, '')) LIKE ? OR
+			  e.id::text LIKE ?)`,
+			searchTerm, searchTerm, searchTerm,
+		)
+	}
+
+	return query
+}
+
+func (r *paymentRepository) GetEventPaymentSummaries(
+	ctx context.Context,
+	filter domain.AdminPaymentFilter,
+) (*domain.AdminEventPaymentSummaryResult, error) {
+	const maxSafePage = 100_000
+	page := filter.Page
+	if page < 1 {
+		page = 1
+	} else if page > maxSafePage {
+		page = maxSafePage
+	}
+
+	limit := filter.Limit
+	if limit < 1 {
+		limit = 10
+	} else if limit > 100 {
+		limit = 100
+	}
+
+	offset64 := int64(page-1) * int64(limit)
+	if offset64 < 0 || offset64 > math.MaxInt32 {
+		offset64 = math.MaxInt32
+	}
+	offset := int(offset64)
+
+	allocationExpr := buildAllocationStatusExpression()
+
+	// Query A: Overall Summary across all matching events (independent of pagination)
+	overallSelectClause := fmt.Sprintf(`
+		COUNT(DISTINCT e.id) AS total_events,
+		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
+		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
+			SELECT SUM(r.amount) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id 
+			  AND r.status = 'SUCCESS' 
+			  AND r.gateway_refund_id IS NOT NULL 
+			  AND r.processed_at IS NOT NULL
+		), 0) THEN 1 END) AS refund_required_count,
+		COUNT(CASE WHEN (%s) = 'UNALLOCATED' THEN 1 END) AS unallocated_captured_count
+	`, allocationExpr)
+
+	var overallRow adminOverallPaymentSummaryRow
+	overallQuery := r.buildAdminEventSummaryBaseQuery(ctx, filter)
+	if err := overallQuery.Select(overallSelectClause).Scan(&overallRow).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query overall admin payment summary", slog.Any("error", err))
+		return nil, err
+	}
+
+	totalRecords := overallRow.TotalEvents
+	var totalPages int
+	if totalRecords > 0 && limit > 0 {
+		totalPages = int((totalRecords + int64(limit) - 1) / int64(limit))
+	}
+
+	overallSummary := domain.AdminOverallPaymentSummary{
+		TotalEvents:              overallRow.TotalEvents,
+		GrossCapturedAmount:      overallRow.GrossCapturedAmount,
+		Currency:                 finance.CurrencyINR,
+		RefundRequiredCount:      overallRow.RefundRequiredCount,
+		UnallocatedCapturedCount: overallRow.UnallocatedCapturedCount,
+	}
+
+	// Early return if no events matched or offset exceeds totalRecords
+	if totalRecords == 0 || int64(offset) >= totalRecords {
+		return &domain.AdminEventPaymentSummaryResult{
+			Summaries:      make([]domain.AdminEventPaymentSummary, 0),
+			OverallSummary: overallSummary,
+			TotalRecords:   totalRecords,
+			Page:           page,
+			Limit:          limit,
+			TotalPages:     totalPages,
+		}, nil
+	}
+
+	// Query B: Paginated event-wise summaries
+	eventSelectClause := fmt.Sprintf(`
+		e.id AS event_id,
+		COALESCE(e.title, '') AS event_title,
+		o.id AS organizer_id,
+		COALESCE(op.business_name, '') AS organizer_business_name,
+		COUNT(p.id) AS total_payments_count,
+		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
+		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
+		COUNT(CASE WHEN p.status = 'PENDING' THEN 1 END) AS pending_payments_count,
+		COUNT(CASE WHEN p.status = 'FAILED' THEN 1 END) AS failed_payments_count,
+		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
+			SELECT SUM(r.amount) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id 
+			  AND r.status = 'SUCCESS' 
+			  AND r.gateway_refund_id IS NOT NULL 
+			  AND r.processed_at IS NOT NULL
+		), 0) THEN 1 END) AS refund_required_count,
+		COUNT(CASE WHEN EXISTS (
+			SELECT 1 
+			FROM refunds r 
+			WHERE r.payment_id = p.id 
+			  AND r.status = 'SUCCESS' 
+			  AND r.gateway_refund_id IS NOT NULL 
+			  AND r.processed_at IS NOT NULL
+		) THEN 1 END) AS payments_with_successful_refunds_count,
+		COUNT(CASE WHEN (%s) = 'UNALLOCATED' THEN 1 END) AS unallocated_captured_count
+	`, allocationExpr)
+
+	var eventRows []adminEventPaymentSummaryRow
+	eventQuery := r.buildAdminEventSummaryBaseQuery(ctx, filter)
+	if err := eventQuery.Select(eventSelectClause).
+		Group("e.id, e.title, o.id, op.business_name").
+		Order("gross_captured_amount DESC, e.id DESC").
+		Limit(limit).
+		Offset(offset).
+		Scan(&eventRows).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query admin event payment summaries", slog.Any("error", err))
+		return nil, err
+	}
+
+	summaries := make([]domain.AdminEventPaymentSummary, 0, len(eventRows))
+	for _, row := range eventRows {
+		item := domain.AdminEventPaymentSummary{
+			EventID:                            row.EventID,
+			EventTitle:                         row.EventTitle,
+			OrganizerID:                        row.OrganizerID,
+			OrganizerBusinessName:              row.OrganizerBusinessName,
+			TotalPaymentsCount:                 row.TotalPaymentsCount,
+			SuccessfullyCompletedPaymentsCount: row.SuccessfullyCompletedPaymentsCount,
+			GrossCapturedAmount:                row.GrossCapturedAmount,
+			Currency:                           finance.CurrencyINR,
+			PendingPaymentsCount:               row.PendingPaymentsCount,
+			FailedPaymentsCount:                row.FailedPaymentsCount,
+			RefundRequiredCount:                row.RefundRequiredCount,
+			PaymentsWithSuccessfulRefundsCount: row.PaymentsWithSuccessfulRefundsCount,
+			UnallocatedCapturedCount:           row.UnallocatedCapturedCount,
+		}
+		summaries = append(summaries, item)
+	}
+
+	return &domain.AdminEventPaymentSummaryResult{
+		Summaries:      summaries,
+		OverallSummary: overallSummary,
+		TotalRecords:   totalRecords,
+		Page:           page,
+		Limit:          limit,
+		TotalPages:     totalPages,
 	}, nil
 }

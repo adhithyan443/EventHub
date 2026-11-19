@@ -66,6 +66,40 @@ type AdminPaymentFilter struct {
 	From             *time.Time
 	To               *time.Time
 	Search           string
+	EventID          *uuid.UUID
+}
+
+type AdminEventPaymentSummary struct {
+	EventID                            uuid.UUID       `json:"event_id"`
+	EventTitle                         string          `json:"event_title"`
+	OrganizerID                        uuid.UUID       `json:"organizer_id"`
+	OrganizerBusinessName              string          `json:"organizer_business_name"`
+	TotalPaymentsCount                 int64           `json:"total_payments_count"`
+	SuccessfullyCompletedPaymentsCount int64           `json:"successfully_completed_payments_count"`
+	GrossCapturedAmount                decimal.Decimal `json:"gross_captured_amount"`
+	Currency                           string          `json:"currency"`
+	PendingPaymentsCount               int64           `json:"pending_payments_count"`
+	FailedPaymentsCount                int64           `json:"failed_payments_count"`
+	RefundRequiredCount                int64           `json:"refund_required_count"`
+	PaymentsWithSuccessfulRefundsCount int64           `json:"payments_with_successful_refunds_count"`
+	UnallocatedCapturedCount           int64           `json:"unallocated_captured_count"`
+}
+
+type AdminOverallPaymentSummary struct {
+	TotalEvents              int64           `json:"total_events"`
+	GrossCapturedAmount      decimal.Decimal `json:"gross_captured_amount"`
+	Currency                 string          `json:"currency"`
+	RefundRequiredCount      int64           `json:"refund_required_count"`
+	UnallocatedCapturedCount int64           `json:"unallocated_captured_count"`
+}
+
+type AdminEventPaymentSummaryResult struct {
+	Summaries      []AdminEventPaymentSummary `json:"summaries"`
+	OverallSummary AdminOverallPaymentSummary `json:"overall_summary"`
+	TotalRecords   int64                      `json:"total_records"`
+	Page           int                        `json:"page"`
+	Limit          int                        `json:"limit"`
+	TotalPages     int                        `json:"total_pages"`
 }
 
 type AdminPaymentCustomerInfo struct {
@@ -165,4 +199,9 @@ type PaymentRepository interface {
 		ctx context.Context,
 		filter AdminPaymentFilter,
 	) (*AdminPaymentListResult, error)
+
+	GetEventPaymentSummaries(
+		ctx context.Context,
+		filter AdminPaymentFilter,
+	) (*AdminEventPaymentSummaryResult, error)
 }

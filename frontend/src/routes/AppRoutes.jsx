@@ -26,6 +26,7 @@ import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
 import AdminUsersPage from "../pages/admin/AdminUsersPage";
 import AdminEventsPage from "../pages/admin/AdminEventsPage";
+import AdminPaymentsPage from "../pages/admin/AdminPaymentsPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
 import AdminPricingTaxPage from "../pages/admin/AdminPricingTaxPage";
 import AdminProfilePage from "../pages/admin/AdminProfilePage";
@@ -110,7 +111,7 @@ export default function AppRoutes() {
                     <Route path="users" element={<AdminUsersPage />} />
                     <Route path="events" element={<AdminEventsPage />} />
                     <Route path="bookings" element={<AdminPlaceholderPage title="Bookings" />} />
-                    <Route path="payments" element={<AdminPlaceholderPage title="Payments & Refunds" />} />
+                    <Route path="payments" element={<AdminPaymentsPage />} />
                     <Route path="pricing-tax" element={<AdminPricingTaxPage />} />
                     <Route path="categories" element={<AdminPlaceholderPage title="Categories" />} />
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />
