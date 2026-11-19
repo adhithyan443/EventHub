@@ -1829,7 +1829,7 @@ func TestVerifyPayment_NormalPaymentCaptureCreatesFinancialJournal(t *testing.T)
 	assert.Equal(t, "INR", captured.Currency)
 }
 
-func TestVerifyPayment_TaxAnomalyRoutesToRefundRequired(t *testing.T) {
+func TestVerifyPayment_PositiveTaxCompletesSuccessfully(t *testing.T) {
 	f := setupFixture(t)
 	ctx := context.Background()
 
@@ -1840,46 +1840,53 @@ func TestVerifyPayment_TaxAnomalyRoutesToRefundRequired(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Tamper booking to have positive tax (tax anomaly scenario)
 	bookingID, err := uuid.Parse(p1.BookingID)
 	require.NoError(t, err)
 	b := f.bookingRepo.bookings[bookingID]
 	b.Tax = decimal.NewFromInt(50)
 	b.Total = b.Subtotal.Add(b.PlatformFee).Add(b.Tax).Sub(b.Discount)
+	p1.Amount = b.Total
 
-	// VerifyPayment must return domain.ErrPaymentRefundRequired
+	// VerifyPayment must now succeed and confirm the booking
 	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
 		UserID:            f.userID,
 		ProviderOrderID:   *p1.ProviderOrderID,
-		RazorpayPaymentID: "pay_tax_anomaly_123",
+		RazorpayPaymentID: "pay_tax_success_123",
 		RazorpaySignature: "sig_dummy",
 	})
-	require.Error(t, err)
-	assert.Nil(t, res)
-	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired), "Must return ErrPaymentRefundRequired")
-	assert.Equal(t, "Payment received, but booking could not be completed. Your refund is pending processing.", err.Error())
+	require.NoError(t, err)
+	require.NotNil(t, res)
 
-	// Payment must be marked REFUND_REQUIRED in DB
+	// Payment must be marked SUCCESS in DB
 	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
-	assert.Equal(t, "pay_tax_anomaly_123", *paymentInDB.TransactionID)
+	assert.Equal(t, domain.PaymentStatusSuccess, paymentInDB.Status)
+	assert.Equal(t, "pay_tax_success_123", *paymentInDB.TransactionID)
 
-	// Booking must be marked CANCELLED in DB
+	// Booking must be marked CONFIRMED in DB
 	bookingInDB, err := f.bookingRepo.FindByID(ctx, bookingID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.BookingStatusCancelled, bookingInDB.Status)
+	assert.Equal(t, domain.BookingStatusConfirmed, bookingInDB.Status)
 
-	// Reservation must be cancelled
+	// Reservation must be COMPLETED
 	resInDB, err := f.reservationRepo.FindByID(ctx, f.reservationID)
 	require.NoError(t, err)
-	assert.Equal(t, domain.ReservationStatusCancelled, resInDB.Status)
+	assert.Equal(t, domain.ReservationStatusCompleted, resInDB.Status)
 
-	// Finance journal must NOT have been recorded
-	assert.Empty(t, f.financeUsecase.capturedInputs)
+	// Tickets must be issued
+	assert.NotEmpty(t, f.ticketRepo.tickets, "Tickets must be issued for successful positive tax payment")
+
+	// Finance journal must have recorded the payment capture with positive tax
+	require.Len(t, f.financeUsecase.capturedInputs, 1)
+	captured := f.financeUsecase.capturedInputs[0]
+	assert.Equal(t, p1.ID, captured.PaymentID.String())
+	assert.Equal(t, bookingID, captured.BookingID)
+	assert.True(t, b.Total.Equal(captured.Total))
+	assert.True(t, b.Tax.Equal(captured.Tax))
+	assert.True(t, b.Tax.IsPositive())
 }
 
-func TestVerifyPayment_TaxAnomalyInventoryFailureDefersToWorker(t *testing.T) {
+func TestVerifyPayment_PositiveTaxIdempotency(t *testing.T) {
 	f := setupFixture(t)
 	ctx := context.Background()
 
@@ -1895,61 +1902,83 @@ func TestVerifyPayment_TaxAnomalyInventoryFailureDefersToWorker(t *testing.T) {
 	b := f.bookingRepo.bookings[bookingID]
 	b.Tax = decimal.NewFromInt(50)
 	b.Total = b.Subtotal.Add(b.PlatformFee).Add(b.Tax).Sub(b.Discount)
+	p1.Amount = b.Total
 
-	// Simulate inventory release failure inside savepoint
-	f.seatRepo.releaseErr = errors.New("seat lock timeout during release")
+	// First verification
+	res1, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_tax_idempotent_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res1)
+
+	// Second verification must be idempotent
+	res2, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_tax_idempotent_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res2)
+	assert.Equal(t, res1.Payment.ID, res2.Payment.ID)
+	assert.Equal(t, domain.PaymentStatusSuccess, res2.Payment.Status)
+	assert.Equal(t, domain.BookingStatusConfirmed, res2.Booking.Status)
+}
+
+func TestVerifyPayment_ReservationExpired_CreatesAndDispatchesRefund(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+
+	// Simulate reservation expired before payment verification
+	resObj := f.reservationRepo.reservations[f.reservationID]
+	resObj.ExpiresAt = time.Now().Add(-1 * time.Hour)
 
 	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
 		UserID:            f.userID,
 		ProviderOrderID:   *p1.ProviderOrderID,
-		RazorpayPaymentID: "pay_tax_inv_fail_123",
+		RazorpayPaymentID: "pay_expired_res_123",
 		RazorpaySignature: "sig_dummy",
 	})
 	require.Error(t, err)
 	assert.Nil(t, res)
 	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
 
-	// Outer transaction still committed REFUND_REQUIRED!
+	// Payment must be marked REFUND_REQUIRED
 	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+	assert.Equal(t, "pay_expired_res_123", *paymentInDB.TransactionID)
 
+	// Booking must be marked CANCELLED
 	bookingInDB, err := f.bookingRepo.FindByID(ctx, bookingID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.BookingStatusCancelled, bookingInDB.Status)
-}
 
-func TestVerifyPayment_TaxAnomalySavepointControlFailureAborts(t *testing.T) {
-	f := setupFixture(t)
-	ctx := context.Background()
-
-	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
-		CheckoutID: f.checkoutID,
-		UserID:     f.userID,
-		Method:     domain.PaymentMethodCard,
-	})
+	// Refund record MUST be created in refund repository!
+	paymentUUID, _ := uuid.Parse(p1.ID)
+	refunds, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
 	require.NoError(t, err)
+	require.Len(t, refunds, 1, "A refund record must be created when reservation expires during payment capture")
+	assert.Equal(t, domain.RefundStatusPending, refunds[0].Status)
+	assert.Equal(t, "RESERVATION_EXPIRED", refunds[0].Reason)
+	assert.True(t, p1.Amount.Equal(refunds[0].Amount))
 
-	bookingID, err := uuid.Parse(p1.BookingID)
-	require.NoError(t, err)
-	b2 := f.bookingRepo.bookings[bookingID]
-	b2.Tax = decimal.NewFromInt(50)
-	b2.Total = b2.Subtotal.Add(b2.PlatformFee).Add(b2.Tax).Sub(b2.Discount)
-
-	// Simulate savepoint creation fatal error
-	f.txRepos.executeWithSavepointFn = func(name domain.SavepointName, fn func() error) (domain.SavepointResult, error) {
-		return domain.SavepointResult{}, domain.ErrSavepointCreateFailed
-	}
-
-	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
-		UserID:            f.userID,
-		ProviderOrderID:   *p1.ProviderOrderID,
-		RazorpayPaymentID: "pay_sp_fail_123",
-		RazorpaySignature: "sig_dummy",
-	})
-	require.Error(t, err)
-	assert.Nil(t, res)
-	assert.True(t, errors.Is(err, domain.ErrSavepointCreateFailed))
+	// Financial ledger must record escrow capture
+	require.Len(t, f.financeUsecase.escrowInputs, 1)
+	assert.Equal(t, paymentUUID, f.financeUsecase.escrowInputs[0].PaymentID)
 }
 
 func TestRazorpayProvider_FindOrderByReceipt_Validation(t *testing.T) {

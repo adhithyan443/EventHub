@@ -176,10 +176,22 @@ func setupStandardAccounts(t *testing.T, repo *mockAccountRepo) {
 	)
 	require.NoError(t, err)
 
+	taxPayable, err := domainfinance.NewAccount(
+		uuid.New(),
+		domainfinance.AccountCodeTaxPayable,
+		"Tax Payable",
+		domainfinance.AccountTypeLiability,
+		domainfinance.NormalBalanceCredit,
+		domainfinance.CurrencyINR,
+		true,
+	)
+	require.NoError(t, err)
+
 	repo.accountsByCode[domainfinance.AccountCodeRazorpayClearing] = clearing
 	repo.accountsByCode[domainfinance.AccountCodeOrganizerPayable] = organizer
 	repo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue] = platformFee
 	repo.accountsByCode[domainfinance.AccountCodeCustomerRefundPayable] = customerRefund
+	repo.accountsByCode[domainfinance.AccountCodeTaxPayable] = taxPayable
 }
 
 func createValidInput() domain.RecordPaymentCaptureInput {
@@ -379,14 +391,43 @@ func TestFinanceUsecase_ValidationRules(t *testing.T) {
 		assert.Contains(t, err.Error(), "payment amount")
 	})
 
-	t.Run("Rejects positive tax with ErrTaxAccountNotConfigured", func(t *testing.T) {
+	t.Run("Rejects positive tax with ErrTaxAccountNotConfigured when tax account not found", func(t *testing.T) {
+		noTaxRepo := newMockAccountRepo()
+		setupStandardAccounts(t, noTaxRepo)
+		delete(noTaxRepo.accountsByCode, domainfinance.AccountCodeTaxPayable)
+		noTaxTxRepos := &mockTxRepos{accountRepo: noTaxRepo, journalRepo: &mockJournalRepo{}}
+
 		in := createValidInput()
 		in.Tax = decimal.NewFromInt(50)
 		in.Total = decimal.NewFromInt(1100) // 1000 + 50 + 50
 		in.PaymentAmount = decimal.NewFromInt(1100)
-		_, err := uc.RecordPaymentCaptureWithinTx(ctx, txRepos, in)
+		_, err := uc.RecordPaymentCaptureWithinTx(ctx, noTaxTxRepos, in)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, domain.ErrTaxAccountNotConfigured), "Positive tax must return ErrTaxAccountNotConfigured")
+		assert.True(t, errors.Is(err, domain.ErrTaxAccountNotConfigured), "Missing tax account must return ErrTaxAccountNotConfigured")
+	})
+
+	t.Run("Rejects positive tax when tax account is inactive", func(t *testing.T) {
+		inactiveTaxRepo := newMockAccountRepo()
+		setupStandardAccounts(t, inactiveTaxRepo)
+		inactiveTax, _ := domainfinance.NewAccount(
+			uuid.New(),
+			domainfinance.AccountCodeTaxPayable,
+			"Tax Payable",
+			domainfinance.AccountTypeLiability,
+			domainfinance.NormalBalanceCredit,
+			domainfinance.CurrencyINR,
+			false, // inactive
+		)
+		inactiveTaxRepo.accountsByCode[domainfinance.AccountCodeTaxPayable] = inactiveTax
+		inactiveTxRepos := &mockTxRepos{accountRepo: inactiveTaxRepo, journalRepo: &mockJournalRepo{}}
+
+		in := createValidInput()
+		in.Tax = decimal.NewFromInt(50)
+		in.Total = decimal.NewFromInt(1100)
+		in.PaymentAmount = decimal.NewFromInt(1100)
+		_, err := uc.RecordPaymentCaptureWithinTx(ctx, inactiveTxRepos, in)
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, domain.ErrFinanceAccountInactive), "Inactive tax account must return ErrFinanceAccountInactive")
 	})
 
 	t.Run("Rejects positive discount with ErrUnsupportedDiscountAllocation", func(t *testing.T) {
@@ -572,6 +613,66 @@ func TestFinanceUsecase_SuccessfulJournalCreation(t *testing.T) {
 		assert.Len(t, journalRepo.recordedJournals, 1)
 	})
 
+	t.Run("Booking with platform fee and tax: 1 Debit, 3 Credits (4 entries total, perfectly balanced)", func(t *testing.T) {
+		accRepo := newMockAccountRepo()
+		setupStandardAccounts(t, accRepo)
+		journalRepo := &mockJournalRepo{}
+		txRepos := &mockTxRepos{accountRepo: accRepo, journalRepo: journalRepo}
+
+		in := createValidInput()
+		in.Subtotal = decimal.NewFromInt(2000)
+		in.PlatformFee = decimal.NewFromInt(100)
+		in.Tax = decimal.NewFromInt(180)
+		in.Total = decimal.NewFromInt(2280) // 2000 + 100 + 180
+		in.PaymentAmount = decimal.NewFromInt(2280)
+
+		journal, err := uc.RecordPaymentCaptureWithinTx(ctx, txRepos, in)
+		require.NoError(t, err)
+		require.NotNil(t, journal)
+
+		// Balancing verification
+		balanced, balErr := journal.IsBalanced()
+		require.NoError(t, balErr)
+		assert.True(t, balanced, "Journal with tax must be balanced")
+
+		entries := journal.Entries()
+		require.Len(t, entries, 4, "Must have exactly 4 ledger entries (1 debit, 3 credits)")
+
+		// Leg 1: Debit 1010 (Razorpay Clearing) for total payment 2280
+		debitLeg := entries[0]
+		assert.Equal(t, domainfinance.EntryTypeDebit, debitLeg.EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), debitLeg.AccountID())
+		assert.True(t, debitLeg.Amount().Amount().Equal(decimal.NewFromInt(2280)))
+
+		// Leg 2: Credit 2010 (Organizer Payable) for ticket net 2000
+		creditOrgLeg := entries[1]
+		assert.Equal(t, domainfinance.EntryTypeCredit, creditOrgLeg.EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), creditOrgLeg.AccountID())
+		assert.True(t, creditOrgLeg.Amount().Amount().Equal(decimal.NewFromInt(2000)))
+		require.NotNil(t, creditOrgLeg.OrganizerID())
+		assert.Equal(t, in.OrganizerID, *creditOrgLeg.OrganizerID())
+		require.NotNil(t, creditOrgLeg.EventID())
+		assert.Equal(t, in.EventID, *creditOrgLeg.EventID())
+
+		// Leg 3: Credit 4010 (Platform Fee Revenue) for 100
+		creditFeeLeg := entries[2]
+		assert.Equal(t, domainfinance.EntryTypeCredit, creditFeeLeg.EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue].ID(), creditFeeLeg.AccountID())
+		assert.True(t, creditFeeLeg.Amount().Amount().Equal(decimal.NewFromInt(100)))
+		require.NotNil(t, creditFeeLeg.EventID())
+		assert.Equal(t, in.EventID, *creditFeeLeg.EventID())
+
+		// Leg 4: Credit 2030 (Tax Payable) for 180
+		creditTaxLeg := entries[3]
+		assert.Equal(t, domainfinance.EntryTypeCredit, creditTaxLeg.EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeTaxPayable].ID(), creditTaxLeg.AccountID())
+		assert.True(t, creditTaxLeg.Amount().Amount().Equal(decimal.NewFromInt(180)))
+		require.NotNil(t, creditTaxLeg.EventID())
+		assert.Equal(t, in.EventID, *creditTaxLeg.EventID())
+
+		assert.Len(t, journalRepo.recordedJournals, 1)
+	})
+
 	t.Run("Free platform fee: 1 Debit, 1 Credit", func(t *testing.T) {
 		accRepo := newMockAccountRepo()
 		setupStandardAccounts(t, accRepo)
@@ -712,7 +813,7 @@ func TestFinanceUsecase_SuccessfulJournalCreation(t *testing.T) {
 		assert.True(t, errors.Is(err, domain.ErrInconsistentBookingAmounts))
 	})
 
-	t.Run("Free booking: rejected when tax is positive", func(t *testing.T) {
+	t.Run("Free booking: rejected when discount is positive", func(t *testing.T) {
 		txRepos := &mockTxRepos{}
 		in := createValidInput()
 		in.Subtotal = decimal.Zero
@@ -724,7 +825,7 @@ func TestFinanceUsecase_SuccessfulJournalCreation(t *testing.T) {
 
 		_, err := uc.RecordPaymentCaptureWithinTx(ctx, txRepos, in)
 		require.Error(t, err)
-		assert.True(t, errors.Is(err, domain.ErrTaxAccountNotConfigured))
+		assert.True(t, errors.Is(err, domain.ErrUnsupportedDiscountAllocation))
 	})
 
 	t.Run("Free booking: rejected when discount is positive", func(t *testing.T) {

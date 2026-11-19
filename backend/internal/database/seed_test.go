@@ -265,7 +265,7 @@ func TestSeedFinanceAccountsWithRepo(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.Default()
 
-	t.Run("Clean initial seed of all 7 accounts", func(t *testing.T) {
+	t.Run("Clean initial seed of all standard accounts", func(t *testing.T) {
 		repo := newMockFinanceAccountRepo()
 
 		err := database.SeedFinanceAccountsWithRepo(ctx, repo, logger)
@@ -496,13 +496,13 @@ func TestSeedFinanceAccounts_Integration(t *testing.T) {
 
 	logger := slog.Default()
 
-	t.Run("Clean initial seed populates all 7 accounts in Postgres", func(t *testing.T) {
+	t.Run("Clean initial seed populates all standard accounts in Postgres", func(t *testing.T) {
 		err := database.SeedFinanceAccounts(schemaDB, logger)
 		require.NoError(t, err)
 
 		var count int64
 		require.NoError(t, schemaDB.Table("finance_accounts").Count(&count).Error)
-		assert.Equal(t, int64(7), count, "Must seed exactly 7 standard accounts")
+		assert.Equal(t, int64(len(database.StandardFinanceAccounts)), count, "Must seed all standard accounts")
 
 		// Verify each account row
 		for _, exp := range database.StandardFinanceAccounts {
@@ -531,7 +531,7 @@ func TestSeedFinanceAccounts_Integration(t *testing.T) {
 
 		var count int64
 		require.NoError(t, schemaDB.Table("finance_accounts").Count(&count).Error)
-		assert.Equal(t, int64(7), count, "Account count must remain exactly 7")
+		assert.Equal(t, int64(len(database.StandardFinanceAccounts)), count, "Account count must remain exactly as standard accounts")
 	})
 
 	t.Run("Configuration mismatch in database returns fatal error", func(t *testing.T) {

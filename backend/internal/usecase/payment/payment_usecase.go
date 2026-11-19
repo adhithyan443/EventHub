@@ -99,8 +99,13 @@ func (u *PaymentUsecase) handleCancelledBookingPayment(
 	payment *domain.Payment,
 	booking *domain.Booking,
 	transactionID string,
+	reason string,
 	now time.Time,
 ) (uuid.UUID, error) {
+	if reason == "" {
+		reason = "EVENT_CANCELLATION"
+	}
+
 	if payment.Status == domain.PaymentStatusPending {
 		if err := tx.PaymentRepository().MarkRefundRequired(
 			ctx,
@@ -162,13 +167,13 @@ func (u *PaymentUsecase) handleCancelledBookingPayment(
 		PaymentID: paymentUUID,
 		Amount:    payment.Amount,
 		Status:    domain.RefundStatusPending,
-		Reason:    "EVENT_CANCELLATION",
+		Reason:    reason,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 
 	if err := tx.RefundRepository().Create(ctx, refundRecord); err != nil {
-		return uuid.Nil, fmt.Errorf("failed to create event cancellation refund: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to create cancellation refund: %w", err)
 	}
 
 	if booking.Status != domain.BookingStatusCancelled {
@@ -177,14 +182,29 @@ func (u *PaymentUsecase) handleCancelledBookingPayment(
 	}
 
 	if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
-		_, _ = tx.SeatReservationRepository().CancelIfActive(ctx, *booking.ReservationID, booking.UserID)
-		_, _ = tx.CheckoutRepository().ExpireActiveByReservationID(ctx, *booking.ReservationID)
+		reservationID := *booking.ReservationID
+		_, _ = tx.SeatReservationRepository().CancelIfActive(ctx, reservationID, booking.UserID)
+		_, _ = tx.CheckoutRepository().ExpireActiveByReservationID(ctx, reservationID)
+
+		// Release reserved items
+		items, err := tx.SeatReservationRepository().FindItemsByReservationID(ctx, reservationID)
+		if err == nil {
+			for _, item := range items {
+				if item.SeatID != nil && *item.SeatID != uuid.Nil {
+					_ = tx.SeatRepository().ReleaseReservedSeat(ctx, *item.SeatID)
+				}
+				if item.TicketTypeID != nil && *item.TicketTypeID != uuid.Nil && item.Quantity > 0 {
+					_ = tx.TicketTypeRepository().ReleaseReservedQuantity(ctx, *item.TicketTypeID, item.Quantity)
+				}
+			}
+		}
 	}
 
-	u.logger.InfoContext(ctx, "created_refund_for_cancelled_event_payment",
+	u.logger.InfoContext(ctx, "created_refund_for_cancelled_booking_payment",
 		slog.String("payment_id", payment.ID),
 		slog.String("booking_id", booking.ID.String()),
 		slog.String("refund_id", refundRecord.ID.String()),
+		slog.String("reason", reason),
 		slog.String("amount", refundRecord.Amount.String()),
 	)
 
@@ -864,6 +884,7 @@ func (u *PaymentUsecase) VerifyPayment(
 					current,
 					booking,
 					req.RazorpayPaymentID,
+					"EVENT_CANCELLATION",
 					now,
 				)
 				if err != nil {
@@ -1035,6 +1056,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			payment,
 			currentBooking,
 			transactionID,
+			"EVENT_CANCELLATION",
 			now,
 		)
 		if err != nil {
@@ -1043,91 +1065,6 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		if refundIDOut != nil && refID != uuid.Nil {
 			*refundIDOut = refID
 		}
-		return true, nil
-	}
-
-	// Tax Anomaly Check: Tax configuration is unmapped in the v1 chart of accounts.
-	// If a booking contains a positive tax amount, route immediately to REFUND_REQUIRED,
-	// cancel the booking, and isolate inventory release inside a savepoint so captured payment
-	// state is never rolled back by transient inventory errors.
-	if booking.Tax.IsPositive() {
-		u.logger.ErrorContext(ctx, "tax_booking_refund_required: booking has positive tax but tax account is not configured",
-			slog.String("payment_id", payment.ID),
-			slog.String("booking_id", booking.ID.String()),
-			slog.String("tax", booking.Tax.String()),
-		)
-
-		if err := tx.PaymentRepository().MarkRefundRequired(
-			ctx,
-			payment.ID,
-			transactionID,
-			now,
-		); err != nil {
-			return false, err
-		}
-
-		if currentBooking.Status == domain.BookingStatusPending {
-			if err := tx.BookingRepository().UpdateStatus(
-				ctx,
-				booking.ID,
-				domain.BookingStatusCancelled,
-			); err != nil {
-				return false, err
-			}
-		}
-
-		if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
-			reservationID := *booking.ReservationID
-			spResult, spErr := tx.ExecuteWithSavepoint(domain.SavepointTaxRefundInventory, func() error {
-				cancelled, err := tx.SeatReservationRepository().CancelIfActive(ctx, reservationID, booking.UserID)
-				if err != nil {
-					return fmt.Errorf("failed to cancel reservation %s: %w", reservationID, err)
-				}
-				if !cancelled {
-					return nil
-				}
-
-				if _, err := tx.CheckoutRepository().ExpireActiveByReservationID(ctx, reservationID); err != nil {
-					return fmt.Errorf("failed to expire checkout for reservation %s: %w", reservationID, err)
-				}
-
-				items, err := tx.SeatReservationRepository().FindItemsByReservationID(ctx, reservationID)
-				if err != nil {
-					return fmt.Errorf("failed to find items for reservation %s: %w", reservationID, err)
-				}
-
-				for _, item := range items {
-					if item.SeatID != nil && *item.SeatID != uuid.Nil {
-						if err := tx.SeatRepository().ReleaseReservedSeat(ctx, *item.SeatID); err != nil {
-							return fmt.Errorf("failed to release reserved seat %s: %w", item.SeatID, err)
-						}
-					}
-					if item.TicketTypeID != nil && *item.TicketTypeID != uuid.Nil && item.Quantity > 0 {
-						if err := tx.TicketTypeRepository().ReleaseReservedQuantity(ctx, *item.TicketTypeID, item.Quantity); err != nil {
-							return fmt.Errorf("failed to release reserved quantity for ticket type %s: %w", item.TicketTypeID, err)
-						}
-					}
-				}
-				return nil
-			})
-
-			if spErr != nil {
-				u.logger.ErrorContext(ctx, "fatal savepoint transaction control error during tax refund inventory cancellation",
-					slog.String("reservation_id", reservationID.String()),
-					slog.Any("error", spErr),
-				)
-				return false, spErr
-			}
-
-			if spResult.Status == domain.SavepointStatusRolledBack {
-				u.logger.WarnContext(ctx, "tax_anomaly_inventory_cleanup_deferred_to_expiry_worker",
-					slog.String("booking_id", booking.ID.String()),
-					slog.String("reservation_id", reservationID.String()),
-					slog.Any("callback_error", spResult.CallbackErr),
-				)
-			}
-		}
-
 		return true, nil
 	}
 
@@ -1146,32 +1083,29 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			!now.Before(reservation.ExpiresAt)
 
 		if isExpired {
-			if err := tx.PaymentRepository().MarkRefundRequired(
+			refID, err := u.handleCancelledBookingPayment(
 				ctx,
-				payment.ID,
+				tx,
+				payment,
+				currentBooking,
 				transactionID,
+				"RESERVATION_EXPIRED",
 				now,
-			); err != nil {
+			)
+			if err != nil {
 				return false, err
 			}
-
-			// Only cancel booking if it is currently pending!
-			if currentBooking.Status == domain.BookingStatusPending {
-				if err := tx.BookingRepository().UpdateStatus(
-					ctx,
-					booking.ID,
-					domain.BookingStatusCancelled,
-				); err != nil {
-					return false, err
-				}
+			if refundIDOut != nil && refID != uuid.Nil {
+				*refundIDOut = refID
 			}
 
 			u.logger.WarnContext(
 				ctx,
-				"payment captured after reservation expiry; refund required",
+				"payment captured after reservation expiry; refund required and scheduled",
 				slog.String("payment_id", payment.ID),
 				slog.String("booking_id", booking.ID.String()),
 				slog.String("reservation_id", reservationID.String()),
+				slog.String("refund_id", refID.String()),
 			)
 
 			return true, nil
@@ -1184,32 +1118,29 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 		}
 
 		if !completed {
-			if err := tx.PaymentRepository().MarkRefundRequired(
+			refID, err := u.handleCancelledBookingPayment(
 				ctx,
-				payment.ID,
+				tx,
+				payment,
+				currentBooking,
 				transactionID,
+				"RESERVATION_EXPIRED",
 				now,
-			); err != nil {
+			)
+			if err != nil {
 				return false, err
 			}
-
-			// Only cancel booking if it is currently pending!
-			if currentBooking.Status == domain.BookingStatusPending {
-				if err := tx.BookingRepository().UpdateStatus(
-					ctx,
-					booking.ID,
-					domain.BookingStatusCancelled,
-				); err != nil {
-					return false, err
-				}
+			if refundIDOut != nil && refID != uuid.Nil {
+				*refundIDOut = refID
 			}
 
 			u.logger.WarnContext(
 				ctx,
-				"reservation expired during payment finalization; refund required",
+				"reservation expired during payment finalization; refund required and scheduled",
 				slog.String("payment_id", payment.ID),
 				slog.String("booking_id", booking.ID.String()),
 				slog.String("reservation_id", reservationID.String()),
+				slog.String("refund_id", refID.String()),
 			)
 
 			return true, nil
@@ -1717,6 +1648,7 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 							payment,
 							booking,
 							entity.ID,
+							"EVENT_CANCELLATION",
 							now,
 						)
 						if err != nil {

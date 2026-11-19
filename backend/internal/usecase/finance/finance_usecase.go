@@ -126,6 +126,28 @@ func (u *FinanceUsecase) RecordPaymentCaptureWithinTx(
 		}
 	}
 
+	// 4. Resolve and validate Tax Payable account (2030) if tax is positive
+	var taxAcc *domainfinance.Account
+	if in.Tax.IsPositive() {
+		taxAcc, err = accRepo.FindByCode(ctx, domainfinance.AccountCodeTaxPayable)
+		if err != nil {
+			if errors.Is(err, domain.ErrFinanceAccountNotFound) {
+				return nil, domain.ErrTaxAccountNotConfigured
+			}
+			u.logger.ErrorContext(ctx, "failed to resolve tax payable account",
+				slog.String("code", domainfinance.AccountCodeTaxPayable),
+				slog.Any("error", err),
+			)
+			return nil, err
+		}
+		if !taxAcc.IsActive() {
+			u.logger.ErrorContext(ctx, "tax payable account is inactive",
+				slog.String("code", domainfinance.AccountCodeTaxPayable),
+			)
+			return nil, fmt.Errorf("%w: account %s is inactive", domain.ErrFinanceAccountInactive, domainfinance.AccountCodeTaxPayable)
+		}
+	}
+
 	journalID := uuid.New()
 	idempotencyKey := fmt.Sprintf("payment_capture:%s", in.PaymentID)
 	capturedAt := in.CapturedAt
@@ -212,6 +234,28 @@ func (u *FinanceUsecase) RecordPaymentCaptureWithinTx(
 			return nil, err
 		}
 		if err := journal.AddEntry(creditFeeEntry); err != nil {
+			return nil, err
+		}
+	}
+
+	// 4th Leg: Credit 2030 (Tax Payable) for tax (if positive)
+	if in.Tax.IsPositive() {
+		taxMoney, err := domainfinance.NewMoney(in.Tax, domainfinance.CurrencyINR)
+		if err != nil {
+			return nil, err
+		}
+		creditTaxEntry, err := domainfinance.NewCreditEntry(
+			uuid.New(),
+			taxAcc.ID(),
+			taxMoney,
+			nil,
+			&in.EventID,
+			capturedAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := journal.AddEntry(creditTaxEntry); err != nil {
 			return nil, err
 		}
 	}
@@ -854,11 +898,6 @@ func validatePaymentCaptureInput(in domain.RecordPaymentCaptureInput) error {
 	if !in.PaymentAmount.Equal(in.Total) {
 		return fmt.Errorf("%w: payment amount (%s) does not equal total (%s)",
 			domain.ErrInconsistentBookingAmounts, in.PaymentAmount, in.Total)
-	}
-
-	// Tax check: Tax account not configured in chart of accounts
-	if in.Tax.IsPositive() {
-		return domain.ErrTaxAccountNotConfigured
 	}
 
 	// Discount check: Promo discount expense accounts not configured

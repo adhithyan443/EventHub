@@ -61,6 +61,14 @@ var StandardFinanceAccounts = []ExpectedFinanceAccount{
 		IsActive:      true,
 	},
 	{
+		Code:          finance.AccountCodeTaxPayable,
+		Name:          "Tax Payable",
+		Type:          finance.AccountTypeLiability,
+		NormalBalance: finance.NormalBalanceCredit,
+		Currency:      finance.CurrencyINR,
+		IsActive:      true,
+	},
+	{
 		Code:          finance.AccountCodeRetainedEarnings,
 		Name:          "Retained Earnings",
 		Type:          finance.AccountTypeEquity,

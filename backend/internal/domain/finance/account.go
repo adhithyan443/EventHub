@@ -33,6 +33,7 @@ const (
 // - Operating Bank (1020, Asset): EventHub's primary bank account for organizer settlements.
 // - Organizer Payable (2010, Liability): Organizers' net ticket revenue, unsettled until event completion.
 // - Customer Refund Payable (2020, Liability): Pending refunds owed back to customers on cancellation.
+// - Tax Payable (2030, Liability): Statutory tax collected on ticket sales, owed to tax authorities.
 // - Retained Earnings (3010, Equity): Cumulative retained net earnings.
 // - Platform Fee Revenue (4010, Revenue): Platform fees collected from customers at booking.
 // - Payment Gateway Expense (5010, Expense): Gateway fees charged by Razorpay for payment processing.
@@ -41,6 +42,7 @@ const (
 	AccountCodeOperatingBank         = "1020"
 	AccountCodeOrganizerPayable      = "2010"
 	AccountCodeCustomerRefundPayable = "2020"
+	AccountCodeTaxPayable            = "2030"
 	AccountCodeRetainedEarnings      = "3010"
 	AccountCodePlatformFeeRevenue    = "4010"
 	AccountCodePaymentGatewayExpense = "5010"
