@@ -10,6 +10,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type OrganizerRepository struct {
@@ -69,6 +70,33 @@ func (r *OrganizerRepository) FindByID(
 
 		r.logger.Error(
 			"organizer_find_by_id_failed",
+			"organizer_id", id,
+			"error", err,
+		)
+
+		return nil, err
+	}
+
+	return modelToOrganizer(&model), nil
+}
+
+func (r *OrganizerRepository) FindByIDForUpdate(
+	id uuid.UUID,
+) (*domain.Organizer, error) {
+	var model models.OrganizerModel
+
+	err := r.db.
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ?", id).
+		First(&model).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrOrganizerNotFound
+		}
+
+		r.logger.Error(
+			"organizer_find_by_id_for_update_failed",
 			"organizer_id", id,
 			"error", err,
 		)

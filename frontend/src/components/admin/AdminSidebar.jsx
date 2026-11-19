@@ -92,6 +92,18 @@ const navItems = [
     ),
   },
   {
+    path: "/admin/settlements",
+    label: "Settlements",
+    icon: (
+      <svg width="18" height="15" viewBox="0 0 20 18" fill="none">
+        <path
+          d="M10 1L2 5V7H18V5L10 1ZM3 8V14H5V8H3ZM7 8V14H9V8H7ZM11 8V14H13V8H11ZM15 8V14H17V8H15ZM1 15V17H19V15H1Z"
+          fill="currentColor"
+        />
+      </svg>
+    ),
+  },
+  {
     path: "/admin/pricing-tax",
     label: "Pricing & Taxes",
     icon: (

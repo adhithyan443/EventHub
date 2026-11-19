@@ -12,6 +12,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	domainfinance "github.com/adhithyan443/EventHub/backend/internal/domain/finance"
 	bookingusecase "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -20,6 +21,8 @@ type PaymentUsecase struct {
 	transactionManager domain.TransactionManager
 	bookingUsecase     *bookingusecase.BookingUsecase
 	financeUsecase     domain.FinanceUsecase
+	refundProcessor    refund.RefundProcessor
+	dispatchTracker    domain.DispatchTracker
 	provider           PaymentProvider
 	logger             *slog.Logger
 }
@@ -53,6 +56,139 @@ func NewPaymentUsecase(
 		provider:           provider,
 		logger:             logger,
 	}, nil
+}
+
+func (u *PaymentUsecase) SetRefundProcessor(processor refund.RefundProcessor) {
+	u.refundProcessor = processor
+}
+
+func (u *PaymentUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
+	u.dispatchTracker = tracker
+}
+
+func (u *PaymentUsecase) dispatchBackgroundRefund(refundID uuid.UUID) {
+	if refundID == uuid.Nil || u.refundProcessor == nil {
+		return
+	}
+	if u.dispatchTracker != nil {
+		if !u.dispatchTracker.TryAdd() {
+			u.logger.Warn("background_refund_dispatch_rejected_shutdown_active",
+				slog.String("refund_id", refundID.String()),
+			)
+			return
+		}
+	}
+	bgCtx := context.WithoutCancel(context.Background())
+	go func(refID uuid.UUID) {
+		if u.dispatchTracker != nil {
+			defer u.dispatchTracker.Done()
+		}
+		_, err := u.refundProcessor.ProcessPendingRefund(bgCtx, refID)
+		if err != nil {
+			u.logger.Error("async_payment_cancellation_refund_failed",
+				slog.String("refund_id", refID.String()),
+				slog.Any("error", err),
+			)
+		}
+	}(refundID)
+}
+
+func (u *PaymentUsecase) handleCancelledBookingPayment(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	payment *domain.Payment,
+	booking *domain.Booking,
+	transactionID string,
+	now time.Time,
+) (uuid.UUID, error) {
+	if payment.Status == domain.PaymentStatusPending {
+		if err := tx.PaymentRepository().MarkRefundRequired(
+			ctx,
+			payment.ID,
+			transactionID,
+			now,
+		); err != nil {
+			return uuid.Nil, err
+		}
+		payment.Status = domain.PaymentStatusRefundRequired
+		payment.TransactionID = &transactionID
+		payment.PaidAt = &now
+	}
+
+	paymentUUID, err := uuid.Parse(payment.ID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("invalid payment UUID format %s: %w", payment.ID, err)
+	}
+
+	if u.financeUsecase != nil {
+		escrowCaptureInput := domain.RecordEscrowCaptureInput{
+			PaymentID:     paymentUUID,
+			PaymentAmount: payment.Amount,
+			BookingID:     booking.ID,
+			Currency:      domainfinance.CurrencyINR,
+			CapturedAt:    now,
+		}
+		if _, err := u.financeUsecase.RecordEscrowCaptureWithinTx(ctx, tx, escrowCaptureInput); err != nil {
+			u.logger.ErrorContext(ctx, "failed to record escrow capture in financial ledger",
+				slog.String("payment_id", payment.ID),
+				slog.String("booking_id", booking.ID.String()),
+				slog.Any("error", err),
+			)
+			return uuid.Nil, fmt.Errorf("failed to record escrow capture: %w", err)
+		}
+	}
+
+	existingRefunds, err := tx.RefundRepository().FindByPaymentID(ctx, paymentUUID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to query existing refunds for payment %s: %w", payment.ID, err)
+	}
+
+	for _, r := range existingRefunds {
+		if r.Status == domain.RefundStatusSuccess ||
+			r.Status == domain.RefundStatusProcessing ||
+			r.Status == domain.RefundStatusPending {
+			u.logger.InfoContext(ctx, "refund_already_exists_for_cancelled_booking",
+				slog.String("payment_id", payment.ID),
+				slog.String("refund_id", r.ID.String()),
+				slog.String("status", string(r.Status)),
+			)
+			return uuid.Nil, nil
+		}
+	}
+
+	refundRecord := &domain.Refund{
+		ID:        uuid.New(),
+		BookingID: booking.ID,
+		PaymentID: paymentUUID,
+		Amount:    payment.Amount,
+		Status:    domain.RefundStatusPending,
+		Reason:    "EVENT_CANCELLATION",
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := tx.RefundRepository().Create(ctx, refundRecord); err != nil {
+		return uuid.Nil, fmt.Errorf("failed to create event cancellation refund: %w", err)
+	}
+
+	if booking.Status != domain.BookingStatusCancelled {
+		_ = tx.BookingRepository().UpdateStatus(ctx, booking.ID, domain.BookingStatusCancelled)
+		booking.Status = domain.BookingStatusCancelled
+	}
+
+	if booking.ReservationID != nil && *booking.ReservationID != uuid.Nil {
+		_, _ = tx.SeatReservationRepository().CancelIfActive(ctx, *booking.ReservationID, booking.UserID)
+		_, _ = tx.CheckoutRepository().ExpireActiveByReservationID(ctx, *booking.ReservationID)
+	}
+
+	u.logger.InfoContext(ctx, "created_refund_for_cancelled_event_payment",
+		slog.String("payment_id", payment.ID),
+		slog.String("booking_id", booking.ID.String()),
+		slog.String("refund_id", refundRecord.ID.String()),
+		slog.String("amount", refundRecord.Amount.String()),
+	)
+
+	return refundRecord.ID, nil
 }
 
 type CreatePaymentRequest struct {
@@ -609,6 +745,7 @@ func (u *PaymentUsecase) VerifyPayment(
 	// Step 4: Lock the payment row and atomically finalize the booking.
 	now := time.Now()
 	var isRefundRequired bool
+	var newRefundID uuid.UUID
 
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
@@ -713,6 +850,32 @@ func (u *PaymentUsecase) VerifyPayment(
 				return nil
 			}
 
+			// Check if booking is cancelled or event is cancelled (e.g. event cancellation happened while payment was in-flight).
+			var isEventCancelled bool
+			event, eventErr := tx.EventRepository().FindByID(booking.EventID)
+			if eventErr == nil && event != nil && event.Status == domain.EventStatusCancelled {
+				isEventCancelled = true
+			}
+
+			if booking.Status == domain.BookingStatusCancelled || isEventCancelled {
+				refID, err := u.handleCancelledBookingPayment(
+					ctx,
+					tx,
+					current,
+					booking,
+					req.RazorpayPaymentID,
+					now,
+				)
+				if err != nil {
+					return err
+				}
+				newRefundID = refID
+				payment = current
+				confirmedBooking = booking
+				isRefundRequired = true
+				return nil
+			}
+
 			if booking.Status != domain.BookingStatusPending {
 				return domain.ErrInvalidPayment
 			}
@@ -726,6 +889,7 @@ func (u *PaymentUsecase) VerifyPayment(
 				booking,
 				req.RazorpayPaymentID,
 				now,
+				&newRefundID,
 			)
 			if finalizeErr != nil {
 				return finalizeErr
@@ -777,6 +941,9 @@ func (u *PaymentUsecase) VerifyPayment(
 	}
 
 	if isRefundRequired {
+		if newRefundID != uuid.Nil {
+			u.dispatchBackgroundRefund(newRefundID)
+		}
 		u.logger.WarnContext(
 			ctx,
 			"verified payment requires refund",
@@ -824,6 +991,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 	booking *domain.Booking,
 	transactionID string,
 	now time.Time,
+	refundIDOut *uuid.UUID,
 ) (bool, error) {
 	// Re-lock and inspect the current booking status to handle duplicate captures safely.
 	currentBooking, err := tx.BookingRepository().FindByIDForUpdate(ctx, booking.ID)
@@ -851,6 +1019,30 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 			slog.String("transaction_id", transactionID),
 		)
 
+		return true, nil
+	}
+
+	var isEventCancelled bool
+	event, eventErr := tx.EventRepository().FindByID(booking.EventID)
+	if eventErr == nil && event != nil && event.Status == domain.EventStatusCancelled {
+		isEventCancelled = true
+	}
+
+	if currentBooking.Status == domain.BookingStatusCancelled || isEventCancelled {
+		refID, err := u.handleCancelledBookingPayment(
+			ctx,
+			tx,
+			payment,
+			currentBooking,
+			transactionID,
+			now,
+		)
+		if err != nil {
+			return false, err
+		}
+		if refundIDOut != nil && refID != uuid.Nil {
+			*refundIDOut = refID
+		}
 		return true, nil
 	}
 
@@ -1073,7 +1265,7 @@ func (u *PaymentUsecase) finalizeBookingPayment(
 	}
 
 	// Finance Ledger Recording: Atomically post double-entry financial journal for payment capture.
-	event, err := tx.EventRepository().FindByID(booking.EventID)
+	event, err = tx.EventRepository().FindByID(booking.EventID)
 	if err != nil {
 		u.logger.ErrorContext(ctx, "failed to find event for payment capture finance journal",
 			slog.String("event_id", booking.EventID.String()),
@@ -1317,6 +1509,17 @@ type razorpayWebhookPayload struct {
 				Currency string `json:"currency"`
 			} `json:"entity"`
 		} `json:"payment"`
+		Refund struct {
+			Entity struct {
+				ID        string                 `json:"id"`
+				PaymentID string                 `json:"payment_id"`
+				Amount    int64                  `json:"amount"`
+				Currency  string                 `json:"currency"`
+				Status    string                 `json:"status"`
+				Receipt   string                 `json:"receipt"`
+				Notes     map[string]interface{} `json:"notes"`
+			} `json:"entity"`
+		} `json:"refund"`
 	} `json:"payload"`
 }
 
@@ -1326,6 +1529,7 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 	signature string,
 	eventID string,
 ) error {
+	var newRefundID uuid.UUID
 	if !u.provider.VerifyWebhookSignature(body, signature) {
 		u.logger.WarnContext(
 			ctx,
@@ -1499,6 +1703,29 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						return nil
 					}
 
+					var isEventCancelled bool
+					event, eventErr := tx.EventRepository().FindByID(booking.EventID)
+					if eventErr == nil && event != nil && event.Status == domain.EventStatusCancelled {
+						isEventCancelled = true
+					}
+
+					if booking.Status == domain.BookingStatusCancelled || isEventCancelled {
+						now := time.Now()
+						refID, err := u.handleCancelledBookingPayment(
+							ctx,
+							tx,
+							payment,
+							booking,
+							entity.ID,
+							now,
+						)
+						if err != nil {
+							return err
+						}
+						newRefundID = refID
+						return nil
+					}
+
 					if booking.Status != domain.BookingStatusPending {
 						u.logger.WarnContext(
 							ctx,
@@ -1519,6 +1746,7 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 						booking,
 						entity.ID,
 						now,
+						&newRefundID,
 					)
 					if err != nil {
 						return err
@@ -1610,6 +1838,176 @@ func (u *PaymentUsecase) ProcessRazorpayWebhook(
 			u.logger.ErrorContext(
 				ctx,
 				"failed to process Razorpay webhook",
+				slog.String("event_id", resolvedEventID),
+				slog.String("event_type", payload.Event),
+				slog.Any("error", err),
+			)
+			return err
+		}
+
+		if newRefundID != uuid.Nil {
+			u.dispatchBackgroundRefund(newRefundID)
+		}
+
+		return nil
+
+	case "refund.processed", "refund.failed", "refund.created":
+		refundEntity := payload.Payload.Refund.Entity
+		err := u.transactionManager.WithinTransaction(
+			func(tx domain.TransactionRepositories) error {
+				if err := tx.RazorpayWebhookEventRepository().Create(
+					ctx,
+					resolvedEventID,
+					payload.Event,
+				); err != nil {
+					return err
+				}
+
+				if strings.TrimSpace(refundEntity.ID) == "" {
+					return domain.ErrInvalidPayment
+				}
+
+				// Look up refund record
+				var refund *domain.Refund
+				var err error
+
+				refund, err = tx.RefundRepository().FindByGatewayRefundIDForUpdate(ctx, refundEntity.ID)
+				if err != nil && errors.Is(err, domain.ErrRefundNotFound) {
+					var refundUUID uuid.UUID
+					if parsed, pErr := uuid.Parse(strings.TrimSpace(refundEntity.Receipt)); pErr == nil && parsed != uuid.Nil {
+						refundUUID = parsed
+					} else if idKey, ok := refundEntity.Notes["idempotency_key"].(string); ok {
+						if parsedKey, pErr := uuid.Parse(strings.TrimSpace(idKey)); pErr == nil && parsedKey != uuid.Nil {
+							refundUUID = parsedKey
+						}
+					}
+
+					if refundUUID != uuid.Nil {
+						refund, err = tx.RefundRepository().FindByIDForUpdate(ctx, refundUUID)
+					}
+				}
+
+				if err != nil {
+					if errors.Is(err, domain.ErrRefundNotFound) {
+						u.logger.WarnContext(ctx, "refund webhook received for untracked refund",
+							slog.String("event_id", resolvedEventID),
+							slog.String("event_type", payload.Event),
+							slog.String("gateway_refund_id", refundEntity.ID),
+						)
+						return nil
+					}
+					return err
+				}
+
+				if refund == nil {
+					return nil
+				}
+
+				if refundEntity.Amount <= 0 {
+					u.logger.WarnContext(ctx, "invalid zero or negative refund amount in webhook",
+						slog.String("refund_id", refund.ID.String()),
+						slog.Int64("received_paise", refundEntity.Amount),
+					)
+					return domain.ErrInvalidPayment
+				}
+
+				expectedPaise, err := domain.ToPaise(refund.Amount)
+				if err != nil {
+					return err
+				}
+				if expectedPaise != refundEntity.Amount {
+					u.logger.WarnContext(ctx, "refund amount mismatch in webhook",
+						slog.String("refund_id", refund.ID.String()),
+						slog.Int64("expected_paise", expectedPaise),
+						slog.Int64("received_paise", refundEntity.Amount),
+					)
+					return domain.ErrPaymentAmountMismatch
+				}
+				if refundEntity.Currency != "INR" {
+					return domain.ErrInvalidPayment
+				}
+
+				now := time.Now()
+
+				switch payload.Event {
+				case "refund.processed":
+					if refund.Status == domain.RefundStatusSuccess {
+						u.logger.InfoContext(ctx, "ignoring refund.processed for already successful refund",
+							slog.String("refund_id", refund.ID.String()),
+							slog.String("gateway_refund_id", refundEntity.ID),
+						)
+						return nil
+					}
+
+					refund.Status = domain.RefundStatusSuccess
+					refund.GatewayRefundID = &refundEntity.ID
+					refund.ProcessedAt = &now
+					refund.UpdatedAt = now
+					if err := tx.RefundRepository().Update(ctx, refund); err != nil {
+						return err
+					}
+
+					if err := u.recordRefundJournal(ctx, tx, refund, now); err != nil {
+						return err
+					}
+
+					u.logger.InfoContext(ctx, "refund marked as success via webhook",
+						slog.String("refund_id", refund.ID.String()),
+						slog.String("gateway_refund_id", refundEntity.ID),
+					)
+
+				case "refund.failed":
+					if refund.Status == domain.RefundStatusSuccess {
+						u.logger.WarnContext(ctx, "ignoring refund.failed for already successful refund",
+							slog.String("refund_id", refund.ID.String()),
+							slog.String("gateway_refund_id", refundEntity.ID),
+						)
+						return nil
+					}
+
+					refund.Status = domain.RefundStatusFailed
+					refund.GatewayRefundID = &refundEntity.ID
+					refund.UpdatedAt = now
+					if err := tx.RefundRepository().Update(ctx, refund); err != nil {
+						return err
+					}
+
+					u.logger.InfoContext(ctx, "refund marked as failed via webhook",
+						slog.String("refund_id", refund.ID.String()),
+						slog.String("gateway_refund_id", refundEntity.ID),
+					)
+
+				case "refund.created":
+					if refund.Status == domain.RefundStatusSuccess || refund.Status == domain.RefundStatusFailed {
+						return nil
+					}
+					refund.Status = domain.RefundStatusProcessing
+					refund.GatewayRefundID = &refundEntity.ID
+					refund.UpdatedAt = now
+					if err := tx.RefundRepository().Update(ctx, refund); err != nil {
+						return err
+					}
+
+					u.logger.InfoContext(ctx, "refund marked as processing via webhook",
+						slog.String("refund_id", refund.ID.String()),
+						slog.String("gateway_refund_id", refundEntity.ID),
+					)
+				}
+
+				return nil
+			},
+		)
+
+		if errors.Is(err, domain.ErrDuplicateWebhookEvent) {
+			u.logger.InfoContext(ctx, "duplicate Razorpay webhook event received; skipping processing",
+				slog.String("event_id", resolvedEventID),
+				slog.String("event_type", payload.Event),
+			)
+			return nil
+		}
+
+		if err != nil {
+			u.logger.ErrorContext(ctx, "failed to process Razorpay refund webhook",
 				slog.String("event_id", resolvedEventID),
 				slog.String("event_type", payload.Event),
 				slog.Any("error", err),
@@ -1881,4 +2279,132 @@ func (u *PaymentUsecase) createReceiptSnapshot(
 	}
 
 	return invoice, nil
+}
+
+func (u *PaymentUsecase) recordRefundJournal(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	targetRefund *domain.Refund,
+	processedAt time.Time,
+) error {
+	if u.financeUsecase == nil || targetRefund == nil || tx == nil {
+		return nil
+	}
+
+	if tx.PaymentRepository() == nil {
+		return errors.New("PaymentRepository cannot be nil for refund journaling")
+	}
+	payment, err := tx.PaymentRepository().FindByID(ctx, targetRefund.PaymentID.String())
+	if err != nil {
+		if errors.Is(err, domain.ErrPaymentNotFound) {
+			u.logger.WarnContext(ctx, "payment not found for refund journaling; skipping ledger entry",
+				slog.String("refund_id", targetRefund.ID.String()),
+				slog.String("payment_id", targetRefund.PaymentID.String()),
+			)
+			return nil
+		}
+		u.logger.ErrorContext(ctx, "failed to find payment for refund journaling",
+			slog.String("refund_id", targetRefund.ID.String()),
+			slog.String("payment_id", targetRefund.PaymentID.String()),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("failed to find payment %s: %w", targetRefund.PaymentID, err)
+	}
+
+	if tx.BookingRepository() == nil {
+		return errors.New("BookingRepository cannot be nil for refund journaling")
+	}
+	booking, err := tx.BookingRepository().FindByID(ctx, targetRefund.BookingID)
+	if err != nil {
+		if errors.Is(err, domain.ErrBookingNotFound) {
+			u.logger.WarnContext(ctx, "booking not found for refund journaling; skipping ledger entry",
+				slog.String("refund_id", targetRefund.ID.String()),
+				slog.String("booking_id", targetRefund.BookingID.String()),
+			)
+			return nil
+		}
+		u.logger.ErrorContext(ctx, "failed to find booking for refund journaling",
+			slog.String("refund_id", targetRefund.ID.String()),
+			slog.String("booking_id", targetRefund.BookingID.String()),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("failed to find booking %s: %w", targetRefund.BookingID, err)
+	}
+
+	isEscrowRefund := payment.Status == domain.PaymentStatusRefundRequired
+
+	var eventID uuid.UUID
+	var organizerID uuid.UUID
+	var platformFeeRefund decimal.Decimal
+	isEventCancellation := false
+
+	if isEscrowRefund {
+		eventID = booking.EventID
+		if tx.EventRepository() != nil {
+			if event, eventErr := tx.EventRepository().FindByID(booking.EventID); eventErr == nil && event != nil {
+				organizerID = event.OrganizerID
+			}
+		}
+	} else {
+		eventID = booking.EventID
+		if tx.EventRepository() != nil {
+			event, eventErr := tx.EventRepository().FindByID(booking.EventID)
+			if eventErr != nil {
+				return fmt.Errorf("failed to find event %s for refund journaling: %w", booking.EventID, eventErr)
+			}
+			organizerID = event.OrganizerID
+		}
+
+		if targetRefund.Reason == "EVENT_CANCELLATION" {
+			isEventCancellation = true
+			if booking.PlatformFee.IsPositive() {
+				var priorPlatformFeeRefunded decimal.Decimal
+				if tx.RefundRepository() != nil {
+					if allRefunds, rErr := tx.RefundRepository().FindByBookingID(ctx, booking.ID); rErr == nil {
+						for _, r := range allRefunds {
+							if r.ID != targetRefund.ID && r.Reason == "EVENT_CANCELLATION" && r.Status == domain.RefundStatusSuccess {
+								if r.Amount.GreaterThan(booking.PlatformFee) {
+									priorPlatformFeeRefunded = priorPlatformFeeRefunded.Add(booking.PlatformFee)
+								} else {
+									priorPlatformFeeRefunded = priorPlatformFeeRefunded.Add(r.Amount)
+								}
+							}
+						}
+					}
+				}
+				remainingPlatformFee := booking.PlatformFee.Sub(priorPlatformFeeRefunded)
+				if remainingPlatformFee.IsPositive() {
+					if targetRefund.Amount.LessThan(remainingPlatformFee) {
+						platformFeeRefund = targetRefund.Amount
+					} else {
+						platformFeeRefund = remainingPlatformFee
+					}
+				}
+			}
+		}
+	}
+
+	refundInput := domain.RecordRefundInput{
+		RefundID:            targetRefund.ID,
+		RefundAmount:        targetRefund.Amount,
+		PaymentID:           targetRefund.PaymentID,
+		BookingID:           targetRefund.BookingID,
+		EventID:             eventID,
+		OrganizerID:         organizerID,
+		IsEventCancellation: isEventCancellation,
+		IsEscrowRefund:      isEscrowRefund,
+		PlatformFeeRefund:   platformFeeRefund,
+		Currency:            domainfinance.CurrencyINR,
+		ProcessedAt:         processedAt,
+	}
+
+	if _, err := u.financeUsecase.RecordRefundWithinTx(ctx, tx, refundInput); err != nil {
+		u.logger.ErrorContext(ctx, "failed to record refund journal entry via webhook",
+			slog.String("refund_id", targetRefund.ID.String()),
+			slog.Any("error", err),
+		)
+		return fmt.Errorf("failed to record refund journal: %w", err)
+	}
+
+	return nil
 }

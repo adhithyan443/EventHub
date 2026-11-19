@@ -19,12 +19,15 @@ var (
 	ErrCancellationNotAllowed     = errors.New("cancellation is not allowed for this booking")
 	ErrCancellationDeadlinePassed = errors.New("cancellation deadline has passed")
 	ErrTicketAlreadyUsed          = errors.New("booking tickets have already been used and cannot be cancelled")
+	ErrTicketAlreadyCancelled     = errors.New("one or more tickets are already cancelled")
+	ErrNoValidTicketsToCancel     = errors.New("no valid tickets to cancel")
 )
 
 const (
-	BookingStatusPending   = "PENDING"
-	BookingStatusConfirmed = "CONFIRMED"
-	BookingStatusCancelled = "CANCELLED"
+	BookingStatusPending            = "PENDING"
+	BookingStatusConfirmed          = "CONFIRMED"
+	BookingStatusCancelled          = "CANCELLED"
+	BookingStatusPartiallyCancelled = "PARTIALLY_CANCELLED"
 )
 
 type Booking struct {
@@ -145,6 +148,11 @@ type BookingRepository interface {
 		ctx context.Context,
 		bookingIDs []uuid.UUID,
 	) (map[uuid.UUID][]BookingItem, error)
+
+	FindByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) ([]Booking, error)
 
 	CountConfirmedByEventID(
 		ctx context.Context,

@@ -356,9 +356,9 @@ func (r *paymentRepository) GetOrganizerPaymentOverview(
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
 		COALESCE(SUM(CASE WHEN %s THEN (SELECT COALESCE(SUM(bi.quantity), 0) FROM booking_items bi WHERE bi.booking_id = b.id) ELSE 0 END), 0) AS total_tickets_sold,
-		COALESCE(SUM(CASE WHEN %s THEN (b.subtotal - b.discount) ELSE 0 END), 0) AS total_ticket_sales_amount,
+		COALESCE(SUM(CASE WHEN %s THEN GREATEST(0, (b.subtotal - b.discount) - COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.booking_id = b.id AND r.status = 'SUCCESS'), 0)) ELSE 0 END), 0) AS total_ticket_sales_amount,
 		COALESCE(SUM(CASE WHEN %s THEN b.platform_fee ELSE 0 END), 0) AS total_platform_fees,
-		COALESCE(SUM(CASE WHEN %s THEN (b.subtotal - b.discount) ELSE 0 END), 0) AS organizer_earnings,
+		COALESCE(SUM(CASE WHEN %s THEN GREATEST(0, (b.subtotal - b.discount) - COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.booking_id = b.id AND r.status = 'SUCCESS'), 0)) ELSE 0 END), 0) AS organizer_earnings,
 		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
 			SELECT SUM(r.amount) 
 			FROM refunds r 
@@ -450,7 +450,7 @@ func (r *paymentRepository) GetOrganizerEventPaymentSummaries(
 		COALESCE(SUM(CASE WHEN %s THEN (SELECT COALESCE(SUM(bi.quantity), 0) FROM booking_items bi WHERE bi.booking_id = b.id) ELSE 0 END), 0) AS tickets_sold,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
 		COALESCE(SUM(CASE WHEN %s THEN b.platform_fee ELSE 0 END), 0) AS platform_fees,
-		COALESCE(SUM(CASE WHEN %s THEN (b.subtotal - b.discount) ELSE 0 END), 0) AS organizer_earnings,
+		COALESCE(SUM(CASE WHEN %s THEN GREATEST(0, (b.subtotal - b.discount) - COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.booking_id = b.id AND r.status = 'SUCCESS'), 0)) ELSE 0 END), 0) AS organizer_earnings,
 		COUNT(p.id) AS total_payments_count,
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COUNT(CASE WHEN p.status = 'PENDING' THEN 1 END) AS pending_payments_count,

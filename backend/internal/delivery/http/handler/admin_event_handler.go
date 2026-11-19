@@ -298,6 +298,67 @@ func (h *AdminEventHandler) DeleteEvent(ctx *gin.Context) {
 	})
 }
 
+type AdminCancelEventRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *AdminEventHandler) CancelEvent(ctx *gin.Context) {
+	adminIDVal, exists := ctx.Get("user_id")
+	if !exists {
+		ctx.Error(appErrors.NewUnauthorizedError("unauthorized"))
+		return
+	}
+	adminID, ok := adminIDVal.(uuid.UUID)
+	if !ok {
+		ctx.Error(appErrors.NewUnauthorizedError("invalid user context"))
+		return
+	}
+
+	idParam := strings.TrimSpace(ctx.Param("id"))
+	eventID, err := uuid.Parse(idParam)
+	if err != nil {
+		ctx.Error(appErrors.NewValidationError("invalid event id"))
+		return
+	}
+
+	var req AdminCancelEventRequest
+	if ctx.Request.Body != nil && ctx.Request.ContentLength > 0 {
+		_ = ctx.ShouldBindJSON(&req)
+	}
+
+	summary, err := h.adminEventUsecase.CancelEvent(ctx.Request.Context(), adminID, eventID, req.Reason)
+	if err != nil {
+		mapAdminEventError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "event cancelled successfully",
+		"data":    summary,
+	})
+}
+
+func (h *AdminEventHandler) GetEventCancellationStatus(ctx *gin.Context) {
+	idParam := strings.TrimSpace(ctx.Param("id"))
+	eventID, err := uuid.Parse(idParam)
+	if err != nil {
+		ctx.Error(appErrors.NewValidationError("invalid event id"))
+		return
+	}
+
+	summary, err := h.adminEventUsecase.GetCancellationStatus(ctx.Request.Context(), eventID)
+	if err != nil {
+		mapAdminEventError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    summary,
+	})
+}
+
 func mapAdminEventError(ctx *gin.Context, err error) {
 	if errors.Is(err, domain.ErrEventNotFound) {
 		ctx.Error(appErrors.NewNotFoundError("event not found"))

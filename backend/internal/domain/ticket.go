@@ -61,9 +61,20 @@ type TicketRepository interface {
 		userID uuid.UUID,
 	) ([]Ticket, error)
 
+	FindByEventID(
+		ctx context.Context,
+		eventID uuid.UUID,
+	) ([]Ticket, error)
+
 	UpdateStatus(
 		ctx context.Context,
 		id uuid.UUID,
+		status string,
+	) error
+
+	UpdateStatusForTicketIDs(
+		ctx context.Context,
+		ticketIDs []uuid.UUID,
 		status string,
 	) error
 

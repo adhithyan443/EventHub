@@ -9,6 +9,7 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/google/uuid"
 )
 
@@ -19,10 +20,11 @@ var (
 )
 
 type AdminEventUsecase struct {
-	txManager      domain.TransactionManager
-	eventRepo      domain.EventRepository
-	storageService *storage.S3Service
-	logger         *slog.Logger
+	txManager           domain.TransactionManager
+	eventRepo           domain.EventRepository
+	storageService      *storage.S3Service
+	logger              *slog.Logger
+	cancellationUsecase *EventCancellationUsecase
 }
 
 func NewAdminEventUsecase(
@@ -36,11 +38,46 @@ func NewAdminEventUsecase(
 	}
 
 	return &AdminEventUsecase{
-		txManager:      txManager,
-		eventRepo:      eventRepo,
-		storageService: storageService,
-		logger:         logger,
+		txManager:           txManager,
+		eventRepo:           eventRepo,
+		storageService:      storageService,
+		logger:              logger,
+		cancellationUsecase: NewEventCancellationUsecase(txManager, nil, logger),
 	}
+}
+
+func (u *AdminEventUsecase) SetRefundProcessor(processor refund.RefundProcessor) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetRefundProcessor(processor)
+	}
+}
+
+func (u *AdminEventUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetDispatchTracker(tracker)
+	}
+}
+
+func (u *AdminEventUsecase) CancelEvent(
+	ctx context.Context,
+	adminID uuid.UUID,
+	eventID uuid.UUID,
+	reason string,
+) (*domain.EventCancellationSummary, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.txManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.CancelEventByAdmin(ctx, adminID, eventID, reason)
+}
+
+func (u *AdminEventUsecase) GetCancellationStatus(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (*domain.EventCancellationSummary, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.txManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.GetEventCancellationStatus(ctx, eventID)
 }
 
 func (u *AdminEventUsecase) ListEvents(

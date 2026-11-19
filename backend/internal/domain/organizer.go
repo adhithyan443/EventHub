@@ -20,6 +20,7 @@ type Organizer struct {
 type OrganizerRepository interface {
 	Create(organizer *Organizer) error
 	FindByID(id uuid.UUID) (*Organizer, error)
+	FindByIDForUpdate(id uuid.UUID) (*Organizer, error)
 	FindByUserID(userID uuid.UUID) (*Organizer, error)
 	List(filter AdminOrganizerListFilter) (*AdminOrganizerList, error)
 }

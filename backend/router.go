@@ -19,6 +19,7 @@ func setupRouter(
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	organizerProfileHandler *handler.OrganizerProfileHandler,
 	organizerPaymentHandler *handler.OrganizerPaymentHandler,
+	organizerSettlementHandler *handler.OrganizerSettlementHandler,
 	categoryHandler *handler.CategoryHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
@@ -32,6 +33,7 @@ func setupRouter(
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	adminEventHandler *handler.AdminEventHandler,
 	adminPaymentHandler *handler.AdminPaymentHandler,
+	adminSettlementHandler *handler.AdminSettlementHandler,
 	profileHandler *handler.ProfileHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
@@ -76,6 +78,7 @@ func setupRouter(
 		organizerApplicationHandler,
 		organizerProfileHandler,
 		organizerPaymentHandler,
+		organizerSettlementHandler,
 		eventHandler,
 		seatLayoutHandler,
 		jwtService,
@@ -90,6 +93,7 @@ func setupRouter(
 		adminOrganizerHandler,
 		adminEventHandler,
 		adminPaymentHandler,
+		adminSettlementHandler,
 		jwtService,
 		userRepo,
 	)
@@ -200,6 +204,7 @@ func registerOrganizerRoutes(
 	organizerApplicationHandler *handler.OrganizerApplicationHandler,
 	organizerProfileHandler *handler.OrganizerProfileHandler,
 	organizerPaymentHandler *handler.OrganizerPaymentHandler,
+	organizerSettlementHandler *handler.OrganizerSettlementHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	jwtService *token.JWTService,
@@ -238,6 +243,18 @@ func registerOrganizerRoutes(
 			payments.GET("/overview", organizerPaymentHandler.GetPaymentOverview)
 			payments.GET("/summary-by-event", organizerPaymentHandler.GetEventPaymentSummaries)
 			payments.GET("", organizerPaymentHandler.ListPayments)
+		}
+	}
+
+	// Organizer settlement endpoints (protected by role ORGANIZER).
+	if organizerSettlementHandler != nil {
+		settlements := organizer.Group("/settlements")
+		settlements.Use(middleware.RequireRole("ORGANIZER"))
+		{
+			settlements.GET("/balance", organizerSettlementHandler.GetBalance)
+			settlements.POST("", organizerSettlementHandler.RequestSettlement)
+			settlements.GET("", organizerSettlementHandler.ListSettlements)
+			settlements.GET("/:id", organizerSettlementHandler.GetSettlement)
 		}
 	}
 
@@ -281,6 +298,21 @@ func registerOrganizerRoutes(
 		"/events/:id/publish",
 		eventHandler.PublishEvent,
 	)
+
+	organizer.POST(
+		"/events/:id/cancel",
+		eventHandler.CancelEvent,
+	)
+
+	organizer.PATCH(
+		"/events/:id/cancel",
+		eventHandler.CancelEvent,
+	)
+
+	organizer.GET(
+		"/events/:id/cancellation",
+		eventHandler.GetEventCancellationStatus,
+	)
 }
 
 func registerAdminRoutes(
@@ -291,6 +323,7 @@ func registerAdminRoutes(
 	adminOrganizerHandler *handler.AdminOrganizerHandler,
 	adminEventHandler *handler.AdminEventHandler,
 	adminPaymentHandler *handler.AdminPaymentHandler,
+	adminSettlementHandler *handler.AdminSettlementHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -302,6 +335,18 @@ func registerAdminRoutes(
 		middleware.RequireActiveUser(userRepo),
 		middleware.RequireRole("ADMIN"),
 	)
+
+	// Settlement management endpoints
+	if adminSettlementHandler != nil {
+		settlements := admin.Group("/settlements")
+		{
+			settlements.GET("", adminSettlementHandler.ListSettlements)
+			settlements.GET("/:id", adminSettlementHandler.GetSettlement)
+			settlements.POST("/:id/approve", adminSettlementHandler.ApproveSettlement)
+			settlements.POST("/:id/reject", adminSettlementHandler.RejectSettlement)
+			settlements.POST("/:id/retry", adminSettlementHandler.RetrySettlement)
+		}
+	}
 
 	// Payment management endpoints
 	admin.GET("/payments/summary-by-event", adminPaymentHandler.GetEventPaymentSummaries)
@@ -349,6 +394,9 @@ func registerAdminRoutes(
 	admin.PUT("/events/:id", adminEventHandler.UpdateEvent)
 	admin.PATCH("/events/:id/publish", adminEventHandler.PublishEvent)
 	admin.DELETE("/events/:id", adminEventHandler.DeleteEvent)
+	admin.POST("/events/:id/cancel", adminEventHandler.CancelEvent)
+	admin.PATCH("/events/:id/cancel", adminEventHandler.CancelEvent)
+	admin.GET("/events/:id/cancellation", adminEventHandler.GetEventCancellationStatus)
 }
 
 func registerCategoryRoutes(

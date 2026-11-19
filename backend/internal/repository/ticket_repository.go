@@ -189,6 +189,31 @@ func (r *ticketRepository) FindByUserID(
 	return tickets, nil
 }
 
+func (r *ticketRepository) FindByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) ([]domain.Ticket, error) {
+	var ticketModels []models.TicketModel
+
+	if err := r.db.WithContext(ctx).
+		Where("event_id = ?", eventID).
+		Order("issued_at ASC").
+		Find(&ticketModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find tickets by event",
+			slog.String("event_id", eventID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	tickets := make([]domain.Ticket, len(ticketModels))
+	for i := range ticketModels {
+		tickets[i] = *toTicketDomain(&ticketModels[i])
+	}
+
+	return tickets, nil
+}
+
 func (r *ticketRepository) UpdateStatus(
 	ctx context.Context,
 	id uuid.UUID,
@@ -214,6 +239,51 @@ func (r *ticketRepository) UpdateStatus(
 	r.logger.InfoContext(ctx, "ticket status updated",
 		slog.String("ticket_id", id.String()),
 		slog.String("status", status),
+	)
+
+	return nil
+}
+
+func (r *ticketRepository) UpdateStatusForTicketIDs(
+	ctx context.Context,
+	ticketIDs []uuid.UUID,
+	status string,
+) error {
+	if len(ticketIDs) == 0 {
+		return nil
+	}
+
+	query := r.db.WithContext(ctx).
+		Model(&models.TicketModel{}).
+		Where("id IN ?", ticketIDs)
+
+	if status == domain.TicketStatusCancelled {
+		query = query.Where("status = ?", domain.TicketStatusValid)
+	}
+
+	result := query.Update("status", status)
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to update ticket status for ticket IDs",
+			slog.Int("ticket_count", len(ticketIDs)),
+			slog.String("status", status),
+			slog.String("error", result.Error.Error()),
+		)
+		return result.Error
+	}
+
+	if status == domain.TicketStatusCancelled && result.RowsAffected != int64(len(ticketIDs)) {
+		r.logger.WarnContext(ctx, "ticket status update rows affected mismatch",
+			slog.Int("expected", len(ticketIDs)),
+			slog.Int64("actual", result.RowsAffected),
+		)
+		return domain.ErrTicketAlreadyCancelled
+	}
+
+	r.logger.InfoContext(ctx, "ticket status updated for ticket IDs",
+		slog.Int("ticket_count", len(ticketIDs)),
+		slog.String("status", status),
+		slog.Int64("rows_affected", result.RowsAffected),
 	)
 
 	return nil

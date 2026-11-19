@@ -57,6 +57,7 @@ type transactionRepositories struct {
 
 	financeAccountRepo domain.FinanceAccountRepository
 	financeJournalRepo domain.FinanceJournalRepository
+	settlementRepo     domain.SettlementRepository
 }
 
 func NewTransactionManager(
@@ -160,6 +161,7 @@ func (m *TransactionManager) WithinTransaction(
 
 			financeAccountRepo: NewFinanceAccountRepository(txDB, m.logger),
 			financeJournalRepo: NewFinanceJournalRepository(txDB, m.logger),
+			settlementRepo:     NewSettlementRepository(txDB, m.logger),
 		}
 
 		return fn(txRepos)
@@ -305,6 +307,10 @@ func (r *transactionRepositories) FinanceAccountRepository() domain.FinanceAccou
 
 func (r *transactionRepositories) FinanceJournalRepository() domain.FinanceJournalRepository {
 	return r.financeJournalRepo
+}
+
+func (r *transactionRepositories) SettlementRepository() domain.SettlementRepository {
+	return r.settlementRepo
 }
 
 var trustedSavepoints = map[domain.SavepointName]struct{}{

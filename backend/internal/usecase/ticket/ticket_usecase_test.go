@@ -53,10 +53,25 @@ func (m *mockTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]
 	}
 	return res, nil
 }
+func (m *mockTicketRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Ticket, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	var res []domain.Ticket
+	for _, t := range m.tickets {
+		if t.EventID == eventID {
+			res = append(res, *t)
+		}
+	}
+	return res, nil
+}
 func (m *mockTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return m.err
 }
 func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return m.err
+}
+func (m *mockTicketRepo) UpdateStatusForTicketIDs(ctx context.Context, ticketIDs []uuid.UUID, status string) error {
 	return m.err
 }
 func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
@@ -427,4 +442,31 @@ func TestGetTicketPDFData_UnexpectedDatabaseError_Propagated(t *testing.T) {
 		_, err := f.usecase.GetTicketPDFData(ctx, f.userID, f.ticketID)
 		assert.ErrorIs(t, err, dbErr)
 	})
+}
+
+func TestGetTicketPDFData_CancelledTicket_Rejected(t *testing.T) {
+	ctx := context.Background()
+	f := setupFixture()
+	f.ticketRepo.tickets[f.ticketID].Status = domain.TicketStatusCancelled
+
+	_, err := f.usecase.GetTicketPDFData(ctx, f.userID, f.ticketID)
+	assert.ErrorIs(t, err, domain.ErrTicketNotValid)
+}
+
+func TestGetTicketQRData_Success(t *testing.T) {
+	ctx := context.Background()
+	f := setupFixture()
+
+	tk, err := f.usecase.GetTicketQRData(ctx, f.userID, f.ticketID)
+	require.NoError(t, err)
+	assert.Equal(t, f.ticketID, tk.ID)
+}
+
+func TestGetTicketQRData_CancelledTicket_Rejected(t *testing.T) {
+	ctx := context.Background()
+	f := setupFixture()
+	f.ticketRepo.tickets[f.ticketID].Status = domain.TicketStatusCancelled
+
+	_, err := f.usecase.GetTicketQRData(ctx, f.userID, f.ticketID)
+	assert.ErrorIs(t, err, domain.ErrTicketNotValid)
 }

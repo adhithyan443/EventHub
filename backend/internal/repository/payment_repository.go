@@ -69,6 +69,31 @@ func (r *paymentRepository) FindByID(
 	return toPaymentDomain(&model), nil
 }
 
+func (r *paymentRepository) FindByIDForUpdate(
+	ctx context.Context,
+	id string,
+) (*domain.Payment, error) {
+	var model models.PaymentModel
+
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		First(&model, "id = ?", id).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrPaymentNotFound
+		}
+
+		r.logger.ErrorContext(ctx, "failed to lock payment by ID",
+			slog.String("payment_id", id),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	return toPaymentDomain(&model), nil
+}
+
 func (r *paymentRepository) FindByBookingID(
 	ctx context.Context,
 	bookingID string,

@@ -111,6 +111,26 @@ func (u *TicketUsecase) GetMyTicket(
 	return ticket, nil
 }
 
+// GetTicketQRData verifies ticket ownership and confirms the ticket is valid before QR generation.
+func (u *TicketUsecase) GetTicketQRData(
+	ctx context.Context,
+	userID uuid.UUID,
+	ticketID uuid.UUID,
+) (*domain.Ticket, error) {
+	ticket, err := u.GetMyTicket(ctx, userID, ticketID)
+	if err != nil {
+		return nil, err
+	}
+	if ticket.Status != domain.TicketStatusValid {
+		u.logger.WarnContext(ctx, "ticket QR generation rejected: ticket not valid",
+			slog.String("ticket_id", ticketID.String()),
+			slog.String("status", ticket.Status),
+		)
+		return nil, domain.ErrTicketNotValid
+	}
+	return ticket, nil
+}
+
 // GetTicketPDFData verifies ticket ownership and retrieves all related event,
 // schedule, customer, venue, and ticket-type details for PDF generation.
 func (u *TicketUsecase) GetTicketPDFData(
@@ -126,6 +146,13 @@ func (u *TicketUsecase) GetTicketPDFData(
 	ticket, err := u.GetMyTicket(ctx, userID, ticketID)
 	if err != nil {
 		return nil, err
+	}
+	if ticket.Status != domain.TicketStatusValid {
+		u.logger.WarnContext(ctx, "ticket PDF generation rejected: ticket not valid",
+			slog.String("ticket_id", ticketID.String()),
+			slog.String("status", ticket.Status),
+		)
+		return nil, domain.ErrTicketNotValid
 	}
 
 	// 2. Retrieve event

@@ -259,6 +259,7 @@ type Payment struct {
 type PaymentRepository interface {
 	Create(ctx context.Context, payment *Payment) error
 	FindByID(ctx context.Context, id string) (*Payment, error)
+	FindByIDForUpdate(ctx context.Context, id string) (*Payment, error)
 	FindByBookingID(ctx context.Context, bookingID string) ([]Payment, error)
 	Update(ctx context.Context, payment *Payment) error
 	FindByProviderOrderID(ctx context.Context, providerOrderID string) (*Payment, error)

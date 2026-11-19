@@ -1,6 +1,7 @@
 package handler_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -142,13 +143,21 @@ func (s *stubVenueHandlerRepo) FindByID(id uuid.UUID) (*domain.Venue, error) {
 
 type stubTicketHandlerRepo struct {
 	domain.TicketRepository
+	findByBookingIDFn func(ctx context.Context, bookingID uuid.UUID) ([]domain.Ticket, error)
 }
 
 func (s *stubTicketHandlerRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Ticket, error) {
+	if s.findByBookingIDFn != nil {
+		return s.findByBookingIDFn(ctx, bookingID)
+	}
 	return nil, nil
 }
 
 func (s *stubTicketHandlerRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return nil
+}
+
+func (s *stubTicketHandlerRepo) UpdateStatusForTicketIDs(ctx context.Context, ticketIDs []uuid.UUID, status string) error {
 	return nil
 }
 
@@ -162,6 +171,18 @@ func (s *stubPaymentHandlerRepo) FindByBookingID(ctx context.Context, bookingID 
 
 type stubRefundHandlerRepo struct {
 	domain.RefundRepository
+}
+
+func (s *stubRefundHandlerRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Refund, error) {
+	return nil, nil
+}
+
+func (s *stubRefundHandlerRepo) Create(ctx context.Context, refund *domain.Refund) error {
+	return nil
+}
+
+func (s *stubRefundHandlerRepo) Update(ctx context.Context, refund *domain.Refund) error {
+	return nil
 }
 
 type stubTicketTypeHandlerRepo struct {
@@ -192,6 +213,7 @@ type stubTxRepositories struct {
 	domain.TransactionRepositories
 	bookingRepo domain.BookingRepository
 	invoiceRepo domain.InvoiceRepository
+	ticketRepo  domain.TicketRepository
 }
 
 func (s *stubTxRepositories) InvoiceRepository() domain.InvoiceRepository {
@@ -226,6 +248,9 @@ func (s *stubTxRepositories) VenueRepository() domain.VenueRepository {
 }
 
 func (s *stubTxRepositories) TicketRepository() domain.TicketRepository {
+	if s.ticketRepo != nil {
+		return s.ticketRepo
+	}
 	return &stubTicketHandlerRepo{}
 }
 
@@ -254,6 +279,7 @@ func (s *stubTxManager) WithinTransaction(fn func(tx domain.TransactionRepositor
 type bookingHandlerFixture struct {
 	repo        *stubBookingHandlerRepo
 	invoiceRepo *stubInvoiceHandlerRepo
+	ticketRepo  *stubTicketHandlerRepo
 	handler     *handler.BookingHandler
 	router      *gin.Engine
 	userID      uuid.UUID
@@ -264,7 +290,8 @@ func setupBookingHandlerFixture(t *testing.T) *bookingHandlerFixture {
 
 	repo := &stubBookingHandlerRepo{}
 	invoiceRepo := &stubInvoiceHandlerRepo{}
-	txRepos := &stubTxRepositories{bookingRepo: repo, invoiceRepo: invoiceRepo}
+	ticketRepo := &stubTicketHandlerRepo{}
+	txRepos := &stubTxRepositories{bookingRepo: repo, invoiceRepo: invoiceRepo, ticketRepo: ticketRepo}
 	txManager := &stubTxManager{txRepos: txRepos}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -279,6 +306,7 @@ func setupBookingHandlerFixture(t *testing.T) *bookingHandlerFixture {
 	return &bookingHandlerFixture{
 		repo:        repo,
 		invoiceRepo: invoiceRepo,
+		ticketRepo:  ticketRepo,
 		handler:     bh,
 		router:      router,
 		userID:      userID,
@@ -944,6 +972,206 @@ func TestCancelBooking_CancellationNotAllowed(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "cancellation is not allowed")
 }
 
+func TestCancelBooking_PartialTickets_Success(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+	eventID := uuid.New()
+	ticket1ID := uuid.New()
+	ticket2ID := uuid.New()
+
+	testBooking := &domain.Booking{
+		ID:                        bookingID,
+		BookingNumber:             "BK-20261028-002",
+		UserID:                    f.userID,
+		EventID:                   eventID,
+		Status:                    domain.BookingStatusConfirmed,
+		Total:                     decimal.Zero,
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 24,
+		RefundPolicy:              domain.RefundPolicyNoRefund,
+		RefundPercentage:          0,
+		CreatedAt:                 time.Now().Add(-1 * time.Hour),
+		UpdatedAt:                 time.Now().Add(-1 * time.Hour),
+	}
+
+	f.repo.findByIDForUpdateFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+		if id == bookingID {
+			return testBooking, nil
+		}
+		return nil, domain.ErrBookingNotFound
+	}
+
+	f.ticketRepo.findByBookingIDFn = func(ctx context.Context, bID uuid.UUID) ([]domain.Ticket, error) {
+		return []domain.Ticket{
+			{ID: ticket1ID, BookingID: bookingID, UserID: f.userID, Status: domain.TicketStatusValid},
+			{ID: ticket2ID, BookingID: bookingID, UserID: f.userID, Status: domain.TicketStatusValid},
+		}, nil
+	}
+
+	f.router.POST("/api/v1/bookings/:id/cancel", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.CancelBooking(c)
+	})
+
+	bodyBytes, _ := json.Marshal(map[string]interface{}{
+		"ticket_ids": []string{ticket1ID.String()},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/"+bookingID.String()+"/cancel", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var resp map[string]interface{}
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	data := resp["data"].(map[string]interface{})
+	assert.Equal(t, domain.BookingStatusPartiallyCancelled, data["status"])
+	assert.Equal(t, float64(1), data["remaining_ticket_count"])
+}
+
+func TestCancelBooking_InvalidJSONBody(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+
+	f.router.POST("/api/v1/bookings/:id/cancel", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.CancelBooking(c)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/"+bookingID.String()+"/cancel", bytes.NewBufferString(`{"ticket_ids": "not_an_array"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "invalid request body")
+}
+
+func TestCancelBooking_TicketNotFound(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+	eventID := uuid.New()
+	ticket1ID := uuid.New()
+	unknownTicketID := uuid.New()
+
+	f.repo.findByIDForUpdateFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+		return &domain.Booking{
+			ID:                        bookingID,
+			UserID:                    f.userID,
+			EventID:                   eventID,
+			Status:                    domain.BookingStatusConfirmed,
+			CancellationAllowed:       true,
+			CancellationDeadlineHours: 24,
+			RefundPolicy:              domain.RefundPolicyNoRefund,
+		}, nil
+	}
+
+	f.ticketRepo.findByBookingIDFn = func(ctx context.Context, bID uuid.UUID) ([]domain.Ticket, error) {
+		return []domain.Ticket{
+			{ID: ticket1ID, BookingID: bookingID, UserID: f.userID, Status: domain.TicketStatusValid},
+		}, nil
+	}
+
+	f.router.POST("/api/v1/bookings/:id/cancel", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.CancelBooking(c)
+	})
+
+	bodyBytes, _ := json.Marshal(map[string]interface{}{
+		"ticket_ids": []string{unknownTicketID.String()},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/"+bookingID.String()+"/cancel", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ticket not found")
+}
+
+func TestCancelBooking_TicketAlreadyUsed(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+	eventID := uuid.New()
+	ticket1ID := uuid.New()
+
+	f.repo.findByIDForUpdateFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+		return &domain.Booking{
+			ID:                        bookingID,
+			UserID:                    f.userID,
+			EventID:                   eventID,
+			Status:                    domain.BookingStatusConfirmed,
+			CancellationAllowed:       true,
+			CancellationDeadlineHours: 24,
+			RefundPolicy:              domain.RefundPolicyNoRefund,
+		}, nil
+	}
+
+	f.ticketRepo.findByBookingIDFn = func(ctx context.Context, bID uuid.UUID) ([]domain.Ticket, error) {
+		return []domain.Ticket{
+			{ID: ticket1ID, BookingID: bookingID, UserID: f.userID, Status: domain.TicketStatusUsed},
+		}, nil
+	}
+
+	f.router.POST("/api/v1/bookings/:id/cancel", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.CancelBooking(c)
+	})
+
+	bodyBytes, _ := json.Marshal(map[string]interface{}{
+		"ticket_ids": []string{ticket1ID.String()},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/"+bookingID.String()+"/cancel", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "already been used")
+}
+
+func TestCancelBooking_TicketAlreadyCancelled(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+	eventID := uuid.New()
+	ticket1ID := uuid.New()
+
+	f.repo.findByIDForUpdateFn = func(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+		return &domain.Booking{
+			ID:                        bookingID,
+			UserID:                    f.userID,
+			EventID:                   eventID,
+			Status:                    domain.BookingStatusConfirmed,
+			CancellationAllowed:       true,
+			CancellationDeadlineHours: 24,
+			RefundPolicy:              domain.RefundPolicyNoRefund,
+		}, nil
+	}
+
+	f.ticketRepo.findByBookingIDFn = func(ctx context.Context, bID uuid.UUID) ([]domain.Ticket, error) {
+		return []domain.Ticket{
+			{ID: ticket1ID, BookingID: bookingID, UserID: f.userID, Status: domain.TicketStatusCancelled},
+		}, nil
+	}
+
+	f.router.POST("/api/v1/bookings/:id/cancel", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.CancelBooking(c)
+	})
+
+	bodyBytes, _ := json.Marshal(map[string]interface{}{
+		"ticket_ids": []string{ticket1ID.String()},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/"+bookingID.String()+"/cancel", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "already been cancelled")
+}
+
 func TestGetBookingInvoice_Success(t *testing.T) {
 	f := setupBookingHandlerFixture(t)
 	bookingID := uuid.New()
@@ -1077,4 +1305,26 @@ func TestDownloadBookingInvoicePDF_Success(t *testing.T) {
 	assert.Equal(t, "application/pdf", rec.Header().Get("Content-Type"))
 	assert.Contains(t, rec.Header().Get("Content-Disposition"), "attachment; filename=\"receipt-EVH-REC-20261110-000001.pdf\"")
 	assert.True(t, len(rec.Body.Bytes()) > 0)
+}
+
+func TestCancelBooking_NilTicketIDs_Returns404(t *testing.T) {
+	f := setupBookingHandlerFixture(t)
+	bookingID := uuid.New()
+
+	f.router.POST("/api/v1/bookings/:id/cancel", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.CancelBooking(c)
+	})
+
+	body := []byte(`{"ticket_ids": ["00000000-0000-0000-0000-000000000000"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/bookings/"+bookingID.String()+"/cancel", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	var resp map[string]interface{}
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "ticket not found", resp["error"])
 }

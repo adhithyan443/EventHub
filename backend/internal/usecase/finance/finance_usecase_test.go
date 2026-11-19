@@ -117,6 +117,18 @@ func (m *mockJournalRepo) FindByIdempotencyKey(ctx context.Context, key string) 
 	return nil, domain.ErrFinanceJournalNotFound
 }
 
+func (m *mockJournalRepo) GetOrganizerBalance(ctx context.Context, organizerID uuid.UUID) (*domain.OrganizerSubledgerBalance, error) {
+	return nil, nil
+}
+
+func (m *mockJournalRepo) GetOrganizerEventBalances(ctx context.Context, organizerID uuid.UUID) ([]domain.EventSubledgerBalance, error) {
+	return nil, nil
+}
+
+func (m *mockJournalRepo) GetEventBalance(ctx context.Context, organizerID, eventID uuid.UUID) (*domain.EventSubledgerBalance, error) {
+	return nil, nil
+}
+
 func setupStandardAccounts(t *testing.T, repo *mockAccountRepo) {
 	t.Helper()
 
@@ -153,9 +165,21 @@ func setupStandardAccounts(t *testing.T, repo *mockAccountRepo) {
 	)
 	require.NoError(t, err)
 
+	customerRefund, err := domainfinance.NewAccount(
+		uuid.New(),
+		domainfinance.AccountCodeCustomerRefundPayable,
+		"Customer Refund Payable",
+		domainfinance.AccountTypeLiability,
+		domainfinance.NormalBalanceCredit,
+		domainfinance.CurrencyINR,
+		true,
+	)
+	require.NoError(t, err)
+
 	repo.accountsByCode[domainfinance.AccountCodeRazorpayClearing] = clearing
 	repo.accountsByCode[domainfinance.AccountCodeOrganizerPayable] = organizer
 	repo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue] = platformFee
+	repo.accountsByCode[domainfinance.AccountCodeCustomerRefundPayable] = customerRefund
 }
 
 func createValidInput() domain.RecordPaymentCaptureInput {
@@ -716,5 +740,443 @@ func TestFinanceUsecase_SuccessfulJournalCreation(t *testing.T) {
 		_, err := uc.RecordPaymentCaptureWithinTx(ctx, txRepos, in)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, domain.ErrUnsupportedDiscountAllocation))
+	})
+}
+
+func TestFinanceUsecase_RecordRefund_CustomerCancellation(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	setupStandardAccounts(t, accRepo)
+	journalRepo := &mockJournalRepo{}
+
+	txRepos := &mockTxRepos{
+		accountRepo: accRepo,
+		journalRepo: journalRepo,
+	}
+	txMgr := &mockTxManager{withinTxFn: func(fn func(tx domain.TransactionRepositories) error) error { return fn(txRepos) }}
+	uc, err := usecasefinance.NewFinanceUsecase(txMgr, slog.Default())
+	require.NoError(t, err)
+
+	refundID := uuid.New()
+	paymentID := uuid.New()
+	bookingID := uuid.New()
+	eventID := uuid.New()
+	organizerID := uuid.New()
+	refundAmount := decimal.NewFromInt(500)
+
+	in := domain.RecordRefundInput{
+		RefundID:            refundID,
+		RefundAmount:        refundAmount,
+		PaymentID:           paymentID,
+		BookingID:           bookingID,
+		EventID:             eventID,
+		OrganizerID:         organizerID,
+		IsEventCancellation: false,
+		IsEscrowRefund:      false,
+		PlatformFeeRefund:   decimal.Zero,
+		Currency:            domainfinance.CurrencyINR,
+		ProcessedAt:         time.Now().UTC(),
+	}
+
+	journal, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+	require.NoError(t, err)
+	require.NotNil(t, journal)
+
+	assert.Equal(t, domainfinance.TransactionTypeRefund, journal.TransactionType())
+	assert.Equal(t, domainfinance.FinancialEventCustomerRefund, journal.FinancialEventType())
+	assert.Equal(t, domainfinance.SourceTypeRefund, journal.SourceType())
+	assert.Equal(t, refundID.String(), journal.SourceID())
+	assert.Equal(t, fmt.Sprintf("refund:%s", refundID), journal.IdempotencyKey())
+	assert.Equal(t, domainfinance.PostingStatusPosted, journal.Status())
+
+	entries := journal.Entries()
+	require.Len(t, entries, 2)
+
+	// Leg 1: Debit Organizer Payable (2010)
+	assert.Equal(t, domainfinance.EntryTypeDebit, entries[0].EntryType())
+	assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), entries[0].AccountID())
+	assert.True(t, refundAmount.Equal(entries[0].Amount().Amount()))
+	assert.NotNil(t, entries[0].OrganizerID())
+	assert.Equal(t, organizerID, *entries[0].OrganizerID())
+	assert.NotNil(t, entries[0].EventID())
+	assert.Equal(t, eventID, *entries[0].EventID())
+
+	// Leg 2: Credit Razorpay Clearing (1010)
+	assert.Equal(t, domainfinance.EntryTypeCredit, entries[1].EntryType())
+	assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[1].AccountID())
+	assert.True(t, refundAmount.Equal(entries[1].Amount().Amount()))
+	assert.Nil(t, entries[1].OrganizerID())
+	assert.Nil(t, entries[1].EventID())
+
+	// Double-entry balancing check
+	balanced, err := journal.IsBalanced()
+	require.NoError(t, err)
+	assert.True(t, balanced)
+}
+
+func TestFinanceUsecase_RecordRefund_EventCancellation(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	setupStandardAccounts(t, accRepo)
+	journalRepo := &mockJournalRepo{}
+
+	txRepos := &mockTxRepos{
+		accountRepo: accRepo,
+		journalRepo: journalRepo,
+	}
+	txMgr := &mockTxManager{withinTxFn: func(fn func(tx domain.TransactionRepositories) error) error { return fn(txRepos) }}
+	uc, err := usecasefinance.NewFinanceUsecase(txMgr, slog.Default())
+	require.NoError(t, err)
+
+	t.Run("Full refund with ticket and platform fee", func(t *testing.T) {
+		refundID := uuid.New()
+		paymentID := uuid.New()
+		bookingID := uuid.New()
+		eventID := uuid.New()
+		organizerID := uuid.New()
+		totalRefund := decimal.NewFromInt(1050)
+		feeRefund := decimal.NewFromInt(50)
+		ticketRefund := decimal.NewFromInt(1000)
+
+		in := domain.RecordRefundInput{
+			RefundID:            refundID,
+			RefundAmount:        totalRefund,
+			PaymentID:           paymentID,
+			BookingID:           bookingID,
+			EventID:             eventID,
+			OrganizerID:         organizerID,
+			IsEventCancellation: true,
+			IsEscrowRefund:      false,
+			PlatformFeeRefund:   feeRefund,
+			Currency:            domainfinance.CurrencyINR,
+			ProcessedAt:         time.Now().UTC(),
+		}
+
+		journal, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.NoError(t, err)
+		require.NotNil(t, journal)
+
+		assert.Equal(t, domainfinance.TransactionTypeRefund, journal.TransactionType())
+		assert.Equal(t, domainfinance.FinancialEventEventCancellationRefund, journal.FinancialEventType())
+		assert.Equal(t, fmt.Sprintf("refund:%s", refundID), journal.IdempotencyKey())
+
+		entries := journal.Entries()
+		require.Len(t, entries, 3)
+
+		// Debit Organizer Payable (2010) = 1000
+		assert.Equal(t, domainfinance.EntryTypeDebit, entries[0].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), entries[0].AccountID())
+		assert.True(t, ticketRefund.Equal(entries[0].Amount().Amount()))
+		assert.Equal(t, organizerID, *entries[0].OrganizerID())
+
+		// Debit Platform Fee Revenue (4010) = 50
+		assert.Equal(t, domainfinance.EntryTypeDebit, entries[1].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue].ID(), entries[1].AccountID())
+		assert.True(t, feeRefund.Equal(entries[1].Amount().Amount()))
+		assert.Equal(t, eventID, *entries[1].EventID())
+
+		// Credit Razorpay Clearing (1010) = 1050
+		assert.Equal(t, domainfinance.EntryTypeCredit, entries[2].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[2].AccountID())
+		assert.True(t, totalRefund.Equal(entries[2].Amount().Amount()))
+
+		balanced, err := journal.IsBalanced()
+		require.NoError(t, err)
+		assert.True(t, balanced)
+	})
+
+	t.Run("Ticket-only refund with zero platform fee", func(t *testing.T) {
+		refundID := uuid.New()
+		paymentID := uuid.New()
+		bookingID := uuid.New()
+		eventID := uuid.New()
+		organizerID := uuid.New()
+		ticketRefund := decimal.NewFromInt(800)
+
+		in := domain.RecordRefundInput{
+			RefundID:            refundID,
+			RefundAmount:        ticketRefund,
+			PaymentID:           paymentID,
+			BookingID:           bookingID,
+			EventID:             eventID,
+			OrganizerID:         organizerID,
+			IsEventCancellation: true,
+			IsEscrowRefund:      false,
+			PlatformFeeRefund:   decimal.Zero,
+			Currency:            domainfinance.CurrencyINR,
+			ProcessedAt:         time.Now().UTC(),
+		}
+
+		journal, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.NoError(t, err)
+		require.NotNil(t, journal)
+
+		entries := journal.Entries()
+		require.Len(t, entries, 2)
+		assert.Equal(t, domainfinance.EntryTypeDebit, entries[0].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), entries[0].AccountID())
+		assert.Equal(t, domainfinance.EntryTypeCredit, entries[1].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[1].AccountID())
+	})
+}
+
+func TestFinanceUsecase_RecordRefund_EscrowRefund(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	setupStandardAccounts(t, accRepo)
+	journalRepo := &mockJournalRepo{}
+
+	txRepos := &mockTxRepos{
+		accountRepo: accRepo,
+		journalRepo: journalRepo,
+	}
+	txMgr := &mockTxManager{withinTxFn: func(fn func(tx domain.TransactionRepositories) error) error { return fn(txRepos) }}
+	uc, err := usecasefinance.NewFinanceUsecase(txMgr, slog.Default())
+	require.NoError(t, err)
+
+	refundID := uuid.New()
+	paymentID := uuid.New()
+	bookingID := uuid.New()
+	amount := decimal.NewFromInt(750)
+
+	in := domain.RecordRefundInput{
+		RefundID:            refundID,
+		RefundAmount:        amount,
+		PaymentID:           paymentID,
+		BookingID:           bookingID,
+		IsEscrowRefund:      true,
+		IsEventCancellation: false,
+		Currency:            domainfinance.CurrencyINR,
+		ProcessedAt:         time.Now().UTC(),
+	}
+
+	journal, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+	require.NoError(t, err)
+	require.NotNil(t, journal)
+
+	assert.Equal(t, domainfinance.TransactionTypeRefund, journal.TransactionType())
+	assert.Equal(t, domainfinance.FinancialEventEscrowRefund, journal.FinancialEventType())
+	assert.Equal(t, fmt.Sprintf("refund:%s", refundID), journal.IdempotencyKey())
+
+	entries := journal.Entries()
+	require.Len(t, entries, 2)
+
+	// Leg 1: Debit Customer Refund Payable (2020)
+	assert.Equal(t, domainfinance.EntryTypeDebit, entries[0].EntryType())
+	assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeCustomerRefundPayable].ID(), entries[0].AccountID())
+	assert.True(t, amount.Equal(entries[0].Amount().Amount()))
+
+	// Leg 2: Credit Razorpay Clearing (1010)
+	assert.Equal(t, domainfinance.EntryTypeCredit, entries[1].EntryType())
+	assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[1].AccountID())
+	assert.True(t, amount.Equal(entries[1].Amount().Amount()))
+
+	// Crucial invariant: 2010 Organizer Payable and 4010 Platform Fee are untouched!
+	for _, entry := range entries {
+		assert.NotEqual(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), entry.AccountID())
+		assert.NotEqual(t, accRepo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue].ID(), entry.AccountID())
+	}
+}
+
+func TestFinanceUsecase_RecordEscrowCapture(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	setupStandardAccounts(t, accRepo)
+	journalRepo := &mockJournalRepo{}
+
+	txRepos := &mockTxRepos{
+		accountRepo: accRepo,
+		journalRepo: journalRepo,
+	}
+	txMgr := &mockTxManager{withinTxFn: func(fn func(tx domain.TransactionRepositories) error) error { return fn(txRepos) }}
+	uc, err := usecasefinance.NewFinanceUsecase(txMgr, slog.Default())
+	require.NoError(t, err)
+
+	paymentID := uuid.New()
+	bookingID := uuid.New()
+	amount := decimal.NewFromInt(1200)
+
+	in := domain.RecordEscrowCaptureInput{
+		PaymentID:     paymentID,
+		PaymentAmount: amount,
+		BookingID:     bookingID,
+		Currency:      domainfinance.CurrencyINR,
+		CapturedAt:    time.Now().UTC(),
+	}
+
+	journal, err := uc.RecordEscrowCaptureWithinTx(ctx, txRepos, in)
+	require.NoError(t, err)
+	require.NotNil(t, journal)
+
+	assert.Equal(t, domainfinance.TransactionTypePayment, journal.TransactionType())
+	assert.Equal(t, domainfinance.FinancialEventEscrowCapture, journal.FinancialEventType())
+	assert.Equal(t, fmt.Sprintf("escrow_capture:%s", paymentID), journal.IdempotencyKey())
+
+	entries := journal.Entries()
+	require.Len(t, entries, 2)
+
+	// Leg 1: Debit Razorpay Clearing (1010)
+	assert.Equal(t, domainfinance.EntryTypeDebit, entries[0].EntryType())
+	assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[0].AccountID())
+	assert.True(t, amount.Equal(entries[0].Amount().Amount()))
+
+	// Leg 2: Credit Customer Refund Payable (2020)
+	assert.Equal(t, domainfinance.EntryTypeCredit, entries[1].EntryType())
+	assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeCustomerRefundPayable].ID(), entries[1].AccountID())
+	assert.True(t, amount.Equal(entries[1].Amount().Amount()))
+
+	balanced, err := journal.IsBalanced()
+	require.NoError(t, err)
+	assert.True(t, balanced)
+}
+
+func TestFinanceUsecase_Refund_ValidationAndEdgeCases(t *testing.T) {
+	ctx := context.Background()
+	accRepo := newMockAccountRepo()
+	setupStandardAccounts(t, accRepo)
+	journalRepo := &mockJournalRepo{}
+
+	txRepos := &mockTxRepos{
+		accountRepo: accRepo,
+		journalRepo: journalRepo,
+	}
+	txMgr := &mockTxManager{withinTxFn: func(fn func(tx domain.TransactionRepositories) error) error { return fn(txRepos) }}
+	uc, err := usecasefinance.NewFinanceUsecase(txMgr, slog.Default())
+	require.NoError(t, err)
+
+	t.Run("Zero refund amount bypasses journal creation", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:      uuid.New(),
+			RefundAmount:  decimal.Zero,
+			PaymentID:     uuid.New(),
+			BookingID:     uuid.New(),
+			EventID:       uuid.New(),
+			OrganizerID:   uuid.New(),
+			Currency:      domainfinance.CurrencyINR,
+			ProcessedAt:   time.Now().UTC(),
+		}
+		journal, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.NoError(t, err)
+		assert.Nil(t, journal)
+	})
+
+	t.Run("Zero escrow capture bypasses journal creation", func(t *testing.T) {
+		in := domain.RecordEscrowCaptureInput{
+			PaymentID:     uuid.New(),
+			PaymentAmount: decimal.Zero,
+			BookingID:     uuid.New(),
+			Currency:      domainfinance.CurrencyINR,
+			CapturedAt:    time.Now().UTC(),
+		}
+		journal, err := uc.RecordEscrowCaptureWithinTx(ctx, txRepos, in)
+		require.NoError(t, err)
+		assert.Nil(t, journal)
+	})
+
+	t.Run("Negative refund amount rejected", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:      uuid.New(),
+			RefundAmount:  decimal.NewFromInt(-100),
+			PaymentID:     uuid.New(),
+			BookingID:     uuid.New(),
+			EventID:       uuid.New(),
+			OrganizerID:   uuid.New(),
+			Currency:      domainfinance.CurrencyINR,
+		}
+		_, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.ErrorIs(t, err, domain.ErrInvalidRefundAmountInput)
+	})
+
+	t.Run("Negative platform fee refund rejected", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:          uuid.New(),
+			RefundAmount:      decimal.NewFromInt(100),
+			PaymentID:         uuid.New(),
+			BookingID:         uuid.New(),
+			EventID:           uuid.New(),
+			OrganizerID:       uuid.New(),
+			PlatformFeeRefund: decimal.NewFromInt(-10),
+			Currency:          domainfinance.CurrencyINR,
+		}
+		_, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.ErrorIs(t, err, domain.ErrInvalidPlatformFeeRefundAmount)
+	})
+
+	t.Run("Platform fee refund exceeding total refund rejected", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:          uuid.New(),
+			RefundAmount:      decimal.NewFromInt(100),
+			PaymentID:         uuid.New(),
+			BookingID:         uuid.New(),
+			EventID:           uuid.New(),
+			OrganizerID:       uuid.New(),
+			PlatformFeeRefund: decimal.NewFromInt(150),
+			Currency:          domainfinance.CurrencyINR,
+		}
+		_, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.ErrorIs(t, err, domain.ErrInvalidPlatformFeeRefundAmount)
+	})
+
+	t.Run("Inactive clearing account rejected", func(t *testing.T) {
+		inactiveAccRepo := newMockAccountRepo()
+		setupStandardAccounts(t, inactiveAccRepo)
+		inactiveClearing, _ := domainfinance.NewAccount(
+			uuid.New(),
+			domainfinance.AccountCodeRazorpayClearing,
+			"Razorpay Clearing",
+			domainfinance.AccountTypeAsset,
+			domainfinance.NormalBalanceDebit,
+			domainfinance.CurrencyINR,
+			false, // inactive
+		)
+		inactiveAccRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing] = inactiveClearing
+
+		txReposInactive := &mockTxRepos{
+			accountRepo: inactiveAccRepo,
+			journalRepo: journalRepo,
+		}
+
+		in := domain.RecordRefundInput{
+			RefundID:     uuid.New(),
+			RefundAmount: decimal.NewFromInt(100),
+			PaymentID:    uuid.New(),
+			BookingID:    uuid.New(),
+			EventID:      uuid.New(),
+			OrganizerID:  uuid.New(),
+			Currency:     domainfinance.CurrencyINR,
+		}
+		_, err := uc.RecordRefundWithinTx(ctx, txReposInactive, in)
+		require.ErrorIs(t, err, domain.ErrFinanceAccountInactive)
+	})
+
+	t.Run("Outer RecordRefund inside transaction", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:            uuid.New(),
+			RefundAmount:        decimal.NewFromInt(300),
+			PaymentID:           uuid.New(),
+			BookingID:           uuid.New(),
+			EventID:             uuid.New(),
+			OrganizerID:         uuid.New(),
+			IsEventCancellation: false,
+			IsEscrowRefund:      false,
+			Currency:            domainfinance.CurrencyINR,
+			ProcessedAt:         time.Now().UTC(),
+		}
+		journal, err := uc.RecordRefund(ctx, in)
+		require.NoError(t, err)
+		assert.NotNil(t, journal)
+	})
+
+	t.Run("Outer RecordEscrowCapture inside transaction", func(t *testing.T) {
+		in := domain.RecordEscrowCaptureInput{
+			PaymentID:     uuid.New(),
+			PaymentAmount: decimal.NewFromInt(500),
+			BookingID:     uuid.New(),
+			Currency:      domainfinance.CurrencyINR,
+			CapturedAt:    time.Now().UTC(),
+		}
+		journal, err := uc.RecordEscrowCapture(ctx, in)
+		require.NoError(t, err)
+		assert.NotNil(t, journal)
 	})
 }

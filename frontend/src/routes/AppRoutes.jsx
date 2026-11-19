@@ -27,6 +27,7 @@ import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
 import AdminUsersPage from "../pages/admin/AdminUsersPage";
 import AdminEventsPage from "../pages/admin/AdminEventsPage";
 import AdminPaymentsPage from "../pages/admin/AdminPaymentsPage";
+import AdminSettlementsPage from "../pages/admin/AdminSettlementsPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
 import AdminPricingTaxPage from "../pages/admin/AdminPricingTaxPage";
 import AdminProfilePage from "../pages/admin/AdminProfilePage";
@@ -47,6 +48,7 @@ import MyEventsPage from "../pages/organizer/MyEventsPage";
 import EventDetailsPage from "../pages/organizer/EventDetailsPage";
 import EditEventPage from "../pages/organizer/EditEventPage";
 import OrganizerPaymentsPage from "../pages/organizer/OrganizerPaymentsPage";
+import OrganizerSettlementsPage from "../pages/organizer/OrganizerSettlementsPage";
 
 export default function AppRoutes() {
     return (
@@ -113,6 +115,7 @@ export default function AppRoutes() {
                     <Route path="events" element={<AdminEventsPage />} />
                     <Route path="bookings" element={<AdminPlaceholderPage title="Bookings" />} />
                     <Route path="payments" element={<AdminPaymentsPage />} />
+                    <Route path="settlements" element={<AdminSettlementsPage />} />
                     <Route path="pricing-tax" element={<AdminPricingTaxPage />} />
                     <Route path="categories" element={<AdminPlaceholderPage title="Categories" />} />
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />
@@ -142,6 +145,7 @@ export default function AppRoutes() {
                     <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
                     <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
                     <Route path="payments" element={<OrganizerPaymentsPage />} />
+                    <Route path="settlements" element={<OrganizerSettlementsPage />} />
                     <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />
                     <Route path="settings" element={<OrganizerPlaceholderPage title="Settings" />} />
                     <Route path="profile" element={<OrganizerProfilePage />} />

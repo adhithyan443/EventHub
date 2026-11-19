@@ -29,6 +29,10 @@ const (
 	FinancialEventSettlementAdjustment   FinancialEventType = "SETTLEMENT_ADJUSTMENT"
 	FinancialEventManualCorrection       FinancialEventType = "MANUAL_CORRECTION"
 	FinancialEventJournalReversed        FinancialEventType = "JOURNAL_REVERSED"
+	FinancialEventCustomerRefund          FinancialEventType = "CUSTOMER_REFUND"
+	FinancialEventEventCancellationRefund FinancialEventType = "EVENT_CANCELLATION_REFUND"
+	FinancialEventEscrowCapture           FinancialEventType = "ESCROW_CAPTURE"
+	FinancialEventEscrowRefund            FinancialEventType = "ESCROW_REFUND"
 )
 
 // SourceType defines the origin entity type that prompted this financial transaction.
@@ -753,7 +757,8 @@ func IsValidTransactionType(t TransactionType) bool {
 func IsValidFinancialEventType(e FinancialEventType) bool {
 	switch e {
 	case FinancialEventTicketSaleCaptured, FinancialEventBookingCancelled, FinancialEventOrganizerPayoutSettled,
-		FinancialEventSettlementAdjustment, FinancialEventManualCorrection, FinancialEventJournalReversed:
+		FinancialEventSettlementAdjustment, FinancialEventManualCorrection, FinancialEventJournalReversed,
+		FinancialEventCustomerRefund, FinancialEventEventCancellationRefund, FinancialEventEscrowCapture, FinancialEventEscrowRefund:
 		return true
 	default:
 		return false

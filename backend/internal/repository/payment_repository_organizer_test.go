@@ -876,3 +876,140 @@ func TestPaymentRepository_DuplicateSuccessfulPaymentsProtection_Postgres(t *tes
 	assert.True(t, decimal.NewFromInt(600).Equal(ov.OrganizerEarnings))
 	assert.True(t, decimal.NewFromInt(600).Equal(ov.TotalTicketSalesAmount))
 }
+
+func TestPaymentRepository_OrganizerEarnings_DeductsSuccessfulRefunds_Postgres(t *testing.T) {
+	db := initTestDatabase(t)
+	setupOrganizerPaymentTestTables(t, db)
+	repo := repository.NewPaymentRepository(db, slog.Default())
+	ctx := context.Background()
+
+	acc1010, acc2010, acc4010, _ := setupAdminFinanceAccounts(t, db)
+
+	userID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Org User Refund', 'orgrefund@example.com')`, userID).Error)
+	orgID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO organizers (id, user_id) VALUES (?, ?)`, orgID, userID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO organizer_profiles (id, organizer_id, business_name) VALUES (?, ?, 'Refund Test Org')`, uuid.New(), orgID).Error)
+
+	custID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Customer Refund', 'custrefund@example.com')`, custID).Error)
+
+	catID := uuid.New()
+	eventID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO events (id, organizer_id, category_id, title) VALUES (?, ?, ?, 'Refund Deduction Concert')`, eventID, orgID, catID).Error)
+
+	now := time.Now().UTC()
+
+	// Booking: Subtotal 900, Fee 100, Total 1000. CONFIRMED.
+	bookingID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-REFUND-001', ?, ?, 900.00, 100.00, 0.00, 0.00, 1000.00, 'CONFIRMED', ?)
+	`, bookingID, custID, eventID, now).Error)
+
+	require.NoError(t, db.Exec(`
+		INSERT INTO booking_items (id, booking_id, quantity, unit_price, total_price)
+		VALUES (?, ?, 3, 300.00, 900.00)
+	`, uuid.New(), bookingID).Error)
+
+	// Payment: SUCCESS for 1000
+	paymentID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_refund_001', 'RAZORPAY', 'order_ref_1', 'UPI', 1000.00, 'SUCCESS', ?, ?, ?)
+	`, paymentID, bookingID, now, now, now).Error)
+	seedAccountedJournal(t, db, paymentID, decimal.NewFromInt(1000), decimal.NewFromInt(900), decimal.NewFromInt(100), orgID, eventID, acc1010, acc2010, acc4010)
+
+	// Initial check before refund:
+	// Earnings should be 900.00
+	initOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.True(t, decimal.NewFromInt(900).Equal(initOverview.OrganizerEarnings))
+	assert.True(t, decimal.NewFromInt(900).Equal(initOverview.TotalTicketSalesAmount))
+
+	// Now insert a successful customer refund of 300.00 for one ticket
+	refundID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?::uuid, 300.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', 'rfnd_gw_300', ?, ?, ?)
+	`, refundID, bookingID, paymentID, now, now, now).Error)
+
+	// Post-refund check:
+	// Earnings should now be 600.00 (900 - 300)
+	postOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.True(t, decimal.NewFromInt(600).Equal(postOverview.OrganizerEarnings), "Organizer earnings must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(600).Equal(postOverview.TotalTicketSalesAmount), "Ticket sales must deduct successful refunds")
+
+	// Verify Event-wise Summary
+	eventSummaries, err := repo.GetOrganizerEventPaymentSummaries(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	require.Len(t, eventSummaries.Summaries, 1)
+	assert.True(t, decimal.NewFromInt(600).Equal(eventSummaries.Summaries[0].OrganizerEarnings), "Event summary organizer earnings must deduct successful refunds")
+
+	// -------------------------------------------------------------------------
+	// Verification of No Double Deduction:
+	// Insert a second booking for the same event that is CANCELLED (e.g., event cancellation or full cancellation).
+	// Because b.status = 'CANCELLED', it is excluded from primarySuccessfulPaymentCondition.
+	// Its refund must NOT be subtracted from the confirmed booking's earnings.
+	// -------------------------------------------------------------------------
+	cancelledBookingID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-REFUND-CANCELLED', ?, ?, 500.00, 50.00, 0.00, 0.00, 550.00, 'CANCELLED', ?)
+	`, cancelledBookingID, custID, eventID, now).Error)
+
+	require.NoError(t, db.Exec(`
+		INSERT INTO booking_items (id, booking_id, quantity, unit_price, total_price)
+		VALUES (?, ?, 1, 500.00, 500.00)
+	`, uuid.New(), cancelledBookingID).Error)
+
+	cancelledPaymentID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_refund_cancelled', 'RAZORPAY', 'order_ref_canc', 'UPI', 550.00, 'SUCCESS', ?, ?, ?)
+	`, cancelledPaymentID, cancelledBookingID, now, now, now).Error)
+
+	// Refund for the cancelled booking
+	cancelledRefundID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?::uuid, 550.00, 'SUCCESS', 'EVENT_CANCELLATION', 'rfnd_gw_550', ?, ?, ?)
+	`, cancelledRefundID, cancelledBookingID, cancelledPaymentID, now, now, now).Error)
+
+	// Query overview again: earnings must remain exactly 600.00 (from the confirmed booking only)!
+	postCancellationOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.True(t, decimal.NewFromInt(600).Equal(postCancellationOverview.OrganizerEarnings), "Cancelled booking refund must not be double deducted from organizer earnings")
+	assert.True(t, decimal.NewFromInt(600).Equal(postCancellationOverview.TotalTicketSalesAmount), "Cancelled booking refund must not reduce confirmed ticket sales")
+
+	// -------------------------------------------------------------------------
+	// Verification of GREATEST(0, ...):
+	// Even if refund equals or exceeds subtotal, earnings never go negative.
+	// -------------------------------------------------------------------------
+	zeroBookingID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-REFUND-EXCESS', ?, ?, 200.00, 20.00, 0.00, 50.00, 170.00, 'CONFIRMED', ?)
+	`, zeroBookingID, custID, eventID, now).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO booking_items (id, booking_id, quantity, unit_price, total_price)
+		VALUES (?, ?, 1, 200.00, 200.00)
+	`, uuid.New(), zeroBookingID).Error)
+	zeroPaymentID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_refund_excess', 'RAZORPAY', 'order_ref_exc', 'UPI', 170.00, 'SUCCESS', ?, ?, ?)
+	`, zeroPaymentID, zeroBookingID, now, now, now).Error)
+	// Refund of 200 on subtotal-discount (200-50 = 150) -> net would be -50 without GREATEST
+	excessRefundID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?::uuid, 200.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', 'rfnd_gw_excess', ?, ?, ?)
+	`, excessRefundID, zeroBookingID, zeroPaymentID, now, now, now).Error)
+
+	postExcessOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	// 600 from BK-REFUND-001 + GREATEST(0, 150-200) = 600 + 0 = 600!
+	assert.True(t, decimal.NewFromInt(600).Equal(postExcessOverview.OrganizerEarnings), "Earnings must never become negative due to GREATEST protection")
+}

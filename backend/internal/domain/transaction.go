@@ -77,4 +77,5 @@ type TransactionRepositories interface {
 
 	FinanceAccountRepository() FinanceAccountRepository
 	FinanceJournalRepository() FinanceJournalRepository
+	SettlementRepository() SettlementRepository
 }

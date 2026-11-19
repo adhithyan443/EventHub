@@ -177,6 +177,9 @@ func (m *mockAdminBookingRepo) CountByEventID(ctx context.Context, eventID uuid.
 func (m *mockAdminBookingRepo) GetBookingStatsByEventID(ctx context.Context, eventID uuid.UUID) (domain.AdminEventBookingStats, error) {
 	return m.stats, nil
 }
+func (m *mockAdminBookingRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Booking, error) {
+	return nil, nil
+}
 
 type mockAdminTicketRepo struct {
 	ticketCount int64
@@ -198,10 +201,16 @@ func (m *mockAdminTicketRepo) FindByBookingID(ctx context.Context, bookingID uui
 func (m *mockAdminTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Ticket, error) {
 	return nil, nil
 }
+func (m *mockAdminTicketRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Ticket, error) {
+	return nil, nil
+}
 func (m *mockAdminTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return nil
 }
 func (m *mockAdminTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return nil
+}
+func (m *mockAdminTicketRepo) UpdateStatusForTicketIDs(ctx context.Context, ticketIDs []uuid.UUID, status string) error {
 	return nil
 }
 func (m *mockAdminTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
@@ -256,6 +265,10 @@ func (m *mockAdminOrganizerRepo) FindByID(id uuid.UUID) (*domain.Organizer, erro
 		return org, nil
 	}
 	return nil, domain.ErrOrganizerNotFound
+}
+
+func (m *mockAdminOrganizerRepo) FindByIDForUpdate(id uuid.UUID) (*domain.Organizer, error) {
+	return m.FindByID(id)
 }
 func (m *mockAdminOrganizerRepo) FindByUserID(userID uuid.UUID) (*domain.Organizer, error) {
 	for _, org := range m.organizers {

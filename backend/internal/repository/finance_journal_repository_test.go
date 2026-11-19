@@ -411,3 +411,199 @@ func TestFinanceJournalRepository_Scenarios(t *testing.T) {
 		}
 	})
 }
+
+func TestFinanceJournalRepository_SubledgerBalances(t *testing.T) {
+	db := initTestDatabase(t)
+	repo := repository.NewFinanceJournalRepository(db, slog.Default())
+	acc1010, acc2010 := setupAccounts(t, db)
+	ctx := context.Background()
+
+	orgA := uuid.New()
+	orgB := uuid.New()
+	eventA1 := uuid.New()
+	eventA2 := uuid.New()
+	eventB1 := uuid.New()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Validation checks
+	t.Run("Validation errors for nil UUIDs", func(t *testing.T) {
+		_, err := repo.GetOrganizerBalance(ctx, uuid.Nil)
+		assert.ErrorIs(t, err, domain.ErrInvalidOrganizerID)
+
+		_, err = repo.GetOrganizerEventBalances(ctx, uuid.Nil)
+		assert.ErrorIs(t, err, domain.ErrInvalidOrganizerID)
+
+		_, err = repo.GetEventBalance(ctx, uuid.Nil, eventA1)
+		assert.ErrorIs(t, err, domain.ErrInvalidOrganizerID)
+
+		_, err = repo.GetEventBalance(ctx, orgA, uuid.Nil)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "event ID cannot be nil")
+	})
+
+	// Empty subledger balances before any transactions
+	t.Run("Empty subledger balances before transactions", func(t *testing.T) {
+		bal, err := repo.GetOrganizerBalance(ctx, orgA)
+		require.NoError(t, err)
+		require.NotNil(t, bal)
+		assert.True(t, bal.GrossEarnings.IsZero())
+		assert.True(t, bal.NetPayable.IsZero())
+
+		eventBals, err := repo.GetOrganizerEventBalances(ctx, orgA)
+		require.NoError(t, err)
+		assert.Empty(t, eventBals)
+
+		singleBal, err := repo.GetEventBalance(ctx, orgA, eventA1)
+		require.NoError(t, err)
+		require.NotNil(t, singleBal)
+		assert.True(t, singleBal.NetPayable.IsZero())
+	})
+
+	// Record transactions
+	// 1. Ticket sale for OrgA, EventA1: 10,000 INR
+	amt10000, _ := finance.NewMoney(decimal.NewFromInt(10000), finance.CurrencyINR)
+	d1, _ := finance.NewDebitEntry(uuid.New(), acc1010, amt10000, nil, nil, now)
+	c1, _ := finance.NewCreditEntry(uuid.New(), acc2010, amt10000, &orgA, &eventA1, now)
+	j1 := buildValidJournal(t, uuid.New(), finance.TransactionTypePayment, finance.FinancialEventTicketSaleCaptured,
+		finance.SourceTypePayment, "pay_1", "idem_sale_a1_"+uuid.New().String(), finance.CurrencyINR,
+		"Ticket sale A1", nil, now, d1, c1)
+	_, err := repo.RecordJournal(ctx, j1)
+	require.NoError(t, err)
+
+	// 2. Refund for OrgA, EventA1: 2,000 INR
+	amt2000, _ := finance.NewMoney(decimal.NewFromInt(2000), finance.CurrencyINR)
+	d2, _ := finance.NewDebitEntry(uuid.New(), acc2010, amt2000, &orgA, &eventA1, now)
+	c2, _ := finance.NewCreditEntry(uuid.New(), acc1010, amt2000, nil, nil, now)
+	j2 := buildValidJournal(t, uuid.New(), finance.TransactionTypeRefund, finance.FinancialEventCustomerRefund,
+		finance.SourceTypeRefund, "ref_1", "idem_ref_a1_"+uuid.New().String(), finance.CurrencyINR,
+		"Refund A1", nil, now, d2, c2)
+	_, err = repo.RecordJournal(ctx, j2)
+	require.NoError(t, err)
+
+	// 3. Ticket sale for OrgA, EventA2: 5,000 INR
+	amt5000, _ := finance.NewMoney(decimal.NewFromInt(5000), finance.CurrencyINR)
+	d3, _ := finance.NewDebitEntry(uuid.New(), acc1010, amt5000, nil, nil, now)
+	c3, _ := finance.NewCreditEntry(uuid.New(), acc2010, amt5000, &orgA, &eventA2, now)
+	j3 := buildValidJournal(t, uuid.New(), finance.TransactionTypePayment, finance.FinancialEventTicketSaleCaptured,
+		finance.SourceTypePayment, "pay_2", "idem_sale_a2_"+uuid.New().String(), finance.CurrencyINR,
+		"Ticket sale A2", nil, now, d3, c3)
+	_, err = repo.RecordJournal(ctx, j3)
+	require.NoError(t, err)
+
+	// 4. Ticket sale for OrgB, EventB1: 7,000 INR
+	amt7000, _ := finance.NewMoney(decimal.NewFromInt(7000), finance.CurrencyINR)
+	d4, _ := finance.NewDebitEntry(uuid.New(), acc1010, amt7000, nil, nil, now)
+	c4, _ := finance.NewCreditEntry(uuid.New(), acc2010, amt7000, &orgB, &eventB1, now)
+	j4 := buildValidJournal(t, uuid.New(), finance.TransactionTypePayment, finance.FinancialEventTicketSaleCaptured,
+		finance.SourceTypePayment, "pay_3", "idem_sale_b1_"+uuid.New().String(), finance.CurrencyINR,
+		"Ticket sale B1", nil, now, d4, c4)
+	_, err = repo.RecordJournal(ctx, j4)
+	require.NoError(t, err)
+
+	// 5. Insert an unposted DRAFT journal with 99,999 INR for OrgA, EventA1
+	draftJournalID := uuid.New()
+	draftEntryID1 := uuid.New()
+	draftEntryID2 := uuid.New()
+	err = db.Exec(`
+		INSERT INTO finance_journals (id, transaction_type, financial_event_type, source_type, source_id, idempotency_key, idempotency_fingerprint, currency, description, status, created_at, is_reversed)
+		VALUES (?, 'PAYMENT', 'TICKET_SALE_CAPTURED', 'PAYMENT', 'pay_draft', 'idem_draft_999', 'fp_draft', 'INR', 'Draft Journal', 'DRAFT', NOW(), FALSE)
+	`, draftJournalID).Error
+	require.NoError(t, err)
+
+	err = db.Exec(`
+		INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, organizer_id, event_id, created_at)
+		VALUES 
+			(?, ?, ?, 'CREDIT', 99999.00, 'INR', ?, ?, NOW()),
+			(?, ?, ?, 'DEBIT', 99999.00, 'INR', NULL, NULL, NOW())
+	`, draftEntryID1, draftJournalID, acc2010, orgA, eventA1, draftEntryID2, draftJournalID, acc1010).Error
+	require.NoError(t, err)
+
+	// Verify GetOrganizerBalance for OrgA (excludes draft, excludes OrgB)
+	t.Run("GetOrganizerBalance calculates posted Account 2010 totals accurately for OrgA", func(t *testing.T) {
+		bal, err := repo.GetOrganizerBalance(ctx, orgA)
+		require.NoError(t, err)
+		require.NotNil(t, bal)
+
+		assert.Equal(t, orgA, bal.OrganizerID)
+		assert.True(t, bal.GrossEarnings.Equal(decimal.NewFromInt(15000)), "GrossEarnings expected 15000, got %s", bal.GrossEarnings)
+		assert.True(t, bal.RefundsDeducted.Equal(decimal.NewFromInt(2000)), "RefundsDeducted expected 2000, got %s", bal.RefundsDeducted)
+		assert.True(t, bal.NetEarnings.Equal(decimal.NewFromInt(13000)), "NetEarnings expected 13000, got %s", bal.NetEarnings)
+		assert.True(t, bal.SettledAmount.IsZero())
+		assert.True(t, bal.TotalCredits.Equal(decimal.NewFromInt(15000)))
+		assert.True(t, bal.TotalDebits.Equal(decimal.NewFromInt(2000)))
+		assert.True(t, bal.NetPayable.Equal(decimal.NewFromInt(13000)), "NetPayable expected 13000, got %s", bal.NetPayable)
+	})
+
+	// Verify GetOrganizerBalance for OrgB (strict organizer isolation)
+	t.Run("GetOrganizerBalance isolates OrgB from OrgA", func(t *testing.T) {
+		bal, err := repo.GetOrganizerBalance(ctx, orgB)
+		require.NoError(t, err)
+		require.NotNil(t, bal)
+
+		assert.Equal(t, orgB, bal.OrganizerID)
+		assert.True(t, bal.GrossEarnings.Equal(decimal.NewFromInt(7000)))
+		assert.True(t, bal.RefundsDeducted.IsZero())
+		assert.True(t, bal.NetEarnings.Equal(decimal.NewFromInt(7000)))
+		assert.True(t, bal.TotalCredits.Equal(decimal.NewFromInt(7000)))
+		assert.True(t, bal.TotalDebits.IsZero())
+		assert.True(t, bal.NetPayable.Equal(decimal.NewFromInt(7000)))
+	})
+
+	// Verify GetOrganizerEventBalances for OrgA (per-event breakdown)
+	t.Run("GetOrganizerEventBalances provides accurate event breakdown for OrgA", func(t *testing.T) {
+		eventBals, err := repo.GetOrganizerEventBalances(ctx, orgA)
+		require.NoError(t, err)
+		require.Len(t, eventBals, 2)
+
+		balMap := make(map[uuid.UUID]domain.EventSubledgerBalance)
+		for _, eb := range eventBals {
+			balMap[eb.EventID] = eb
+		}
+
+		// EventA1: 10,000 gross - 2,000 refund = 8,000 net payable
+		eb1, exists := balMap[eventA1]
+		require.True(t, exists)
+		assert.Equal(t, orgA, eb1.OrganizerID)
+		assert.True(t, eb1.GrossEarnings.Equal(decimal.NewFromInt(10000)))
+		assert.True(t, eb1.RefundsDeducted.Equal(decimal.NewFromInt(2000)))
+		assert.True(t, eb1.NetEarnings.Equal(decimal.NewFromInt(8000)))
+		assert.True(t, eb1.NetPayable.Equal(decimal.NewFromInt(8000)))
+
+		// EventA2: 5,000 gross - 0 refund = 5,000 net payable
+		eb2, exists := balMap[eventA2]
+		require.True(t, exists)
+		assert.Equal(t, orgA, eb2.OrganizerID)
+		assert.True(t, eb2.GrossEarnings.Equal(decimal.NewFromInt(5000)))
+		assert.True(t, eb2.RefundsDeducted.IsZero())
+		assert.True(t, eb2.NetEarnings.Equal(decimal.NewFromInt(5000)))
+		assert.True(t, eb2.NetPayable.Equal(decimal.NewFromInt(5000)))
+
+		// Must not contain EventB1
+		_, existsB1 := balMap[eventB1]
+		assert.False(t, existsB1, "OrgA event balances must not contain OrgB's event")
+	})
+
+	// Verify GetEventBalance for individual events
+	t.Run("GetEventBalance retrieves isolated balance for single event", func(t *testing.T) {
+		eb1, err := repo.GetEventBalance(ctx, orgA, eventA1)
+		require.NoError(t, err)
+		require.NotNil(t, eb1)
+		assert.True(t, eb1.GrossEarnings.Equal(decimal.NewFromInt(10000)))
+		assert.True(t, eb1.RefundsDeducted.Equal(decimal.NewFromInt(2000)))
+		assert.True(t, eb1.NetPayable.Equal(decimal.NewFromInt(8000)))
+
+		eb2, err := repo.GetEventBalance(ctx, orgA, eventA2)
+		require.NoError(t, err)
+		require.NotNil(t, eb2)
+		assert.True(t, eb2.GrossEarnings.Equal(decimal.NewFromInt(5000)))
+		assert.True(t, eb2.NetPayable.Equal(decimal.NewFromInt(5000)))
+
+		// Querying an event not owned by OrgA returns zero balances
+		ebOther, err := repo.GetEventBalance(ctx, orgA, eventB1)
+		require.NoError(t, err)
+		require.NotNil(t, ebOther)
+		assert.True(t, ebOther.GrossEarnings.IsZero())
+		assert.True(t, ebOther.NetPayable.IsZero())
+	})
+}

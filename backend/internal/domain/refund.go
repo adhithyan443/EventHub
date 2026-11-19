@@ -14,14 +14,17 @@ var (
 	ErrRefundAlreadyProcessed = errors.New("refund has already been processed")
 	ErrGatewayRefundFailed   = errors.New("payment gateway failed to process refund")
 	ErrRefundInProgress      = errors.New("refund is already in progress")
+	ErrRefundExceedsPayment  = errors.New("total refund amount exceeds captured payment amount")
+	ErrInvalidRefundAmount   = errors.New("refund amount must be greater than zero")
 )
 
 type RefundStatus = string
 
 const (
-	RefundStatusPending RefundStatus = "PENDING"
-	RefundStatusSuccess RefundStatus = "SUCCESS"
-	RefundStatusFailed  RefundStatus = "FAILED"
+	RefundStatusPending    RefundStatus = "PENDING"
+	RefundStatusProcessing RefundStatus = "PROCESSING"
+	RefundStatusSuccess    RefundStatus = "SUCCESS"
+	RefundStatusFailed     RefundStatus = "FAILED"
 )
 
 type Refund struct {
@@ -63,5 +66,10 @@ type RefundRepository interface {
 	FindByID(ctx context.Context, id uuid.UUID) (*Refund, error)
 	FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*Refund, error)
 	FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]Refund, error)
+	FindByEventID(ctx context.Context, eventID uuid.UUID) ([]Refund, error)
+	FindByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]Refund, error)
+	FindByGatewayRefundID(ctx context.Context, gatewayRefundID string) (*Refund, error)
+	FindByGatewayRefundIDForUpdate(ctx context.Context, gatewayRefundID string) (*Refund, error)
+	FindStuckRefunds(ctx context.Context, olderThan time.Time, limit int) ([]Refund, error)
 	Update(ctx context.Context, refund *Refund) error
 }

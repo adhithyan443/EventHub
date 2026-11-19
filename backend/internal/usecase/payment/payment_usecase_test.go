@@ -14,6 +14,7 @@ import (
 	domainfinance "github.com/adhithyan443/EventHub/backend/internal/domain/finance"
 	bookinguc "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
+	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -61,6 +62,10 @@ func (m *mockPaymentRepo) FindByID(ctx context.Context, id string) (*domain.Paym
 		return &copied, nil
 	}
 	return nil, domain.ErrPaymentNotFound
+}
+
+func (m *mockPaymentRepo) FindByIDForUpdate(ctx context.Context, id string) (*domain.Payment, error) {
+	return m.FindByID(ctx, id)
 }
 
 func (m *mockPaymentRepo) FindByBookingID(ctx context.Context, bookingID string) ([]domain.Payment, error) {
@@ -375,6 +380,18 @@ func (m *mockBookingRepo) GetBookingStatsByEventID(ctx context.Context, eventID 
 	return domain.AdminEventBookingStats{}, nil
 }
 
+func (m *mockBookingRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.Booking
+	for _, b := range m.bookings {
+		if b.EventID == eventID {
+			res = append(res, *b)
+		}
+	}
+	return res, nil
+}
+
 type mockCheckoutRepo struct {
 	mu        sync.Mutex
 	checkouts map[uuid.UUID]*domain.Checkout
@@ -589,8 +606,33 @@ func (m *mockTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID 
 	}
 	return nil
 }
+func (m *mockTicketRepo) UpdateStatusForTicketIDs(ctx context.Context, ticketIDs []uuid.UUID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	idSet := make(map[uuid.UUID]struct{}, len(ticketIDs))
+	for _, id := range ticketIDs {
+		idSet[id] = struct{}{}
+	}
+	for i := range m.tickets {
+		if _, ok := idSet[m.tickets[i].ID]; ok {
+			m.tickets[i].Status = status
+		}
+	}
+	return nil
+}
 func (m *mockTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
 	return 0, nil
+}
+func (m *mockTicketRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Ticket, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.Ticket
+	for _, t := range m.tickets {
+		if t.EventID == eventID {
+			res = append(res, t)
+		}
+	}
+	return res, nil
 }
 
 type mockSeatRepo struct {
@@ -629,6 +671,7 @@ func (m *mockUserRepo) FindByID(id uuid.UUID) (*domain.User, error) {
 type mockEventRepo struct {
 	domain.EventRepository
 	organizerID uuid.UUID
+	status      string
 	findErr     error
 }
 
@@ -640,7 +683,11 @@ func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
 	if orgID == uuid.Nil {
 		orgID = uuid.New()
 	}
-	return &domain.Event{ID: id, OrganizerID: orgID, Title: "Test Event", EventType: domain.EventTypePhysical}, nil
+	st := m.status
+	if st == "" {
+		st = domain.EventStatusPublished
+	}
+	return &domain.Event{ID: id, OrganizerID: orgID, Title: "Test Event", Status: st, EventType: domain.EventTypePhysical}, nil
 }
 
 type mockEventScheduleRepo struct {
@@ -695,7 +742,13 @@ type mockFinanceUsecase struct {
 	mu                      sync.Mutex
 	recordCaptureWithinTxFn func(ctx context.Context, txRepos domain.TransactionRepositories, in domain.RecordPaymentCaptureInput) (*domainfinance.JournalTransaction, error)
 	recordCaptureFn         func(ctx context.Context, in domain.RecordPaymentCaptureInput) (*domainfinance.JournalTransaction, error)
+	recordRefundWithinTxFn  func(ctx context.Context, txRepos domain.TransactionRepositories, in domain.RecordRefundInput) (*domainfinance.JournalTransaction, error)
+	recordRefundFn          func(ctx context.Context, in domain.RecordRefundInput) (*domainfinance.JournalTransaction, error)
+	recordEscrowWithinTxFn  func(ctx context.Context, txRepos domain.TransactionRepositories, in domain.RecordEscrowCaptureInput) (*domainfinance.JournalTransaction, error)
+	recordEscrowFn          func(ctx context.Context, in domain.RecordEscrowCaptureInput) (*domainfinance.JournalTransaction, error)
 	capturedInputs          []domain.RecordPaymentCaptureInput
+	refundInputs            []domain.RecordRefundInput
+	escrowInputs            []domain.RecordEscrowCaptureInput
 }
 
 func (m *mockFinanceUsecase) RecordPaymentCaptureWithinTx(
@@ -722,6 +775,60 @@ func (m *mockFinanceUsecase) RecordPaymentCapture(
 		return m.recordCaptureFn(ctx, in)
 	}
 	m.capturedInputs = append(m.capturedInputs, in)
+	return nil, nil
+}
+
+func (m *mockFinanceUsecase) RecordRefundWithinTx(
+	ctx context.Context,
+	txRepos domain.TransactionRepositories,
+	in domain.RecordRefundInput,
+) (*domainfinance.JournalTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordRefundWithinTxFn != nil {
+		return m.recordRefundWithinTxFn(ctx, txRepos, in)
+	}
+	m.refundInputs = append(m.refundInputs, in)
+	return nil, nil
+}
+
+func (m *mockFinanceUsecase) RecordRefund(
+	ctx context.Context,
+	in domain.RecordRefundInput,
+) (*domainfinance.JournalTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordRefundFn != nil {
+		return m.recordRefundFn(ctx, in)
+	}
+	m.refundInputs = append(m.refundInputs, in)
+	return nil, nil
+}
+
+func (m *mockFinanceUsecase) RecordEscrowCaptureWithinTx(
+	ctx context.Context,
+	txRepos domain.TransactionRepositories,
+	in domain.RecordEscrowCaptureInput,
+) (*domainfinance.JournalTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordEscrowWithinTxFn != nil {
+		return m.recordEscrowWithinTxFn(ctx, txRepos, in)
+	}
+	m.escrowInputs = append(m.escrowInputs, in)
+	return nil, nil
+}
+
+func (m *mockFinanceUsecase) RecordEscrowCapture(
+	ctx context.Context,
+	in domain.RecordEscrowCaptureInput,
+) (*domainfinance.JournalTransaction, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recordEscrowFn != nil {
+		return m.recordEscrowFn(ctx, in)
+	}
+	m.escrowInputs = append(m.escrowInputs, in)
 	return nil, nil
 }
 
@@ -830,6 +937,7 @@ type mockTxRepos struct {
 	eventCancellationRepo  *mockEventCancellationRepo
 	eventRepo              *mockEventRepo
 	invoiceRepo            *mockInvoiceRepo
+	refundRepo             *mockRefundRepo
 	executeWithSavepointFn func(name domain.SavepointName, fn func() error) (domain.SavepointResult, error)
 }
 
@@ -858,7 +966,10 @@ func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepo
 	return m.eventCancellationRepo
 }
 func (m *mockTxRepos) RefundRepository() domain.RefundRepository {
-	return &mockRefundRepo{}
+	if m.refundRepo == nil {
+		m.refundRepo = newMockRefundRepo()
+	}
+	return m.refundRepo
 }
 func (m *mockTxRepos) UserRepository() domain.UserRepository {
 	return &mockUserRepo{}
@@ -916,6 +1027,80 @@ func (m *mockTxRepos) ExecuteWithSavepoint(name domain.SavepointName, fn func() 
 
 type mockRefundRepo struct {
 	domain.RefundRepository
+	mu                 sync.Mutex
+	refundsByID        map[uuid.UUID]*domain.Refund
+	refundsByGatewayID map[string]*domain.Refund
+	updateCalls        int
+}
+
+func newMockRefundRepo() *mockRefundRepo {
+	return &mockRefundRepo{
+		refundsByID:        make(map[uuid.UUID]*domain.Refund),
+		refundsByGatewayID: make(map[string]*domain.Refund),
+	}
+}
+
+func (m *mockRefundRepo) Create(ctx context.Context, r *domain.Refund) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *r
+	m.refundsByID[r.ID] = &copied
+	if r.GatewayRefundID != nil {
+		m.refundsByGatewayID[*r.GatewayRefundID] = &copied
+	}
+	return nil
+}
+
+func (m *mockRefundRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Refund, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.refundsByID[id]; ok {
+		copied := *r
+		return &copied, nil
+	}
+	return nil, domain.ErrRefundNotFound
+}
+
+func (m *mockRefundRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Refund, error) {
+	return m.FindByID(ctx, id)
+}
+
+func (m *mockRefundRepo) FindByGatewayRefundID(ctx context.Context, gatewayRefundID string) (*domain.Refund, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.refundsByGatewayID[gatewayRefundID]; ok {
+		copied := *r
+		return &copied, nil
+	}
+	return nil, domain.ErrRefundNotFound
+}
+
+func (m *mockRefundRepo) FindByGatewayRefundIDForUpdate(ctx context.Context, gatewayRefundID string) (*domain.Refund, error) {
+	return m.FindByGatewayRefundID(ctx, gatewayRefundID)
+}
+
+func (m *mockRefundRepo) FindByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]domain.Refund, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var results []domain.Refund
+	for _, r := range m.refundsByID {
+		if r.PaymentID == paymentID {
+			results = append(results, *r)
+		}
+	}
+	return results, nil
+}
+
+func (m *mockRefundRepo) Update(ctx context.Context, r *domain.Refund) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.updateCalls++
+	copied := *r
+	m.refundsByID[r.ID] = &copied
+	if r.GatewayRefundID != nil {
+		m.refundsByGatewayID[*r.GatewayRefundID] = &copied
+	}
+	return nil
 }
 
 type mockTransactionManager struct {
@@ -1015,6 +1200,7 @@ type testFixture struct {
 	seatRepo        *mockSeatRepo
 	ticketTypeRepo  *mockTicketTypeRepo
 	invoiceRepo     *mockInvoiceRepo
+	refundRepo      *mockRefundRepo
 	financeUsecase  *mockFinanceUsecase
 	txRepos         *mockTxRepos
 	provider        *mockPaymentProvider
@@ -1037,6 +1223,7 @@ func setupFixture(t *testing.T) *testFixture {
 	ticketTypeRepo := &mockTicketTypeRepo{releasedQuantities: make(map[uuid.UUID]int)}
 	eventRepo := &mockEventRepo{organizerID: uuid.New()}
 	invoiceRepo := newMockInvoiceRepo()
+	refundRepo := newMockRefundRepo()
 	webhookEventRepo := &mockRazorpayWebhookEventRepo{events: make(map[string]string)}
 	financeUC := &mockFinanceUsecase{}
 
@@ -1050,6 +1237,7 @@ func setupFixture(t *testing.T) *testFixture {
 		ticketTypeRepo:        ticketTypeRepo,
 		eventRepo:              eventRepo,
 		invoiceRepo:           invoiceRepo,
+		refundRepo:            refundRepo,
 		webhookEventRepo:      webhookEventRepo,
 		eventCancellationRepo: &mockEventCancellationRepo{cancellations: make(map[uuid.UUID]*domain.EventCancellation)},
 	}
@@ -1105,6 +1293,7 @@ func setupFixture(t *testing.T) *testFixture {
 		seatRepo:        seatRepo,
 		ticketTypeRepo:  ticketTypeRepo,
 		invoiceRepo:     invoiceRepo,
+		refundRepo:      refundRepo,
 		financeUsecase:  financeUC,
 		txRepos:         txRepos,
 		provider:        provider,
@@ -1877,4 +2066,894 @@ func TestVerifyPayment_SuccessReturnsInvoice(t *testing.T) {
 	require.NotNil(t, verifyRes.Invoice)
 	assert.Equal(t, verifyRes.Booking.ID, verifyRes.Invoice.BookingID)
 	assert.NotEmpty(t, verifyRes.Invoice.InvoiceNumber)
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundProcessed_Success(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	paymentID := uuid.New()
+	bookingID := uuid.New()
+	eventID := uuid.New()
+
+	f.paymentRepo.payments[paymentID.String()] = &domain.Payment{
+		ID:     paymentID.String(),
+		Amount: decimal.NewFromInt(500),
+		Status: domain.PaymentStatusSuccess,
+	}
+	f.bookingRepo.bookings[bookingID] = &domain.Booking{
+		ID:      bookingID,
+		EventID: eventID,
+		Status:  domain.BookingStatusConfirmed,
+	}
+
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: bookingID,
+		PaymentID: paymentID,
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusPending,
+		Reason:    "CUSTOMER_CANCELLATION",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_proc_001",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_test_123",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "INR",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_proc_001")
+	require.NoError(t, err)
+
+	updated, err := f.refundRepo.FindByID(ctx, refundID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RefundStatusSuccess, updated.Status)
+	assert.NotNil(t, updated.GatewayRefundID)
+	assert.Equal(t, "rfnd_test_123", *updated.GatewayRefundID)
+	assert.NotNil(t, updated.ProcessedAt)
+	require.Len(t, f.financeUsecase.refundInputs, 1)
+	assert.Equal(t, refundID, f.financeUsecase.refundInputs[0].RefundID)
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundProcessed_AlreadySuccess_Idempotent(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	gatewayRefundID := "rfnd_test_123"
+	now := time.Now()
+	ref := &domain.Refund{
+		ID:              refundID,
+		BookingID:       uuid.New(),
+		PaymentID:       uuid.New(),
+		GatewayRefundID: &gatewayRefundID,
+		Amount:          decimal.NewFromInt(500),
+		Status:          domain.RefundStatusSuccess,
+		ProcessedAt:     &now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_proc_002",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "%s",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "INR",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, gatewayRefundID, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_proc_002")
+	require.NoError(t, err)
+
+	updated, err := f.refundRepo.FindByID(ctx, refundID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RefundStatusSuccess, updated.Status)
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundFailed(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusProcessing,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_fail_001",
+		"event": "refund.failed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_failed_456",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "INR",
+					"status": "failed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_fail_001")
+	require.NoError(t, err)
+
+	updated, err := f.refundRepo.FindByID(ctx, refundID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RefundStatusFailed, updated.Status)
+	assert.Equal(t, "rfnd_failed_456", *updated.GatewayRefundID)
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundFailed_DoesNotOverrideSuccess(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	gatewayRefundID := "rfnd_succ_789"
+	now := time.Now()
+	ref := &domain.Refund{
+		ID:              refundID,
+		BookingID:       uuid.New(),
+		PaymentID:       uuid.New(),
+		GatewayRefundID: &gatewayRefundID,
+		Amount:          decimal.NewFromInt(500),
+		Status:          domain.RefundStatusSuccess,
+		ProcessedAt:     &now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_fail_late",
+		"event": "refund.failed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "%s",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "INR",
+					"status": "failed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, gatewayRefundID, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_fail_late")
+	require.NoError(t, err)
+
+	updated, err := f.refundRepo.FindByID(ctx, refundID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RefundStatusSuccess, updated.Status, "Successful refund must NEVER be marked failed")
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundCreated_Processing(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_created_001",
+		"event": "refund.created",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_created_111",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "INR",
+					"status": "created",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_created_001")
+	require.NoError(t, err)
+
+	updated, err := f.refundRepo.FindByID(ctx, refundID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RefundStatusProcessing, updated.Status)
+	assert.Equal(t, "rfnd_created_111", *updated.GatewayRefundID)
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundDeduplication(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_dup_001",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_dup_222",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "INR",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err1 := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_dup_001")
+	require.NoError(t, err1)
+
+	// Second duplicate webhook call with same event ID
+	err2 := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_dup_001")
+	require.NoError(t, err2, "Duplicate webhook must be acknowledged with nil error")
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundAmountMismatch(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500), // 500 INR = 50000 paise
+		Status:    domain.RefundStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_mismatch_001",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_mismatch_333",
+					"payment_id": "pay_test_xyz",
+					"amount": 99900,
+					"currency": "INR",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_mismatch_001")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrPaymentAmountMismatch))
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundZeroAmount_Rejected(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_zero_001",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_zero_333",
+					"payment_id": "pay_test_xyz",
+					"amount": 0,
+					"currency": "INR",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_zero_001")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrInvalidPayment))
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundNegativeAmount_Rejected(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_neg_001",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_neg_333",
+					"payment_id": "pay_test_xyz",
+					"amount": -50000,
+					"currency": "INR",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_neg_001")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrInvalidPayment))
+}
+
+func TestPaymentUsecase_RazorpayWebhook_RefundCurrencyMismatch_Rejected(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	refundID := uuid.New()
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: uuid.New(),
+		PaymentID: uuid.New(),
+		Amount:    decimal.NewFromInt(500),
+		Status:    domain.RefundStatusPending,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, f.refundRepo.Create(ctx, ref))
+
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_refund_curr_001",
+		"event": "refund.processed",
+		"payload": {
+			"refund": {
+				"entity": {
+					"id": "rfnd_curr_333",
+					"payment_id": "pay_test_xyz",
+					"amount": 50000,
+					"currency": "USD",
+					"status": "processed",
+					"receipt": "%s"
+				}
+			}
+		}
+	}`, refundID.String()))
+
+	err := f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_refund_curr_001")
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrInvalidPayment))
+}
+
+type mockTestRefundProcessor struct {
+	mu           sync.Mutex
+	processedIDs []uuid.UUID
+	processErr   error
+	processDelay time.Duration
+}
+
+func (m *mockTestRefundProcessor) ProcessPendingRefund(ctx context.Context, refundID uuid.UUID) (*domain.Refund, error) {
+	if m.processDelay > 0 {
+		time.Sleep(m.processDelay)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.processedIDs = append(m.processedIDs, refundID)
+	if m.processErr != nil {
+		return nil, m.processErr
+	}
+	return &domain.Refund{
+		ID:     refundID,
+		Status: domain.RefundStatusSuccess,
+	}, nil
+}
+
+func (m *mockTestRefundProcessor) ReconcileStuckRefunds(ctx context.Context, olderThan time.Duration, limit int) (int, error) {
+	return 0, nil
+}
+
+func (m *mockTestRefundProcessor) GetRefundByID(ctx context.Context, refundID uuid.UUID) (*domain.Refund, error) {
+	return nil, nil
+}
+
+func (m *mockTestRefundProcessor) GetRefundsByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Refund, error) {
+	return nil, nil
+}
+
+func TestVerifyPayment_CapturedPaymentOnCancelledBooking_RoutesToRefund(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+
+	// Mark booking as CANCELLED (e.g. event cancellation happened while payment was in flight)
+	b := f.bookingRepo.bookings[bookingID]
+	b.Status = domain.BookingStatusCancelled
+
+	proc := &mockTestRefundProcessor{}
+	f.usecase.SetRefundProcessor(proc)
+
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_cancelled_ev_123",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.Nil(t, res)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired), "Must return ErrPaymentRefundRequired")
+
+	// Payment must be marked REFUND_REQUIRED in DB with transaction ID
+	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+	require.NotNil(t, paymentInDB.TransactionID)
+	assert.Equal(t, "pay_cancelled_ev_123", *paymentInDB.TransactionID)
+
+	// Booking must remain CANCELLED
+	bookingInDB, err := f.bookingRepo.FindByID(ctx, bookingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BookingStatusCancelled, bookingInDB.Status)
+
+	// Crucial: No tickets must be issued for cancelled bookings
+	assert.Empty(t, f.ticketRepo.tickets, "No tickets should be issued for cancelled bookings")
+
+	// Refund record must be created with correct amount and reason EVENT_CANCELLATION
+	paymentUUID, _ := uuid.Parse(p1.ID)
+	refunds, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refunds, 1, "Exactly one refund record should be created")
+	assert.Equal(t, "EVENT_CANCELLATION", refunds[0].Reason)
+	assert.Equal(t, domain.RefundStatusPending, refunds[0].Status)
+	assert.True(t, refunds[0].Amount.Equal(p1.Amount), "Refund amount must match payment amount")
+
+	// Financial Ledger: Escrow capture must be recorded
+	require.Len(t, f.financeUsecase.escrowInputs, 1, "Escrow capture should be recorded in financial ledger")
+	assert.Equal(t, paymentUUID, f.financeUsecase.escrowInputs[0].PaymentID)
+	assert.True(t, p1.Amount.Equal(f.financeUsecase.escrowInputs[0].PaymentAmount))
+	assert.Equal(t, bookingID, f.financeUsecase.escrowInputs[0].BookingID)
+}
+
+func TestVerifyPayment_CancelledEvent_RoutesToRefund(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+
+	// Mark event as CANCELLED while booking was still pending
+	f.txRepos.eventRepo.status = domain.EventStatusCancelled
+
+	res, err := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_cancelled_event_456",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.Nil(t, res)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
+
+	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+	assert.Equal(t, "pay_cancelled_event_456", *paymentInDB.TransactionID)
+
+	// Booking transitioned to CANCELLED
+	bookingInDB, err := f.bookingRepo.FindByID(ctx, bookingID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BookingStatusCancelled, bookingInDB.Status)
+
+	// No tickets issued
+	assert.Empty(t, f.ticketRepo.tickets)
+
+	// Refund record created
+	paymentUUID, _ := uuid.Parse(p1.ID)
+	refunds, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refunds, 1)
+	assert.Equal(t, "EVENT_CANCELLATION", refunds[0].Reason)
+	assert.True(t, refunds[0].Amount.Equal(p1.Amount))
+}
+
+func TestProcessRazorpayWebhook_CancelledBooking_CreatesRefund(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+
+	// Booking cancelled before webhook arrival
+	b := f.bookingRepo.bookings[bookingID]
+	b.Status = domain.BookingStatusCancelled
+
+	expectedPaise, _ := domain.ToPaise(p1.Amount)
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_webhook_cancelled_01",
+		"event": "payment.captured",
+		"payload": {
+			"payment": {
+				"entity": {
+					"id": "pay_webhook_capt_789",
+					"order_id": "%s",
+					"amount": %d,
+					"currency": "INR",
+					"status": "captured"
+				}
+			}
+		}
+	}`, *p1.ProviderOrderID, expectedPaise))
+
+	// Webhook must succeed with nil (200 OK to gateway)
+	err = f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_webhook_cancelled_01")
+	require.NoError(t, err)
+
+	// Payment must be marked REFUND_REQUIRED
+	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+	require.NotNil(t, paymentInDB.TransactionID)
+	assert.Equal(t, "pay_webhook_capt_789", *paymentInDB.TransactionID)
+
+	// No tickets issued
+	assert.Empty(t, f.ticketRepo.tickets)
+
+	// Refund record created with EVENT_CANCELLATION
+	paymentUUID, _ := uuid.Parse(p1.ID)
+	refunds, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refunds, 1)
+	assert.Equal(t, "EVENT_CANCELLATION", refunds[0].Reason)
+	assert.Equal(t, domain.RefundStatusPending, refunds[0].Status)
+	assert.True(t, refunds[0].Amount.Equal(p1.Amount))
+}
+
+func TestVerifyPayment_And_Webhook_DuplicateHandling_NoDuplicateRefunds(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+
+	b := f.bookingRepo.bookings[bookingID]
+	b.Status = domain.BookingStatusCancelled
+
+	// 1. VerifyPayment runs first
+	_, err = f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_dup_test_111",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
+
+	paymentUUID, _ := uuid.Parse(p1.ID)
+	refundsAfterVerify, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refundsAfterVerify, 1)
+
+	// 2. Webhook arrives second with same transaction ID
+	expectedPaise, _ := domain.ToPaise(p1.Amount)
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_webhook_dup_02",
+		"event": "payment.captured",
+		"payload": {
+			"payment": {
+				"entity": {
+					"id": "pay_dup_test_111",
+					"order_id": "%s",
+					"amount": %d,
+					"currency": "INR",
+					"status": "captured"
+				}
+			}
+		}
+	}`, *p1.ProviderOrderID, expectedPaise))
+
+	err = f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_webhook_dup_02")
+	require.NoError(t, err)
+
+	// Still only 1 refund record
+	refundsAfterWebhook, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refundsAfterWebhook, 1, "Duplicate webhook must not create second refund")
+
+	// 3. Repeated client VerifyPayment
+	_, err = f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_dup_test_111",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
+
+	refundsAfterRepeat, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refundsAfterRepeat, 1, "Repeated verification must not create duplicate refund")
+}
+
+func TestConcurrent_VerifyPayment_And_Webhook_OnCancelledBooking(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+
+	b := f.bookingRepo.bookings[bookingID]
+	b.Status = domain.BookingStatusCancelled
+
+	expectedPaise, _ := domain.ToPaise(p1.Amount)
+	body := []byte(fmt.Sprintf(`{
+		"entity": "event",
+		"id": "evt_webhook_conc_03",
+		"event": "payment.captured",
+		"payload": {
+			"payment": {
+				"entity": {
+					"id": "pay_conc_test_222",
+					"order_id": "%s",
+					"amount": %d,
+					"currency": "INR",
+					"status": "captured"
+				}
+			}
+		}
+	}`, *p1.ProviderOrderID, expectedPaise))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var verifyErr error
+	var webhookErr error
+
+	go func() {
+		defer wg.Done()
+		_, verifyErr = f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+			UserID:            f.userID,
+			ProviderOrderID:   *p1.ProviderOrderID,
+			RazorpayPaymentID: "pay_conc_test_222",
+			RazorpaySignature: "sig_dummy",
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		webhookErr = f.usecase.ProcessRazorpayWebhook(ctx, body, "valid_sig", "evt_webhook_conc_03")
+	}()
+
+	wg.Wait()
+
+	require.NoError(t, webhookErr)
+	assert.True(t, errors.Is(verifyErr, domain.ErrPaymentRefundRequired))
+
+	paymentUUID, _ := uuid.Parse(p1.ID)
+	refunds, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	assert.Len(t, refunds, 1, "Concurrent verify and webhook must create exactly 1 refund record")
+
+	paymentInDB, err := f.paymentRepo.FindByID(ctx, p1.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
+	assert.Empty(t, f.ticketRepo.tickets)
+}
+
+func TestGracefulShutdown_TracksBackgroundRefundDispatch(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+	f.bookingRepo.bookings[bookingID].Status = domain.BookingStatusCancelled
+
+	tracker := worker.NewDispatchTracker()
+	proc := &mockTestRefundProcessor{processDelay: 20 * time.Millisecond}
+
+	f.usecase.SetRefundProcessor(proc)
+	f.usecase.SetDispatchTracker(tracker)
+
+	_, err = f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_shutdown_track_333",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
+
+	// Verify that dispatchTracker properly waited for the background refund task
+	done := make(chan struct{})
+	go func() {
+		tracker.CloseAndWait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success: background dispatch tracked and waited
+	case <-time.After(2 * time.Second):
+		t.Fatal("dispatchTracker timed out waiting for background refund dispatch")
+	}
+
+	proc.mu.Lock()
+	defer proc.mu.Unlock()
+	assert.Len(t, proc.processedIDs, 1, "Background refund must have been processed")
+}
+
+func TestPaymentUsecase_CancelledBooking_ShutdownActive_DispatchRejected_RefundRemainsPending(t *testing.T) {
+	ctx := context.Background()
+	f := setupFixture(t)
+
+	// Setup initial pending payment
+	p1, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+	require.NoError(t, err)
+
+	bookingID, err := uuid.Parse(p1.BookingID)
+	require.NoError(t, err)
+	f.bookingRepo.bookings[bookingID].Status = domain.BookingStatusCancelled
+
+	tracker := worker.NewDispatchTracker()
+	// Shutdown is active; gate is closed
+	tracker.Close()
+
+	proc := &mockTestRefundProcessor{}
+	f.usecase.SetRefundProcessor(proc)
+	f.usecase.SetDispatchTracker(tracker)
+
+	_, err = f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+		UserID:            f.userID,
+		ProviderOrderID:   *p1.ProviderOrderID,
+		RazorpayPaymentID: "pay_shutdown_reject_444",
+		RazorpaySignature: "sig_dummy",
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrPaymentRefundRequired))
+
+	// Immediate dispatch must have been rejected
+	proc.mu.Lock()
+	assert.Empty(t, proc.processedIDs, "Immediate dispatch must be skipped when shutdown is active")
+	proc.mu.Unlock()
+
+	// But durable refund must exist with status PENDING in DB
+	paymentUUID, err := uuid.Parse(p1.ID)
+	require.NoError(t, err)
+
+	refunds, err := f.refundRepo.FindByPaymentID(ctx, paymentUUID)
+	require.NoError(t, err)
+	require.Len(t, refunds, 1, "Refund record must be created in DB")
+	assert.Equal(t, domain.RefundStatusPending, refunds[0].Status)
+	assert.Equal(t, "EVENT_CANCELLATION", refunds[0].Reason)
+	assert.Equal(t, bookingID, refunds[0].BookingID)
 }

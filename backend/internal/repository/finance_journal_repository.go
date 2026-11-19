@@ -17,6 +17,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -448,4 +449,183 @@ func (r *financeJournalRepository) getJournalByIDWithinDB(ctx context.Context, d
 		jm.ReversedByJournalID,
 		jm.ReversedAt,
 	)
+}
+
+type subledgerAggregateRow struct {
+	EventID         *uuid.UUID      `gorm:"column:event_id"`
+	TotalCredits    decimal.Decimal `gorm:"column:total_credits"`
+	TotalDebits     decimal.Decimal `gorm:"column:total_debits"`
+	GrossEarnings   decimal.Decimal `gorm:"column:gross_earnings"`
+	RefundsDeducted decimal.Decimal `gorm:"column:refunds_deducted"`
+	SettledAmount   decimal.Decimal `gorm:"column:settled_amount"`
+}
+
+const subledgerSelectClause = `
+	COALESCE(SUM(CASE WHEN fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) AS total_credits,
+	COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' THEN fle.amount ELSE 0 END), 0) AS total_debits,
+	COALESCE(SUM(CASE WHEN fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount ELSE 0 END), 0) AS gross_earnings,
+	COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' AND fj.financial_event_type IN (?, ?) THEN fle.amount ELSE 0 END), 0) AS refunds_deducted,
+	COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' AND fj.financial_event_type = ? THEN fle.amount ELSE 0 END), 0) AS settled_amount
+`
+
+// GetOrganizerBalance computes the aggregate posted Account 2010 balance for an organizer.
+func (r *financeJournalRepository) GetOrganizerBalance(
+	ctx context.Context,
+	organizerID uuid.UUID,
+) (*domain.OrganizerSubledgerBalance, error) {
+	if organizerID == uuid.Nil {
+		return nil, domain.ErrInvalidOrganizerID
+	}
+
+	var row subledgerAggregateRow
+	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
+		Select(subledgerSelectClause,
+			string(finance.FinancialEventTicketSaleCaptured),
+			string(finance.FinancialEventCustomerRefund),
+			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventOrganizerPayoutSettled),
+		).
+		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
+		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Where("fj.status = ?", string(finance.PostingStatusPosted)).
+		Where("fa.code = ?", finance.AccountCodeOrganizerPayable).
+		Where("fle.organizer_id = ?", organizerID)
+
+	if err := query.Scan(&row).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query organizer subledger balance",
+			slog.String("organizer_id", organizerID.String()),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	netPayable := row.TotalCredits.Sub(row.TotalDebits)
+	netEarnings := row.GrossEarnings.Sub(row.RefundsDeducted)
+
+	return &domain.OrganizerSubledgerBalance{
+		OrganizerID:     organizerID,
+		GrossEarnings:   row.GrossEarnings,
+		RefundsDeducted: row.RefundsDeducted,
+		NetEarnings:     netEarnings,
+		SettledAmount:   row.SettledAmount,
+		TotalCredits:    row.TotalCredits,
+		TotalDebits:     row.TotalDebits,
+		NetPayable:      netPayable,
+		Currency:        finance.CurrencyINR,
+	}, nil
+}
+
+// GetOrganizerEventBalances computes the posted Account 2010 balances for each event owned by an organizer.
+func (r *financeJournalRepository) GetOrganizerEventBalances(
+	ctx context.Context,
+	organizerID uuid.UUID,
+) ([]domain.EventSubledgerBalance, error) {
+	if organizerID == uuid.Nil {
+		return nil, domain.ErrInvalidOrganizerID
+	}
+
+	var rows []subledgerAggregateRow
+	selectWithEventID := "fle.event_id, " + subledgerSelectClause
+
+	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
+		Select(selectWithEventID,
+			string(finance.FinancialEventTicketSaleCaptured),
+			string(finance.FinancialEventCustomerRefund),
+			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventOrganizerPayoutSettled),
+		).
+		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
+		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Where("fj.status = ?", string(finance.PostingStatusPosted)).
+		Where("fa.code = ?", finance.AccountCodeOrganizerPayable).
+		Where("fle.organizer_id = ?", organizerID).
+		Where("fle.event_id IS NOT NULL").
+		Group("fle.event_id").
+		Order("fle.event_id ASC")
+
+	if err := query.Scan(&rows).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query organizer event subledger balances",
+			slog.String("organizer_id", organizerID.String()),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	balances := make([]domain.EventSubledgerBalance, 0, len(rows))
+	for _, row := range rows {
+		if row.EventID == nil {
+			continue
+		}
+		netPayable := row.TotalCredits.Sub(row.TotalDebits)
+		netEarnings := row.GrossEarnings.Sub(row.RefundsDeducted)
+
+		balances = append(balances, domain.EventSubledgerBalance{
+			EventID:         *row.EventID,
+			OrganizerID:     organizerID,
+			GrossEarnings:   row.GrossEarnings,
+			RefundsDeducted: row.RefundsDeducted,
+			NetEarnings:     netEarnings,
+			SettledAmount:   row.SettledAmount,
+			TotalCredits:    row.TotalCredits,
+			TotalDebits:     row.TotalDebits,
+			NetPayable:      netPayable,
+			Currency:        finance.CurrencyINR,
+		})
+	}
+
+	return balances, nil
+}
+
+// GetEventBalance computes the posted Account 2010 balance for a single event owned by an organizer.
+func (r *financeJournalRepository) GetEventBalance(
+	ctx context.Context,
+	organizerID uuid.UUID,
+	eventID uuid.UUID,
+) (*domain.EventSubledgerBalance, error) {
+	if organizerID == uuid.Nil {
+		return nil, domain.ErrInvalidOrganizerID
+	}
+	if eventID == uuid.Nil {
+		return nil, errors.New("event ID cannot be nil")
+	}
+
+	var row subledgerAggregateRow
+	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
+		Select(subledgerSelectClause,
+			string(finance.FinancialEventTicketSaleCaptured),
+			string(finance.FinancialEventCustomerRefund),
+			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventOrganizerPayoutSettled),
+		).
+		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
+		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Where("fj.status = ?", string(finance.PostingStatusPosted)).
+		Where("fa.code = ?", finance.AccountCodeOrganizerPayable).
+		Where("fle.organizer_id = ?", organizerID).
+		Where("fle.event_id = ?", eventID)
+
+	if err := query.Scan(&row).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query event subledger balance",
+			slog.String("organizer_id", organizerID.String()),
+			slog.String("event_id", eventID.String()),
+			slog.Any("error", err),
+		)
+		return nil, err
+	}
+
+	netPayable := row.TotalCredits.Sub(row.TotalDebits)
+	netEarnings := row.GrossEarnings.Sub(row.RefundsDeducted)
+
+	return &domain.EventSubledgerBalance{
+		EventID:         eventID,
+		OrganizerID:     organizerID,
+		GrossEarnings:   row.GrossEarnings,
+		RefundsDeducted: row.RefundsDeducted,
+		NetEarnings:     netEarnings,
+		SettledAmount:   row.SettledAmount,
+		TotalCredits:    row.TotalCredits,
+		TotalDebits:     row.TotalDebits,
+		NetPayable:      netPayable,
+		Currency:        finance.CurrencyINR,
+	}, nil
 }

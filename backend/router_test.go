@@ -28,6 +28,7 @@ func TestRouter_OrganizerPaymentRoutesRegistered(t *testing.T) {
 		&handler.OrganizerApplicationHandler{},
 		&handler.OrganizerProfileHandler{},
 		orgPaymentHandler,
+		&handler.OrganizerSettlementHandler{},
 		&handler.CategoryHandler{},
 		&handler.EventHandler{},
 		&handler.SeatLayoutHandler{},
@@ -41,6 +42,7 @@ func TestRouter_OrganizerPaymentRoutesRegistered(t *testing.T) {
 		&handler.AdminOrganizerHandler{},
 		&handler.AdminEventHandler{},
 		&handler.AdminPaymentHandler{},
+		&handler.AdminSettlementHandler{},
 		&handler.ProfileHandler{},
 		jwtService,
 		nil,
@@ -55,6 +57,13 @@ func TestRouter_OrganizerPaymentRoutesRegistered(t *testing.T) {
 		{http.MethodGet, "/api/v1/organizers/payments/overview"},
 		{http.MethodGet, "/api/v1/organizers/payments/summary-by-event"},
 		{http.MethodGet, "/api/v1/organizers/payments"},
+		{http.MethodGet, "/api/v1/organizers/settlements/balance"},
+		{http.MethodGet, "/api/v1/organizers/settlements"},
+		{http.MethodPost, "/api/v1/organizers/settlements"},
+		{http.MethodGet, "/api/v1/admin/settlements"},
+		{http.MethodPost, "/api/v1/admin/settlements/00000000-0000-0000-0000-000000000001/approve"},
+		{http.MethodPost, "/api/v1/admin/settlements/00000000-0000-0000-0000-000000000001/reject"},
+		{http.MethodPost, "/api/v1/admin/settlements/00000000-0000-0000-0000-000000000001/retry"},
 	}
 
 	for _, tr := range testRoutes {

@@ -19,6 +19,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/adhithyan443/EventHub/backend/internal/service/google"
+	"github.com/adhithyan443/EventHub/backend/internal/service/payout"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
@@ -31,7 +32,9 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
 	profileUC "github.com/adhithyan443/EventHub/backend/internal/usecase/profile"
+	refundUC "github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/settlement"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
@@ -185,6 +188,19 @@ func main() {
 		logger,
 	)
 
+	refundUsecase := refundUC.NewRefundUsecase(
+		txManager,
+		razorpayProvider,
+		logger,
+	)
+
+	refundReconciliationWorker := worker.NewRefundReconciliationWorker(
+		refundUsecase,
+		logger,
+		2*time.Minute,
+		5*time.Minute,
+	)
+
 	bookingHandler := handler.NewBookingHandler(
 		bookingUsecase,
 		qrService,
@@ -200,6 +216,7 @@ func main() {
 		logger.Error("finance usecase initialization failed", "error", err)
 		return
 	}
+	refundUsecase.SetFinanceUsecase(financeUsecase)
 
 	// Payment dependencies.
 	paymentUsecase, err := payment.NewPaymentUsecase(
@@ -213,6 +230,7 @@ func main() {
 		logger.Error("payment usecase initialization failed", "error", err)
 		return
 	}
+	paymentUsecase.SetRefundProcessor(refundUsecase)
 
 	paymentHandler := handler.NewPaymentHandler(
 		paymentUsecase,
@@ -256,6 +274,7 @@ func main() {
 		s3Service,
 		logger,
 	)
+	eventUsecase.SetRefundProcessor(refundUsecase)
 
 	eventHandler := handler.NewEventHandler(
 		eventUsecase,
@@ -377,6 +396,7 @@ func main() {
 	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
 
 	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)
+	adminEventUsecase.SetRefundProcessor(refundUsecase)
 	adminEventHandler := handler.NewAdminEventHandler(adminEventUsecase, logger)
 
 	// Admin payments dependencies.
@@ -401,6 +421,50 @@ func main() {
 	}
 	organizerPaymentHandler := handler.NewOrganizerPaymentHandler(organizerPaymentUsecase, logger)
 
+	// Organizer settlement & balance projection dependencies.
+	financeJournalRepo := repository.NewFinanceJournalRepository(db, logger)
+	refundRepo := repository.NewRefundRepository(db, logger)
+	settlementRepo := repository.NewSettlementRepository(db, logger)
+	mockPayoutProvider := payout.NewMockPayoutProvider()
+
+	organizerBalanceUsecase, err := settlement.NewOrganizerBalanceUsecase(
+		financeJournalRepo,
+		organizerRepo,
+		eventRepository,
+		organizerBankAccountRepo,
+		refundRepo,
+		logger,
+	)
+	if err != nil {
+		logger.Error("organizer balance usecase initialization failed", "error", err)
+		return
+	}
+	organizerBalanceUsecase.SetSettlementRepository(settlementRepo)
+
+	settlementUsecase, err := settlement.NewSettlementUsecase(
+		txManager,
+		settlementRepo,
+		organizerRepo,
+		organizerBankAccountRepo,
+		organizerBalanceUsecase,
+		mockPayoutProvider,
+		logger,
+	)
+	if err != nil {
+		logger.Error("settlement usecase initialization failed", "error", err)
+		return
+	}
+
+	organizerSettlementHandler := handler.NewOrganizerSettlementHandler(
+		organizerBalanceUsecase,
+		settlementUsecase,
+		logger,
+	)
+	adminSettlementHandler := handler.NewAdminSettlementHandler(
+		settlementUsecase,
+		logger,
+	)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -408,6 +472,7 @@ func main() {
 		organizerApplicationHandler,
 		organizerProfileHandler,
 		organizerPaymentHandler,
+		organizerSettlementHandler,
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,
@@ -421,6 +486,7 @@ func main() {
 		adminOrganizerHandler,
 		adminEventHandler,
 		adminPaymentHandler,
+		adminSettlementHandler,
 		profileHandler,
 		jwtService,
 		userRepo,
@@ -445,12 +511,23 @@ func main() {
 		Handler: router,
 	}
 
+	dispatchTracker := worker.NewDispatchTracker()
+	eventUsecase.SetDispatchTracker(dispatchTracker)
+	adminEventUsecase.SetDispatchTracker(dispatchTracker)
+	paymentUsecase.SetDispatchTracker(dispatchTracker)
+
 	var workerWG sync.WaitGroup
 
 	workerWG.Add(1)
 	go func() {
 		defer workerWG.Done()
 		reservationExpiryWorker.Run(ctx)
+	}()
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		refundReconciliationWorker.Run(ctx)
 	}()
 
 	middleware.StartUserStatusCacheCleaner(ctx, 1*time.Minute)
@@ -480,6 +557,22 @@ func main() {
 		if closeErr := server.Close(); closeErr != nil {
 			logger.Error("forced server close failed", "error", closeErr)
 		}
+	}
+
+	// Close tracker to atomically reject any new background dispatches from remaining handlers,
+	// then wait for active background refund tasks within the remaining shutdown timeout.
+	dispatchTracker.Close()
+	refundDispatchDone := make(chan struct{})
+	go func() {
+		dispatchTracker.Wait()
+		close(refundDispatchDone)
+	}()
+
+	select {
+	case <-refundDispatchDone:
+		logger.Info("all background refund tasks completed")
+	case <-shutdownCtx.Done():
+		logger.Warn("background refund tasks timed out during shutdown; remaining refunds will be processed by reconciliation worker")
 	}
 
 	stop()
