@@ -23,6 +23,7 @@ import (
 // --- Mock Implementations ---
 
 type mockPaymentRepo struct {
+	domain.PaymentRepository
 	mu           sync.Mutex
 	payments     map[string]*domain.Payment
 	createCalls  int

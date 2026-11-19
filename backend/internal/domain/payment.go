@@ -22,6 +22,7 @@ var (
 	ErrPaymentRefundPending       = errors.New("previous payment requires refund resolution before retrying")
 	ErrPaymentRefundRequired      = errors.New("Payment received, but booking could not be completed. Your refund is pending processing.")
 	ErrPaymentProviderUnavailable = errors.New("payment provider is temporarily unavailable")
+	ErrInvalidOrganizerID         = errors.New("invalid or empty organizer ID")
 )
 
 type PaymentStatus string
@@ -147,6 +148,100 @@ type AdminPaymentListResult struct {
 	TotalPages   int                    `json:"total_pages"`
 }
 
+type OrganizerPaymentFilter struct {
+	OrganizerID      uuid.UUID
+	Page             int
+	Limit            int
+	Status           string
+	AllocationStatus string
+	From             *time.Time
+	To               *time.Time
+	Search           string
+	EventID          *uuid.UUID
+}
+
+type OrganizerPaymentCustomerInfo struct {
+	ID    uuid.UUID `json:"id"`
+	Name  string    `json:"name"`
+	Email string    `json:"email"`
+}
+
+type OrganizerPaymentEventInfo struct {
+	ID    uuid.UUID `json:"id"`
+	Title string    `json:"title"`
+}
+
+type OrganizerPaymentListItem struct {
+	ID                string                       `json:"id"`
+	BookingID         string                       `json:"booking_id"`
+	BookingNumber     string                       `json:"booking_number"`
+	Customer          OrganizerPaymentCustomerInfo `json:"customer"`
+	Event             OrganizerPaymentEventInfo    `json:"event"`
+	TicketQuantity    int                          `json:"ticket_quantity"`
+	Amount            decimal.Decimal              `json:"amount"`
+	Currency          string                       `json:"currency"`
+	Status            PaymentStatus                `json:"status"`
+	HasGatewayCapture bool                         `json:"has_gateway_capture"`
+	AllocationStatus  AllocationStatus             `json:"allocation_status"`
+	Method            PaymentMethod                `json:"method"`
+	Provider          PaymentProvider              `json:"provider"`
+	TransactionID     *string                      `json:"transaction_id,omitempty"`
+	ProviderOrderID   *string                      `json:"provider_order_id,omitempty"`
+	PaidAt            *time.Time                   `json:"paid_at,omitempty"`
+	CreatedAt         time.Time                    `json:"created_at"`
+	UpdatedAt         time.Time                    `json:"updated_at"`
+}
+
+type OrganizerPaymentListResult struct {
+	Payments     []OrganizerPaymentListItem `json:"payments"`
+	TotalRecords int64                      `json:"total_records"`
+	Page         int                        `json:"page"`
+	Limit        int                        `json:"limit"`
+	TotalPages   int                        `json:"total_pages"`
+}
+
+type OrganizerEventPaymentSummary struct {
+	EventID                            uuid.UUID       `json:"event_id"`
+	EventTitle                         string          `json:"event_title"`
+	TicketsSold                        int64           `json:"tickets_sold"`
+	GrossCapturedAmount                decimal.Decimal `json:"gross_captured_amount"`
+	PlatformFees                       decimal.Decimal `json:"platform_fees"`
+	OrganizerEarnings                  decimal.Decimal `json:"organizer_earnings"`
+	Currency                           string          `json:"currency"`
+	TotalPaymentsCount                 int64           `json:"total_payments_count"`
+	SuccessfullyCompletedPaymentsCount int64           `json:"successfully_completed_payments_count"`
+	PendingPaymentsCount               int64           `json:"pending_payments_count"`
+	FailedPaymentsCount                int64           `json:"failed_payments_count"`
+	RefundRequiredCount                int64           `json:"refund_required_count"`
+	PaymentsWithSuccessfulRefundsCount int64           `json:"payments_with_successful_refunds_count"`
+	UnallocatedCapturedCount           int64           `json:"unallocated_captured_count"`
+}
+
+type OrganizerPaymentOverview struct {
+	GrossCapturedAmount                decimal.Decimal `json:"gross_captured_amount"`
+	TotalTicketsSold                   int64           `json:"total_tickets_sold"`
+	TotalTicketSalesAmount             decimal.Decimal `json:"total_ticket_sales_amount"`
+	TotalPlatformFees                  decimal.Decimal `json:"total_platform_fees"`
+	OrganizerEarnings                  decimal.Decimal `json:"organizer_earnings"`
+	Currency                           string          `json:"currency"`
+	// TotalEvents represents the count of distinct events belonging to the organizer
+	// that have payment transactions matching the applied filters.
+	TotalEvents                        int64           `json:"total_events"`
+	TotalPaymentsCount                 int64           `json:"total_payments_count"`
+	SuccessfullyCompletedPaymentsCount int64           `json:"successfully_completed_payments_count"`
+	RefundRequiredCount                int64           `json:"refund_required_count"`
+	UnallocatedCapturedCount           int64           `json:"unallocated_captured_count"`
+}
+
+type OrganizerEventPaymentSummaryResult struct {
+	Summaries    []OrganizerEventPaymentSummary `json:"summaries"`
+	Overview     OrganizerPaymentOverview       `json:"overview"`
+	TotalRecords int64                          `json:"total_records"`
+	Page         int                            `json:"page"`
+	Limit        int                            `json:"limit"`
+	TotalPages   int                            `json:"total_pages"`
+}
+
 type Payment struct {
 	ID              string
 	BookingID       string
@@ -204,4 +299,19 @@ type PaymentRepository interface {
 		ctx context.Context,
 		filter AdminPaymentFilter,
 	) (*AdminEventPaymentSummaryResult, error)
+
+	FindOrganizerPayments(
+		ctx context.Context,
+		filter OrganizerPaymentFilter,
+	) (*OrganizerPaymentListResult, error)
+
+	GetOrganizerEventPaymentSummaries(
+		ctx context.Context,
+		filter OrganizerPaymentFilter,
+	) (*OrganizerEventPaymentSummaryResult, error)
+
+	GetOrganizerPaymentOverview(
+		ctx context.Context,
+		filter OrganizerPaymentFilter,
+	) (*OrganizerPaymentOverview, error)
 }
