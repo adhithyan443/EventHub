@@ -1068,6 +1068,76 @@ func TestRefundUsecase_LedgerIntegration_Success(t *testing.T) {
 	assert.True(t, in.PlatformFeeRefund.IsZero())
 }
 
+func TestRefundUsecase_CustomerCancellation_RecordsProportionalFeeAndTax(t *testing.T) {
+	uc, repos, provider := setupRefundUsecase(t)
+	financeUC := &mockFinanceUsecase{}
+	uc.SetFinanceUsecase(financeUC)
+	ctx := context.Background()
+
+	organizerID := uuid.New()
+	eventID := uuid.New()
+	bookingID := uuid.New()
+	paymentID := uuid.New()
+	refundID := uuid.New()
+
+	repos.eventRepo.eventsByID[eventID] = &domain.Event{
+		ID:          eventID,
+		OrganizerID: organizerID,
+	}
+
+	repos.bookingRepo.bookingsByID[bookingID] = &domain.Booking{
+		ID:          bookingID,
+		EventID:     eventID,
+		Subtotal:    decimal.NewFromInt(200),
+		PlatformFee: decimal.NewFromInt(20),
+		Tax:         decimal.NewFromInt(30),
+		Total:       decimal.NewFromInt(250),
+		Status:      domain.BookingStatusCancelled,
+	}
+
+	txnID := "pay_test_proportional_tax"
+	repos.paymentRepo.paymentsByID[paymentID.String()] = &domain.Payment{
+		ID:            paymentID.String(),
+		Amount:        decimal.NewFromInt(250),
+		Status:        domain.PaymentStatusSuccess,
+		TransactionID: &txnID,
+	}
+
+	// 80% refund of ₹250 = ₹200
+	ref := &domain.Refund{
+		ID:        refundID,
+		BookingID: bookingID,
+		PaymentID: paymentID,
+		Amount:    decimal.NewFromInt(200),
+		Status:    domain.RefundStatusPending,
+		Reason:    "CUSTOMER_CANCELLATION",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, repos.refundRepo.Create(ctx, ref))
+
+	provider.refundResult = &domain.RefundResult{
+		RefundID: "rfnd_prop_001",
+		Amount:   decimal.NewFromInt(200),
+		Status:   domain.RefundStatusSuccess,
+		Receipt:  refundID.String(),
+	}
+
+	res, err := uc.ProcessPendingRefund(ctx, refundID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.RefundStatusSuccess, res.Status)
+
+	// Verify finance journal input received proportional legs
+	require.Len(t, financeUC.refundInputs, 1)
+	in := financeUC.refundInputs[0]
+	assert.Equal(t, refundID, in.RefundID)
+	assert.True(t, decimal.NewFromInt(200).Equal(in.RefundAmount))
+	assert.True(t, decimal.NewFromInt(16).Equal(in.PlatformFeeRefund), "expected 16 platform fee refund (200 * 20 / 250), got %s", in.PlatformFeeRefund)
+	assert.True(t, decimal.NewFromInt(24).Equal(in.TaxRefund), "expected 24 tax refund (200 * 30 / 250), got %s", in.TaxRefund)
+	assert.False(t, in.IsEventCancellation)
+	assert.False(t, in.IsEscrowRefund)
+}
+
 func TestRefundUsecase_LedgerIntegration_AtomicRollback(t *testing.T) {
 	uc, repos, provider := setupRefundUsecase(t)
 	financeUC := &mockFinanceUsecase{}

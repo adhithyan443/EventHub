@@ -1023,21 +1023,38 @@ func (u *BookingUsecase) CancelBooking(
 				ticketPriceSum = ticketPriceSum.Add(price)
 			}
 
-			// Calculate eligible refund amount based on snapshotted policy.
-			if ticketPriceSum.IsZero() || !ticketPriceSum.IsPositive() {
+			// Calculate the proportion of total paid amount attributable to the cancelled tickets.
+			var cancelledTotalPaid decimal.Decimal = decimal.Zero
+			if len(cancelledTicketIDs) == len(allTickets) {
+				cancelledTotalPaid = booking.Total
+			} else if booking.Subtotal.IsPositive() && ticketPriceSum.IsPositive() {
+				cancelledRatio := ticketPriceSum.Div(booking.Subtotal)
+				if cancelledRatio.GreaterThan(decimal.NewFromInt(1)) {
+					cancelledRatio = decimal.NewFromInt(1)
+				}
+				cancelledTotalPaid = booking.Total.Mul(cancelledRatio)
+			} else if len(allTickets) > 0 && len(ticketsToCancel) > 0 {
+				cancelledRatio := decimal.NewFromInt(int64(len(ticketsToCancel))).Div(decimal.NewFromInt(int64(len(allTickets))))
+				cancelledTotalPaid = booking.Total.Mul(cancelledRatio)
+			} else {
+				cancelledTotalPaid = booking.Total
+			}
+
+			// Calculate eligible refund amount based on snapshotted policy applied to customer's total paid amount.
+			if cancelledTotalPaid.IsZero() || !cancelledTotalPaid.IsPositive() {
 				refundAmount = decimal.Zero
 				isFreeOrNoRefund = true
 			} else {
 				switch strings.ToUpper(strings.TrimSpace(booking.RefundPolicy)) {
 				case domain.RefundPolicyFull:
-					refundAmount = ticketPriceSum
+					refundAmount = cancelledTotalPaid.RoundBank(2)
 				case domain.RefundPolicyPartial:
 					if booking.RefundPercentage <= 0 {
 						refundAmount = decimal.Zero
 						isFreeOrNoRefund = true
 					} else {
 						pct := decimal.NewFromInt(int64(booking.RefundPercentage))
-						refundAmount = ticketPriceSum.Mul(pct).Div(decimal.NewFromInt(100)).RoundBank(2)
+						refundAmount = cancelledTotalPaid.Mul(pct).Div(decimal.NewFromInt(100)).RoundBank(2)
 						if refundAmount.IsZero() || !refundAmount.IsPositive() {
 							refundAmount = decimal.Zero
 							isFreeOrNoRefund = true

@@ -463,9 +463,21 @@ type subledgerAggregateRow struct {
 const subledgerSelectClause = `
 	COALESCE(SUM(CASE WHEN fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) AS total_credits,
 	COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' THEN fle.amount ELSE 0 END), 0) AS total_debits,
-	COALESCE(SUM(CASE WHEN fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount ELSE 0 END), 0) AS gross_earnings,
-	COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' AND fj.financial_event_type IN (?, ?) THEN fle.amount ELSE 0 END), 0) AS refunds_deducted,
-	COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' AND fj.financial_event_type = ? THEN fle.amount ELSE 0 END), 0) AS settled_amount
+	COALESCE(SUM(CASE 
+		WHEN fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount 
+		WHEN fle.entry_type = 'DEBIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type = ? THEN -fle.amount
+		ELSE 0 
+	END), 0) AS gross_earnings,
+	COALESCE(SUM(CASE 
+		WHEN fle.entry_type = 'DEBIT' AND fj.financial_event_type IN (?, ?) THEN fle.amount 
+		WHEN fle.entry_type = 'CREDIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type IN (?, ?) THEN -fle.amount
+		ELSE 0 
+	END), 0) AS refunds_deducted,
+	COALESCE(SUM(CASE 
+		WHEN fle.entry_type = 'DEBIT' AND fj.financial_event_type = ? THEN fle.amount 
+		WHEN fle.entry_type = 'CREDIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type = ? THEN -fle.amount
+		ELSE 0 
+	END), 0) AS settled_amount
 `
 
 // GetOrganizerBalance computes the aggregate posted Account 2010 balance for an organizer.
@@ -481,12 +493,17 @@ func (r *financeJournalRepository) GetOrganizerBalance(
 	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
 		Select(subledgerSelectClause,
 			string(finance.FinancialEventTicketSaleCaptured),
+			string(finance.FinancialEventTicketSaleCaptured),
 			string(finance.FinancialEventCustomerRefund),
 			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventCustomerRefund),
+			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventOrganizerPayoutSettled),
 			string(finance.FinancialEventOrganizerPayoutSettled),
 		).
 		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
 		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Joins("LEFT JOIN finance_journals orig_fj ON orig_fj.id = fj.reversal_reference_id").
 		Where("fj.status = ?", string(finance.PostingStatusPosted)).
 		Where("fa.code = ?", finance.AccountCodeOrganizerPayable).
 		Where("fle.organizer_id = ?", organizerID)
@@ -530,12 +547,17 @@ func (r *financeJournalRepository) GetOrganizerEventBalances(
 	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
 		Select(selectWithEventID,
 			string(finance.FinancialEventTicketSaleCaptured),
+			string(finance.FinancialEventTicketSaleCaptured),
 			string(finance.FinancialEventCustomerRefund),
 			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventCustomerRefund),
+			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventOrganizerPayoutSettled),
 			string(finance.FinancialEventOrganizerPayoutSettled),
 		).
 		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
 		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Joins("LEFT JOIN finance_journals orig_fj ON orig_fj.id = fj.reversal_reference_id").
 		Where("fj.status = ?", string(finance.PostingStatusPosted)).
 		Where("fa.code = ?", finance.AccountCodeOrganizerPayable).
 		Where("fle.organizer_id = ?", organizerID).
@@ -593,12 +615,17 @@ func (r *financeJournalRepository) GetEventBalance(
 	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
 		Select(subledgerSelectClause,
 			string(finance.FinancialEventTicketSaleCaptured),
+			string(finance.FinancialEventTicketSaleCaptured),
 			string(finance.FinancialEventCustomerRefund),
 			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventCustomerRefund),
+			string(finance.FinancialEventEventCancellationRefund),
+			string(finance.FinancialEventOrganizerPayoutSettled),
 			string(finance.FinancialEventOrganizerPayoutSettled),
 		).
 		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
 		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Joins("LEFT JOIN finance_journals orig_fj ON orig_fj.id = fj.reversal_reference_id").
 		Where("fj.status = ?", string(finance.PostingStatusPosted)).
 		Where("fa.code = ?", finance.AccountCodeOrganizerPayable).
 		Where("fle.organizer_id = ?", organizerID).

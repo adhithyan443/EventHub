@@ -59,6 +59,26 @@ const (
 	AllocationStatusNotApplicable AllocationStatus = "NOT_APPLICABLE"
 )
 
+type PaymentRefundStatus = string
+
+const (
+	PaymentRefundStatusNone    PaymentRefundStatus = "NONE"
+	PaymentRefundStatusPartial PaymentRefundStatus = "PARTIAL"
+	PaymentRefundStatusFull    PaymentRefundStatus = "FULL"
+	PaymentRefundStatusPending PaymentRefundStatus = "PENDING"
+	PaymentRefundStatusFailed  PaymentRefundStatus = "FAILED"
+)
+
+type PaymentRefundItem struct {
+	ID              uuid.UUID       `json:"id"`
+	GatewayRefundID *string         `json:"gateway_refund_id,omitempty"`
+	Amount          decimal.Decimal `json:"amount"`
+	Status          string          `json:"status"`
+	Reason          string          `json:"reason"`
+	CreatedAt       time.Time       `json:"created_at"`
+	ProcessedAt     *time.Time      `json:"processed_at,omitempty"`
+}
+
 type AdminPaymentFilter struct {
 	Page             int
 	Limit            int
@@ -120,24 +140,30 @@ type AdminPaymentOrganizerInfo struct {
 }
 
 type AdminPaymentListItem struct {
-	ID                string                    `json:"id"`
-	BookingID         string                    `json:"booking_id"`
-	BookingNumber     string                    `json:"booking_number"`
-	Customer          AdminPaymentCustomerInfo  `json:"customer"`
-	Event             AdminPaymentEventInfo     `json:"event"`
-	Organizer         AdminPaymentOrganizerInfo `json:"organizer"`
-	Amount            decimal.Decimal           `json:"amount"`
-	Currency          string                    `json:"currency"`
-	Status            PaymentStatus             `json:"status"`
-	HasGatewayCapture bool                      `json:"has_gateway_capture"`
-	AllocationStatus  AllocationStatus          `json:"allocation_status"`
-	Method            PaymentMethod             `json:"method"`
-	Provider          PaymentProvider           `json:"provider"`
-	TransactionID     *string                   `json:"transaction_id,omitempty"`
-	ProviderOrderID   *string                   `json:"provider_order_id,omitempty"`
-	PaidAt            *time.Time                `json:"paid_at,omitempty"`
-	CreatedAt         time.Time                 `json:"created_at"`
-	UpdatedAt         time.Time                 `json:"updated_at"`
+	ID                  string                    `json:"id"`
+	BookingID           string                    `json:"booking_id"`
+	BookingNumber       string                    `json:"booking_number"`
+	Customer            AdminPaymentCustomerInfo  `json:"customer"`
+	Event               AdminPaymentEventInfo     `json:"event"`
+	Organizer           AdminPaymentOrganizerInfo `json:"organizer"`
+	Amount              decimal.Decimal           `json:"amount"`
+	Currency            string                    `json:"currency"`
+	Status              PaymentStatus             `json:"status"`
+	HasGatewayCapture   bool                      `json:"has_gateway_capture"`
+	AllocationStatus    AllocationStatus          `json:"allocation_status"`
+	RefundedAmount      decimal.Decimal           `json:"refunded_amount"`
+	PendingRefundAmount decimal.Decimal           `json:"pending_refund_amount"`
+	RefundStatus        PaymentRefundStatus       `json:"refund_status"`
+	NetAmount           decimal.Decimal           `json:"net_amount"`
+	RefundCount         int                       `json:"refund_count"`
+	Refunds             []PaymentRefundItem       `json:"refunds"`
+	Method              PaymentMethod             `json:"method"`
+	Provider            PaymentProvider           `json:"provider"`
+	TransactionID       *string                   `json:"transaction_id,omitempty"`
+	ProviderOrderID     *string                   `json:"provider_order_id,omitempty"`
+	PaidAt              *time.Time                `json:"paid_at,omitempty"`
+	CreatedAt           time.Time                 `json:"created_at"`
+	UpdatedAt           time.Time                 `json:"updated_at"`
 }
 
 type AdminPaymentListResult struct {
@@ -172,24 +198,30 @@ type OrganizerPaymentEventInfo struct {
 }
 
 type OrganizerPaymentListItem struct {
-	ID                string                       `json:"id"`
-	BookingID         string                       `json:"booking_id"`
-	BookingNumber     string                       `json:"booking_number"`
-	Customer          OrganizerPaymentCustomerInfo `json:"customer"`
-	Event             OrganizerPaymentEventInfo    `json:"event"`
-	TicketQuantity    int                          `json:"ticket_quantity"`
-	Amount            decimal.Decimal              `json:"amount"`
-	Currency          string                       `json:"currency"`
-	Status            PaymentStatus                `json:"status"`
-	HasGatewayCapture bool                         `json:"has_gateway_capture"`
-	AllocationStatus  AllocationStatus             `json:"allocation_status"`
-	Method            PaymentMethod                `json:"method"`
-	Provider          PaymentProvider              `json:"provider"`
-	TransactionID     *string                      `json:"transaction_id,omitempty"`
-	ProviderOrderID   *string                      `json:"provider_order_id,omitempty"`
-	PaidAt            *time.Time                   `json:"paid_at,omitempty"`
-	CreatedAt         time.Time                    `json:"created_at"`
-	UpdatedAt         time.Time                    `json:"updated_at"`
+	ID                  string                       `json:"id"`
+	BookingID           string                       `json:"booking_id"`
+	BookingNumber       string                       `json:"booking_number"`
+	Customer            OrganizerPaymentCustomerInfo `json:"customer"`
+	Event               OrganizerPaymentEventInfo    `json:"event"`
+	TicketQuantity      int                          `json:"ticket_quantity"`
+	Amount              decimal.Decimal              `json:"amount"`
+	Currency            string                       `json:"currency"`
+	Status              PaymentStatus                `json:"status"`
+	HasGatewayCapture   bool                         `json:"has_gateway_capture"`
+	AllocationStatus    AllocationStatus             `json:"allocation_status"`
+	RefundedAmount      decimal.Decimal              `json:"refunded_amount"`
+	PendingRefundAmount decimal.Decimal              `json:"pending_refund_amount"`
+	RefundStatus        PaymentRefundStatus          `json:"refund_status"`
+	NetAmount           decimal.Decimal              `json:"net_amount"`
+	RefundCount         int                          `json:"refund_count"`
+	Refunds             []PaymentRefundItem          `json:"refunds"`
+	Method              PaymentMethod                `json:"method"`
+	Provider            PaymentProvider              `json:"provider"`
+	TransactionID       *string                      `json:"transaction_id,omitempty"`
+	ProviderOrderID     *string                      `json:"provider_order_id,omitempty"`
+	PaidAt              *time.Time                   `json:"paid_at,omitempty"`
+	CreatedAt           time.Time                    `json:"created_at"`
+	UpdatedAt           time.Time                    `json:"updated_at"`
 }
 
 type OrganizerPaymentListResult struct {

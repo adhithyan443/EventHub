@@ -225,16 +225,20 @@ func (u *OrganizerBalanceUsecase) GetOrganizerBalanceProjection(
 			}
 
 		case domain.EventFinancialCompleted:
-			// Completed: available balance is net payable minus any in-flight refund holds
-			avail := netPayable.Sub(inFlightHold)
+			// Completed: available balance is net payable minus any in-flight refund holds and event-specific in-flight settlements
+			availBeforeSettlement := netPayable.Sub(inFlightHold)
+			if availBeforeSettlement.IsNegative() {
+				availBeforeSettlement = decimal.Zero
+			}
+			var inFlightEvt decimal.Decimal = decimal.Zero
 			if u.settlementRepo != nil {
-				inFlightEvt, _ := u.settlementRepo.GetInFlightSettlementAmountForEvent(ctx, event.ID)
-				avail = avail.Sub(inFlightEvt)
+				inFlightEvt, _ = u.settlementRepo.GetInFlightSettlementAmountForEvent(ctx, event.ID)
 			}
-			if avail.IsNegative() {
-				avail = decimal.Zero
+			eventAvail := availBeforeSettlement.Sub(inFlightEvt)
+			if eventAvail.IsNegative() {
+				eventAvail = decimal.Zero
 			}
-			availableBalance = avail
+			availableBalance = eventAvail
 			pendingBalance = inFlightHold
 
 			if hasInFlightRefunds {
@@ -291,28 +295,33 @@ func (u *OrganizerBalanceUsecase) GetOrganizerBalanceProjection(
 	// Step 6: Compute Organizer-level totals from event projections & ledger
 	var totalInFlightHold decimal.Decimal = decimal.Zero
 	var totalPendingBalance decimal.Decimal = decimal.Zero
-	var totalAvailableBalance decimal.Decimal = decimal.Zero
+	var totalAvailBeforeSettlementHold decimal.Decimal = decimal.Zero
 
 	for _, ep := range eventProjections {
 		totalInFlightHold = totalInFlightHold.Add(ep.InFlightRefundHold)
 		totalPendingBalance = totalPendingBalance.Add(ep.PendingBalance)
-		totalAvailableBalance = totalAvailableBalance.Add(ep.AvailableBalance)
+		if ep.Lifecycle == domain.EventFinancialCompleted {
+			availBefore := ep.NetPayable.Sub(ep.InFlightRefundHold)
+			if availBefore.IsPositive() {
+				totalAvailBeforeSettlementHold = totalAvailBeforeSettlementHold.Add(availBefore)
+			}
+		}
 	}
 
 	// If there were ledger-level funds not linked to any event, attribute them to available/pending
 	// based on net payable
-	if subledger.NetPayable.GreaterThan(totalAvailableBalance.Add(totalPendingBalance)) {
-		diff := subledger.NetPayable.Sub(totalAvailableBalance.Add(totalPendingBalance))
-		totalAvailableBalance = totalAvailableBalance.Add(diff)
+	if subledger.NetPayable.GreaterThan(totalAvailBeforeSettlementHold.Add(totalPendingBalance)) {
+		diff := subledger.NetPayable.Sub(totalAvailBeforeSettlementHold.Add(totalPendingBalance))
+		totalAvailBeforeSettlementHold = totalAvailBeforeSettlementHold.Add(diff)
 	}
 
 	var inFlightSettlementHold decimal.Decimal = decimal.Zero
 	if u.settlementRepo != nil {
 		inFlightSettlementHold, _ = u.settlementRepo.GetInFlightSettlementAmount(ctx, organizer.ID)
-		totalAvailableBalance = totalAvailableBalance.Sub(inFlightSettlementHold)
-		if totalAvailableBalance.IsNegative() {
-			totalAvailableBalance = decimal.Zero
-		}
+	}
+	totalAvailableBalance := totalAvailBeforeSettlementHold.Sub(inFlightSettlementHold)
+	if totalAvailableBalance.IsNegative() {
+		totalAvailableBalance = decimal.Zero
 	}
 
 	// Cap total available balance by aggregate posted subledger net payable

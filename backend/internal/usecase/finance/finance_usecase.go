@@ -438,8 +438,8 @@ func (u *FinanceUsecase) RecordRefundWithinTx(
 		}
 
 	case in.IsEventCancellation:
-		// Scenario 2: Event cancellation bulk refund (ticket refund + platform fee refund)
-		organizerPortion := in.RefundAmount.Sub(in.PlatformFeeRefund)
+		// Scenario 2: Event cancellation bulk refund (ticket refund + platform fee refund + tax refund)
+		organizerPortion := in.RefundAmount.Sub(in.PlatformFeeRefund).Sub(in.TaxRefund)
 		idempotencyKey := fmt.Sprintf("refund:%s", in.RefundID)
 		description := fmt.Sprintf("Event cancellation refund for booking %s", in.BookingID)
 
@@ -517,20 +517,42 @@ func (u *FinanceUsecase) RecordRefundWithinTx(
 			}
 		}
 
+		// Debit Tax Payable (2030) for tax portion if positive
+		if in.TaxRefund.IsPositive() {
+			taxAcc, err := accRepo.FindByCode(ctx, domainfinance.AccountCodeTaxPayable)
+			if err != nil {
+				return nil, err
+			}
+			if !taxAcc.IsActive() {
+				return nil, fmt.Errorf("%w: account %s is inactive", domain.ErrFinanceAccountInactive, domainfinance.AccountCodeTaxPayable)
+			}
+			taxMoney, err := domainfinance.NewMoney(in.TaxRefund, domainfinance.CurrencyINR)
+			if err != nil {
+				return nil, err
+			}
+			debitTaxEntry, err := domainfinance.NewDebitEntry(
+				uuid.New(),
+				taxAcc.ID(),
+				taxMoney,
+				nil,
+				&in.EventID,
+				processedAt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if err := journal.AddEntry(debitTaxEntry); err != nil {
+				return nil, err
+			}
+		}
+
 		if err := journal.AddEntry(creditClearingEntry); err != nil {
 			return nil, err
 		}
 
 	default:
-		// Scenario 1: Customer-initiated cancellation refund (ticket refund only, organizer absorbs)
-		organizerAcc, err := accRepo.FindByCode(ctx, domainfinance.AccountCodeOrganizerPayable)
-		if err != nil {
-			return nil, err
-		}
-		if !organizerAcc.IsActive() {
-			return nil, fmt.Errorf("%w: account %s is inactive", domain.ErrFinanceAccountInactive, domainfinance.AccountCodeOrganizerPayable)
-		}
-
+		// Scenario 1: Customer-initiated cancellation refund (proportional ticket, platform fee, and tax)
+		organizerPortion := in.RefundAmount.Sub(in.PlatformFeeRefund).Sub(in.TaxRefund)
 		idempotencyKey := fmt.Sprintf("refund:%s", in.RefundID)
 		description := fmt.Sprintf("Customer cancellation refund for booking %s", in.BookingID)
 
@@ -550,20 +572,93 @@ func (u *FinanceUsecase) RecordRefundWithinTx(
 			return nil, err
 		}
 
-		debitOrgEntry, err := domainfinance.NewDebitEntry(
-			uuid.New(),
-			organizerAcc.ID(),
-			refundMoney,
-			&in.OrganizerID,
-			&in.EventID,
-			processedAt,
-		)
-		if err != nil {
-			return nil, err
+		// Debit Organizer Payable (2010) for ticket portion if positive
+		if organizerPortion.IsPositive() {
+			organizerAcc, err := accRepo.FindByCode(ctx, domainfinance.AccountCodeOrganizerPayable)
+			if err != nil {
+				return nil, err
+			}
+			if !organizerAcc.IsActive() {
+				return nil, fmt.Errorf("%w: account %s is inactive", domain.ErrFinanceAccountInactive, domainfinance.AccountCodeOrganizerPayable)
+			}
+			orgMoney, err := domainfinance.NewMoney(organizerPortion, domainfinance.CurrencyINR)
+			if err != nil {
+				return nil, err
+			}
+			debitOrgEntry, err := domainfinance.NewDebitEntry(
+				uuid.New(),
+				organizerAcc.ID(),
+				orgMoney,
+				&in.OrganizerID,
+				&in.EventID,
+				processedAt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if err := journal.AddEntry(debitOrgEntry); err != nil {
+				return nil, err
+			}
 		}
-		if err := journal.AddEntry(debitOrgEntry); err != nil {
-			return nil, err
+
+		// Debit Platform Fee Revenue (4010) for platform fee portion if positive
+		if in.PlatformFeeRefund.IsPositive() {
+			platformFeeAcc, err := accRepo.FindByCode(ctx, domainfinance.AccountCodePlatformFeeRevenue)
+			if err != nil {
+				return nil, err
+			}
+			if !platformFeeAcc.IsActive() {
+				return nil, fmt.Errorf("%w: account %s is inactive", domain.ErrFinanceAccountInactive, domainfinance.AccountCodePlatformFeeRevenue)
+			}
+			feeMoney, err := domainfinance.NewMoney(in.PlatformFeeRefund, domainfinance.CurrencyINR)
+			if err != nil {
+				return nil, err
+			}
+			debitFeeEntry, err := domainfinance.NewDebitEntry(
+				uuid.New(),
+				platformFeeAcc.ID(),
+				feeMoney,
+				nil,
+				&in.EventID,
+				processedAt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if err := journal.AddEntry(debitFeeEntry); err != nil {
+				return nil, err
+			}
 		}
+
+		// Debit Tax Payable (2030) for tax portion if positive
+		if in.TaxRefund.IsPositive() {
+			taxAcc, err := accRepo.FindByCode(ctx, domainfinance.AccountCodeTaxPayable)
+			if err != nil {
+				return nil, err
+			}
+			if !taxAcc.IsActive() {
+				return nil, fmt.Errorf("%w: account %s is inactive", domain.ErrFinanceAccountInactive, domainfinance.AccountCodeTaxPayable)
+			}
+			taxMoney, err := domainfinance.NewMoney(in.TaxRefund, domainfinance.CurrencyINR)
+			if err != nil {
+				return nil, err
+			}
+			debitTaxEntry, err := domainfinance.NewDebitEntry(
+				uuid.New(),
+				taxAcc.ID(),
+				taxMoney,
+				nil,
+				&in.EventID,
+				processedAt,
+			)
+			if err != nil {
+				return nil, err
+			}
+			if err := journal.AddEntry(debitTaxEntry); err != nil {
+				return nil, err
+			}
+		}
+
 		if err := journal.AddEntry(creditClearingEntry); err != nil {
 			return nil, err
 		}
@@ -811,12 +906,21 @@ func validateRefundInput(in domain.RecordRefundInput) error {
 	if in.PlatformFeeRefund.GreaterThan(in.RefundAmount) {
 		return domain.ErrInvalidPlatformFeeRefundAmount
 	}
+	if in.TaxRefund.IsNegative() {
+		return domain.ErrInvalidTaxRefundAmount
+	}
+	if in.PlatformFeeRefund.Add(in.TaxRefund).GreaterThan(in.RefundAmount) {
+		return domain.ErrInvalidRefundAmountInput
+	}
 
 	if !in.RefundAmount.Truncate(2).Equal(in.RefundAmount) {
 		return fmt.Errorf("refund amount has fractional paise: %s", in.RefundAmount.String())
 	}
 	if !in.PlatformFeeRefund.Truncate(2).Equal(in.PlatformFeeRefund) {
 		return fmt.Errorf("platform fee refund has fractional paise: %s", in.PlatformFeeRefund.String())
+	}
+	if !in.TaxRefund.Truncate(2).Equal(in.TaxRefund) {
+		return fmt.Errorf("tax refund has fractional paise: %s", in.TaxRefund.String())
 	}
 
 	if !in.IsEscrowRefund {

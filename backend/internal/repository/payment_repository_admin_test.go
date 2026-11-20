@@ -1653,3 +1653,272 @@ func TestPaymentRepository_AllocationStatus_TaxAndDiscount_Regression(t *testing
 	assert.Equal(t, domain.AllocationStatusUnallocated, orgPayMap[payReversed.String()].AllocationStatus)
 	assert.Equal(t, domain.AllocationStatusAccounted, orgPayMap[payZeroTax.String()].AllocationStatus)
 }
+
+func TestPaymentRepository_RefundVisibility_Postgres(t *testing.T) {
+	db := initTestDatabase(t)
+	setupAdminPaymentTestTables(t, db)
+	repo := repository.NewPaymentRepository(db, slog.Default())
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	userID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Refund Customer', 'refund_cust@example.com')`, userID).Error)
+
+	orgUserID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Refund Org User', 'refund_org@example.com')`, orgUserID).Error)
+	orgID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO organizers (id, user_id) VALUES (?, ?)`, orgID, orgUserID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO organizer_profiles (id, organizer_id, business_name) VALUES (?, ?, 'Refund Visibility Productions')`, uuid.New(), orgID).Error)
+
+	eventID := uuid.New()
+	categoryID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO events (id, organizer_id, category_id, title, status)
+		VALUES (?, ?, ?, 'Refund Test Event', 'PUBLISHED')
+	`, eventID, orgID, categoryID).Error)
+
+	// Helper to insert booking & payment
+	createBookingAndPayment := func(bookingNum string, amount float64) (uuid.UUID, uuid.UUID) {
+		bID := uuid.New()
+		pID := uuid.New()
+		txID := "tx_" + pID.String()[:8]
+		orderID := "order_" + pID.String()[:8]
+
+		require.NoError(t, db.Exec(`
+			INSERT INTO bookings (id, user_id, event_id, booking_number, status, subtotal, platform_fee, tax, total, created_at, updated_at)
+			VALUES (?, ?, ?, ?, 'CONFIRMED', ?, 0.00, 0.00, ?, ?, ?)
+		`, bID, userID, eventID, bookingNum, amount, amount, now, now).Error)
+
+		require.NoError(t, db.Exec(`
+			INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, 'UPI', ?, 'SUCCESS', ?, ?, ?)
+		`, pID, bID, txID, orderID, amount, now, now, now).Error)
+
+		return bID, pID
+	}
+
+	// 1. Payment with NO refunds (Amount: ₹125.00)
+	_, payNoRefund := createBookingAndPayment("BK-NO-REFUND", 125.00)
+
+	// 2. Partial successful refund (Amount: ₹125.00, Refund: ₹50.00 SUCCESS)
+	bPart, payPartial := createBookingAndPayment("BK-PARTIAL", 125.00)
+	rfndPartID := uuid.New()
+	gwPartID := "rfnd_part_50"
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 50.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', ?, ?, ?)
+	`, rfndPartID, bPart, payPartial, gwPartID, now, now, now).Error)
+
+	// 3. Full successful refund (Amount: ₹200.00, Refund: ₹200.00 SUCCESS)
+	bFull, payFull := createBookingAndPayment("BK-FULL", 200.00)
+	rfndFullID := uuid.New()
+	gwFullID := "rfnd_full_200"
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 200.00, 'SUCCESS', 'EVENT_CANCELLATION', ?, ?, ?)
+	`, rfndFullID, bFull, payFull, gwFullID, now, now, now).Error)
+
+	// 4. Multiple successful partial refunds (Amount: ₹1000.00, 2x ₹300.00 SUCCESS)
+	bMulti, payMulti := createBookingAndPayment("BK-MULTI", 1000.00)
+	gwMulti1 := "rfnd_multi_1"
+	gwMulti2 := "rfnd_multi_2"
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 300.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', ?, ?, ?)
+	`, uuid.New(), bMulti, payMulti, gwMulti1, now, now, now).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 300.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', ?, ?, ?)
+	`, uuid.New(), bMulti, payMulti, gwMulti2, now, now, now).Error)
+
+	// 5. Pending refund (Amount: ₹300.00, 1x ₹100.00 PENDING)
+	bPending, payPending := createBookingAndPayment("BK-PENDING", 300.00)
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, created_at, updated_at)
+		VALUES (?, ?, ?, NULL, 100.00, 'PENDING', 'CUSTOMER_CANCELLATION', ?, ?)
+	`, uuid.New(), bPending, payPending, now, now).Error)
+
+	// 6. Failed refund (Amount: ₹400.00, 1x ₹100.00 FAILED)
+	bFailed, payFailed := createBookingAndPayment("BK-FAILED", 400.00)
+	gwFailed := "rfnd_failed_100"
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 100.00, 'FAILED', 'GATEWAY_ERROR', ?, ?)
+	`, uuid.New(), bFailed, payFailed, gwFailed, now, now).Error)
+
+	// 7. Partial successful refund with another pending refund (Amount: ₹500.00, ₹150.00 SUCCESS + ₹100.00 PENDING)
+	bPartPend, payPartPend := createBookingAndPayment("BK-PART-PEND", 500.00)
+	gwPartPendSucc := "rfnd_part_succ_150"
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 150.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', ?, ?, ?)
+	`, uuid.New(), bPartPend, payPartPend, gwPartPendSucc, now, now, now).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, gateway_refund_id, amount, status, reason, created_at, updated_at)
+		VALUES (?, ?, ?, NULL, 100.00, 'PENDING', 'CUSTOMER_CANCELLATION', ?, ?)
+	`, uuid.New(), bPartPend, payPartPend, now, now).Error)
+
+	// --- Execute Admin Query ---
+	adminRes, err := repo.FindAdminPayments(ctx, domain.AdminPaymentFilter{
+		EventID: &eventID,
+		Limit:   50,
+	})
+	require.NoError(t, err)
+	require.Len(t, adminRes.Payments, 7)
+
+	adminMap := make(map[string]domain.AdminPaymentListItem)
+	for _, p := range adminRes.Payments {
+		adminMap[p.ID] = p
+	}
+
+	// --- Verify Admin Results ---
+	t.Run("1. Payment with no refunds", func(t *testing.T) {
+		p := adminMap[payNoRefund.String()]
+		assert.True(t, decimal.NewFromInt(125).Equal(p.Amount))
+		assert.True(t, decimal.Zero.Equal(p.RefundedAmount))
+		assert.True(t, decimal.Zero.Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.NewFromInt(125).Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusNone, p.RefundStatus)
+		assert.Equal(t, 0, p.RefundCount)
+		assert.Empty(t, p.Refunds)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status, "Original payment status must remain SUCCESS")
+	})
+
+	t.Run("2. Partial successful refund", func(t *testing.T) {
+		p := adminMap[payPartial.String()]
+		assert.True(t, decimal.NewFromInt(125).Equal(p.Amount))
+		assert.True(t, decimal.NewFromInt(50).Equal(p.RefundedAmount))
+		assert.True(t, decimal.Zero.Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.NewFromInt(75).Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusPartial, p.RefundStatus)
+		assert.Equal(t, 1, p.RefundCount)
+		require.Len(t, p.Refunds, 1)
+		assert.Equal(t, rfndPartID, p.Refunds[0].ID)
+		assert.Equal(t, &gwPartID, p.Refunds[0].GatewayRefundID)
+		assert.True(t, decimal.NewFromInt(50).Equal(p.Refunds[0].Amount))
+		assert.Equal(t, "SUCCESS", p.Refunds[0].Status)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status)
+	})
+
+	t.Run("3. Full successful refund", func(t *testing.T) {
+		p := adminMap[payFull.String()]
+		assert.True(t, decimal.NewFromInt(200).Equal(p.Amount))
+		assert.True(t, decimal.NewFromInt(200).Equal(p.RefundedAmount))
+		assert.True(t, decimal.Zero.Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.Zero.Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusFull, p.RefundStatus)
+		assert.Equal(t, 1, p.RefundCount)
+		require.Len(t, p.Refunds, 1)
+		assert.Equal(t, "SUCCESS", p.Refunds[0].Status)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status)
+	})
+
+	t.Run("4. Multiple successful partial refunds", func(t *testing.T) {
+		p := adminMap[payMulti.String()]
+		assert.True(t, decimal.NewFromInt(1000).Equal(p.Amount))
+		assert.True(t, decimal.NewFromInt(600).Equal(p.RefundedAmount))
+		assert.True(t, decimal.Zero.Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.NewFromInt(400).Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusPartial, p.RefundStatus)
+		assert.Equal(t, 2, p.RefundCount)
+		require.Len(t, p.Refunds, 2)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status)
+	})
+
+	t.Run("5. Pending refund does not reduce net amount", func(t *testing.T) {
+		p := adminMap[payPending.String()]
+		assert.True(t, decimal.NewFromInt(300).Equal(p.Amount))
+		assert.True(t, decimal.Zero.Equal(p.RefundedAmount))
+		assert.True(t, decimal.NewFromInt(100).Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.NewFromInt(300).Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusPending, p.RefundStatus)
+		assert.Equal(t, 1, p.RefundCount)
+		require.Len(t, p.Refunds, 1)
+		assert.Equal(t, "PENDING", p.Refunds[0].Status)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status)
+	})
+
+	t.Run("6. Failed refund does not reduce net amount", func(t *testing.T) {
+		p := adminMap[payFailed.String()]
+		assert.True(t, decimal.NewFromInt(400).Equal(p.Amount))
+		assert.True(t, decimal.Zero.Equal(p.RefundedAmount))
+		assert.True(t, decimal.Zero.Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.NewFromInt(400).Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusFailed, p.RefundStatus)
+		assert.Equal(t, 1, p.RefundCount)
+		require.Len(t, p.Refunds, 1)
+		assert.Equal(t, "FAILED", p.Refunds[0].Status)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status)
+	})
+
+	t.Run("7. Partial successful refund with another pending refund", func(t *testing.T) {
+		p := adminMap[payPartPend.String()]
+		assert.True(t, decimal.NewFromInt(500).Equal(p.Amount))
+		assert.True(t, decimal.NewFromInt(150).Equal(p.RefundedAmount))
+		assert.True(t, decimal.NewFromInt(100).Equal(p.PendingRefundAmount))
+		assert.True(t, decimal.NewFromInt(350).Equal(p.NetAmount))
+		assert.Equal(t, domain.PaymentRefundStatusPartial, p.RefundStatus)
+		assert.Equal(t, 2, p.RefundCount)
+		require.Len(t, p.Refunds, 2)
+		assert.Equal(t, domain.PaymentStatusSuccess, p.Status)
+	})
+
+	// --- 8. Admin/Organizer API response parity ---
+	t.Run("8. Admin and Organizer API response parity", func(t *testing.T) {
+		orgRes, err := repo.FindOrganizerPayments(ctx, domain.OrganizerPaymentFilter{
+			OrganizerID: orgID,
+			EventID:     &eventID,
+			Limit:       50,
+		})
+		require.NoError(t, err)
+		require.Len(t, orgRes.Payments, 7)
+
+		orgMap := make(map[string]domain.OrganizerPaymentListItem)
+		for _, p := range orgRes.Payments {
+			orgMap[p.ID] = p
+		}
+
+		for id, ap := range adminMap {
+			op, exists := orgMap[id]
+			require.True(t, exists, "Payment %s must exist in Organizer results", id)
+			assert.True(t, ap.Amount.Equal(op.Amount))
+			assert.True(t, ap.RefundedAmount.Equal(op.RefundedAmount))
+			assert.True(t, ap.PendingRefundAmount.Equal(op.PendingRefundAmount))
+			assert.True(t, ap.NetAmount.Equal(op.NetAmount))
+			assert.Equal(t, ap.RefundStatus, op.RefundStatus)
+			assert.Equal(t, ap.RefundCount, op.RefundCount)
+			assert.Equal(t, len(ap.Refunds), len(op.Refunds))
+		}
+	})
+
+	// --- 9. Pagination and filtering remain correct ---
+	t.Run("9. Pagination and filtering remain correct", func(t *testing.T) {
+		page1, err := repo.FindAdminPayments(ctx, domain.AdminPaymentFilter{
+			EventID: &eventID,
+			Page:    1,
+			Limit:   4,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(7), page1.TotalRecords)
+		assert.Len(t, page1.Payments, 4)
+
+		page2, err := repo.FindAdminPayments(ctx, domain.AdminPaymentFilter{
+			EventID: &eventID,
+			Page:    2,
+			Limit:   4,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(7), page2.TotalRecords)
+		assert.Len(t, page2.Payments, 3)
+
+		// Search filtering
+		searchRes, err := repo.FindAdminPayments(ctx, domain.AdminPaymentFilter{
+			EventID: &eventID,
+			Search:  "BK-PARTIAL",
+		})
+		require.NoError(t, err)
+		require.Len(t, searchRes.Payments, 1)
+		assert.Equal(t, "BK-PARTIAL", searchRes.Payments[0].BookingNumber)
+		assert.True(t, decimal.NewFromInt(50).Equal(searchRes.Payments[0].RefundedAmount))
+	})
+}

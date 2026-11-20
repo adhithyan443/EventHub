@@ -34,6 +34,8 @@ func setupRouter(
 	adminEventHandler *handler.AdminEventHandler,
 	adminPaymentHandler *handler.AdminPaymentHandler,
 	adminSettlementHandler *handler.AdminSettlementHandler,
+	adminDashboardHandler *handler.AdminDashboardHandler,
+	adminLedgerHandler *handler.AdminLedgerHandler,
 	profileHandler *handler.ProfileHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
@@ -94,6 +96,8 @@ func setupRouter(
 		adminEventHandler,
 		adminPaymentHandler,
 		adminSettlementHandler,
+		adminDashboardHandler,
+		adminLedgerHandler,
 		jwtService,
 		userRepo,
 	)
@@ -324,6 +328,8 @@ func registerAdminRoutes(
 	adminEventHandler *handler.AdminEventHandler,
 	adminPaymentHandler *handler.AdminPaymentHandler,
 	adminSettlementHandler *handler.AdminSettlementHandler,
+	adminDashboardHandler *handler.AdminDashboardHandler,
+	adminLedgerHandler *handler.AdminLedgerHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -335,6 +341,20 @@ func registerAdminRoutes(
 		middleware.RequireActiveUser(userRepo),
 		middleware.RequireRole("ADMIN"),
 	)
+
+	// Dashboard analytics endpoint
+	if adminDashboardHandler != nil {
+		admin.GET("/dashboard", adminDashboardHandler.GetDashboard)
+	}
+
+	// Financial Ledger endpoints
+	if adminLedgerHandler != nil {
+		ledger := admin.Group("/ledger")
+		{
+			ledger.GET("/journals", adminLedgerHandler.ListJournals)
+			ledger.GET("/journals/:id", adminLedgerHandler.GetJournal)
+		}
+	}
 
 	// Settlement management endpoints
 	if adminSettlementHandler != nil {

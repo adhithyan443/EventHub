@@ -43,6 +43,8 @@ func TestRouter_OrganizerPaymentRoutesRegistered(t *testing.T) {
 		&handler.AdminEventHandler{},
 		&handler.AdminPaymentHandler{},
 		&handler.AdminSettlementHandler{},
+		&handler.AdminDashboardHandler{},
+		&handler.AdminLedgerHandler{},
 		&handler.ProfileHandler{},
 		jwtService,
 		nil,
@@ -64,6 +66,9 @@ func TestRouter_OrganizerPaymentRoutesRegistered(t *testing.T) {
 		{http.MethodPost, "/api/v1/admin/settlements/00000000-0000-0000-0000-000000000001/approve"},
 		{http.MethodPost, "/api/v1/admin/settlements/00000000-0000-0000-0000-000000000001/reject"},
 		{http.MethodPost, "/api/v1/admin/settlements/00000000-0000-0000-0000-000000000001/retry"},
+		{http.MethodGet, "/api/v1/admin/dashboard"},
+		{http.MethodGet, "/api/v1/admin/ledger/journals"},
+		{http.MethodGet, "/api/v1/admin/ledger/journals/00000000-0000-0000-0000-000000000001"},
 	}
 
 	for _, tr := range testRoutes {

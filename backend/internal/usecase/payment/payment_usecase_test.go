@@ -1079,6 +1079,18 @@ func (m *mockRefundRepo) FindByGatewayRefundIDForUpdate(ctx context.Context, gat
 	return m.FindByGatewayRefundID(ctx, gatewayRefundID)
 }
 
+func (m *mockRefundRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUID) ([]domain.Refund, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.Refund
+	for _, r := range m.refundsByID {
+		if r.BookingID == bookingID {
+			res = append(res, *r)
+		}
+	}
+	return res, nil
+}
+
 func (m *mockRefundRepo) FindByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]domain.Refund, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -15,6 +15,13 @@ const allocationBadgeStyles = {
   NOT_APPLICABLE: "bg-[#f3f4f6] text-[#4b5563] border border-[#e5e7eb]",
 };
 
+const refundBadgeStyles = {
+  PARTIAL: "bg-[#f3e8ff] text-[#7e22ce] border border-[#e9d5ff]",
+  FULL: "bg-[#fae8ff] text-[#86198f] border border-[#f5d0fe]",
+  PENDING: "bg-[#fef9c3] text-[#854d0e] border border-[#fef08a]",
+  FAILED: "bg-[#fee2e2] text-[#b91c1c] border border-[#fecaca]",
+};
+
 const formatCurrency = (amount, currency = "INR") => {
   if (amount === null || amount === undefined || amount === "") return "—";
   const num = typeof amount === "number" ? amount : parseFloat(amount);
@@ -138,12 +145,43 @@ export default function OrganizerPaymentDetailDrawer({ payment, onClose }) {
           <div className="flex-1 overflow-y-auto p-6 space-y-5">
             {/* Amount Card */}
             <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-5 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
-              <div className="text-xs font-medium text-[#6d7a77] uppercase tracking-wide">
-                Captured Amount
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-medium text-[#6d7a77] uppercase tracking-wide">
+                  {payment.refunded_amount && parseFloat(payment.refunded_amount) > 0
+                    ? "Net Customer Payment"
+                    : "Captured Amount"}
+                </div>
+                {payment.refund_status && payment.refund_status !== "NONE" && (
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-tight ${
+                      refundBadgeStyles[payment.refund_status] || "bg-[#f3e8ff] text-[#7e22ce] border border-[#e9d5ff]"
+                    }`}
+                  >
+                    {payment.refund_status === "PARTIAL"
+                      ? "Partial Refund"
+                      : payment.refund_status === "FULL"
+                      ? "Full Refund"
+                      : payment.refund_status === "PENDING"
+                      ? "Refund Pending"
+                      : payment.refund_status === "FAILED"
+                      ? "Refund Failed"
+                      : payment.refund_status}
+                  </span>
+                )}
               </div>
               <div className="text-3xl font-extrabold text-[#141b2b] mt-1 tracking-tight">
-                {formatCurrency(payment.amount, payment.currency)}
+                {formatCurrency(
+                  payment.net_amount !== undefined ? payment.net_amount : payment.amount,
+                  payment.currency
+                )}
               </div>
+              {payment.refunded_amount && parseFloat(payment.refunded_amount) > 0 && (
+                <div className="mt-1 text-xs text-[#6d7a77] flex items-center gap-2">
+                  <span>Captured: <span className="font-semibold line-through">{formatCurrency(payment.amount, payment.currency)}</span></span>
+                  <span>•</span>
+                  <span className="text-[#7e22ce] font-semibold">Refunded: -{formatCurrency(payment.refunded_amount, payment.currency)}</span>
+                </div>
+              )}
               <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-[rgba(188,201,198,0.3)]">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs text-[#6d7a77] font-medium">Status:</span>
@@ -167,6 +205,145 @@ export default function OrganizerPaymentDetailDrawer({ payment, onClose }) {
                 </div>
               </div>
             </div>
+
+            {/* Refund Details Card */}
+            {((payment.refunded_amount && parseFloat(payment.refunded_amount) > 0) ||
+              (payment.pending_refund_amount && parseFloat(payment.pending_refund_amount) > 0) ||
+              (payment.refunds && payment.refunds.length > 0)) && (
+              <div className="bg-white border border-[#e9d5ff] rounded-xl overflow-hidden shadow-xs">
+                <div className="bg-[#faf5ff] px-4 py-2.5 border-b border-[#e9d5ff] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#6b21a8] uppercase tracking-wide">
+                      Refund Information
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                        refundBadgeStyles[payment.refund_status] || "bg-[#f3e8ff] text-[#7e22ce]"
+                      }`}
+                    >
+                      {payment.refund_status === "PARTIAL"
+                        ? "Partial Refund"
+                        : payment.refund_status === "FULL"
+                        ? "Full Refund"
+                        : payment.refund_status === "PENDING"
+                        ? "Refund Pending"
+                        : payment.refund_status === "FAILED"
+                        ? "Refund Failed"
+                        : payment.refund_status}
+                    </span>
+                  </div>
+                  <div className="text-xs font-semibold text-[#7e22ce]">
+                    {payment.refund_count || (payment.refunds ? payment.refunds.length : 0)}{" "}
+                    {(payment.refund_count === 1 || (payment.refunds && payment.refunds.length === 1))
+                      ? "Refund Record"
+                      : "Refund Records"}
+                  </div>
+                </div>
+
+                {/* Financial Metric Row */}
+                <div className="grid grid-cols-3 gap-3 p-4 bg-[#fdfaff] border-b border-[#f3e8ff] text-center">
+                  <div className="bg-white p-2.5 rounded-lg border border-[#e9d5ff]/60">
+                    <div className="text-[10px] text-[#6d7a77] uppercase font-medium">Captured</div>
+                    <div className="text-sm font-bold text-[#141b2b] mt-0.5">
+                      {formatCurrency(payment.amount, payment.currency)}
+                    </div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-[#e9d5ff]/60">
+                    <div className="text-[10px] text-[#7e22ce] uppercase font-bold">Total Refunded</div>
+                    <div className="text-sm font-extrabold text-[#7e22ce] mt-0.5">
+                      {formatCurrency(payment.refunded_amount, payment.currency)}
+                    </div>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-[#e9d5ff]/60">
+                    <div className="text-[10px] text-[#00685f] uppercase font-bold">Net Paid</div>
+                    <div className="text-sm font-extrabold text-[#00685f] mt-0.5">
+                      {formatCurrency(
+                        payment.net_amount !== undefined ? payment.net_amount : payment.amount,
+                        payment.currency
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* In-Flight Hold Note if Pending > 0 */}
+                {payment.pending_refund_amount && parseFloat(payment.pending_refund_amount) > 0 && (
+                  <div className="px-4 py-2 bg-[#fffbeb] border-b border-[#fef08a] text-xs text-[#854d0e] flex items-center justify-between">
+                    <span>In-Flight / Pending Refund:</span>
+                    <span className="font-bold">
+                      {formatCurrency(payment.pending_refund_amount, payment.currency)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Itemized Refunds List */}
+                <div className="p-4 space-y-3">
+                  <div className="text-xs font-bold text-[#141b2b]">Refund Records</div>
+                  {payment.refunds && payment.refunds.length > 0 ? (
+                    <div className="space-y-2">
+                      {payment.refunds.map((rf, idx) => (
+                        <div
+                          key={rf.id || idx}
+                          className="bg-[#f9f9ff] border border-[#dce2f7] rounded-lg p-3 text-xs space-y-1.5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold text-[#141b2b] text-sm">
+                              {formatCurrency(rf.amount, payment.currency)}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                rf.status === "SUCCESS"
+                                  ? "bg-[#dcfce7] text-[#15803d] border border-[#bbf7d0]"
+                                  : rf.status === "PENDING" || rf.status === "PROCESSING"
+                                  ? "bg-[#fef9c3] text-[#854d0e] border border-[#fef08a]"
+                                  : "bg-[#fee2e2] text-[#b91c1c] border border-[#fecaca]"
+                              }`}
+                            >
+                              {rf.status}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-[#6d7a77] text-[11px]">
+                            <div className="flex items-center gap-1 font-mono">
+                              <span>ID: {rf.id ? `${rf.id.substring(0, 8)}...` : "—"}</span>
+                              {rf.id && (
+                                <button
+                                  type="button"
+                                  onClick={() => copyToClipboard(rf.id, "Refund ID")}
+                                  className="text-[#00685f] hover:underline cursor-pointer"
+                                >
+                                  {copiedField === "Refund ID" ? "✓" : "Copy"}
+                                </button>
+                              )}
+                            </div>
+                            <span>Reason: {rf.reason || "CANCELLATION"}</span>
+                          </div>
+                          {rf.gateway_refund_id && (
+                            <div className="flex items-center justify-between text-[#6d7a77] text-[11px] pt-1 border-t border-[#e2e8f0]">
+                              <div className="flex items-center gap-1 font-mono">
+                                <span>Gateway: {rf.gateway_refund_id}</span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    copyToClipboard(rf.gateway_refund_id, "Gateway Refund ID")
+                                  }
+                                  className="text-[#00685f] hover:underline cursor-pointer"
+                                >
+                                  {copiedField === "Gateway Refund ID" ? "✓" : "Copy"}
+                                </button>
+                              </div>
+                              <span>{formatDateTime(rf.processed_at || rf.created_at)}</span>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-[#6d7a77] italic">
+                      No individual refund items recorded.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Allocation Context Explainer */}
             <div

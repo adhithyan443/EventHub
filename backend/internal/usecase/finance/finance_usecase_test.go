@@ -913,6 +913,69 @@ func TestFinanceUsecase_RecordRefund_CustomerCancellation(t *testing.T) {
 	balanced, err := journal.IsBalanced()
 	require.NoError(t, err)
 	assert.True(t, balanced)
+
+	t.Run("Proportional customer refund with ticket, platform fee, and tax (₹250 booking, 80% refund)", func(t *testing.T) {
+		refID := uuid.New()
+		totalRefund := decimal.NewFromInt(200) // ₹200 customer refund
+		feeRefund := decimal.NewFromInt(16)    // ₹16 platform fee portion
+		taxRefund := decimal.NewFromInt(24)    // ₹24 tax portion
+		orgRefund := decimal.NewFromInt(160)   // ₹160 ticket portion (200 - 16 - 24)
+
+		custIn := domain.RecordRefundInput{
+			RefundID:            refID,
+			RefundAmount:        totalRefund,
+			PaymentID:           paymentID,
+			BookingID:           bookingID,
+			EventID:             eventID,
+			OrganizerID:         organizerID,
+			IsEventCancellation: false,
+			IsEscrowRefund:      false,
+			PlatformFeeRefund:   feeRefund,
+			TaxRefund:           taxRefund,
+			Currency:            domainfinance.CurrencyINR,
+			ProcessedAt:         time.Now().UTC(),
+		}
+
+		j, err := uc.RecordRefundWithinTx(ctx, txRepos, custIn)
+		require.NoError(t, err)
+		require.NotNil(t, j)
+
+		assert.Equal(t, domainfinance.TransactionTypeRefund, j.TransactionType())
+		assert.Equal(t, domainfinance.FinancialEventCustomerRefund, j.FinancialEventType())
+		assert.Equal(t, domainfinance.PostingStatusPosted, j.Status())
+
+		custEntries := j.Entries()
+		require.Len(t, custEntries, 4)
+
+		// Leg 1: Debit Organizer Payable (2010) = 160
+		assert.Equal(t, domainfinance.EntryTypeDebit, custEntries[0].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), custEntries[0].AccountID())
+		assert.True(t, orgRefund.Equal(custEntries[0].Amount().Amount()))
+		assert.Equal(t, organizerID, *custEntries[0].OrganizerID())
+		assert.Equal(t, eventID, *custEntries[0].EventID())
+
+		// Leg 2: Debit Platform Fee Revenue (4010) = 16
+		assert.Equal(t, domainfinance.EntryTypeDebit, custEntries[1].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue].ID(), custEntries[1].AccountID())
+		assert.True(t, feeRefund.Equal(custEntries[1].Amount().Amount()))
+		assert.Equal(t, eventID, *custEntries[1].EventID())
+
+		// Leg 3: Debit Tax Payable (2030) = 24
+		assert.Equal(t, domainfinance.EntryTypeDebit, custEntries[2].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeTaxPayable].ID(), custEntries[2].AccountID())
+		assert.True(t, taxRefund.Equal(custEntries[2].Amount().Amount()))
+		assert.Equal(t, eventID, *custEntries[2].EventID())
+
+		// Leg 4: Credit Razorpay Clearing (1010) = 200
+		assert.Equal(t, domainfinance.EntryTypeCredit, custEntries[3].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), custEntries[3].AccountID())
+		assert.True(t, totalRefund.Equal(custEntries[3].Amount().Amount()))
+
+		// Exact double-entry balancing
+		isBal, err := j.IsBalanced()
+		require.NoError(t, err)
+		assert.True(t, isBal)
+	})
 }
 
 func TestFinanceUsecase_RecordRefund_EventCancellation(t *testing.T) {
@@ -1018,6 +1081,64 @@ func TestFinanceUsecase_RecordRefund_EventCancellation(t *testing.T) {
 		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), entries[0].AccountID())
 		assert.Equal(t, domainfinance.EntryTypeCredit, entries[1].EntryType())
 		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[1].AccountID())
+	})
+
+	t.Run("Full refund with ticket, platform fee, and tax", func(t *testing.T) {
+		refundID := uuid.New()
+		paymentID := uuid.New()
+		bookingID := uuid.New()
+		eventID := uuid.New()
+		organizerID := uuid.New()
+		totalRefund := decimal.NewFromInt(250)
+		feeRefund := decimal.NewFromInt(20)
+		taxRefund := decimal.NewFromInt(30)
+		ticketRefund := decimal.NewFromInt(200)
+
+		in := domain.RecordRefundInput{
+			RefundID:            refundID,
+			RefundAmount:        totalRefund,
+			PaymentID:           paymentID,
+			BookingID:           bookingID,
+			EventID:             eventID,
+			OrganizerID:         organizerID,
+			IsEventCancellation: true,
+			IsEscrowRefund:      false,
+			PlatformFeeRefund:   feeRefund,
+			TaxRefund:           taxRefund,
+			Currency:            domainfinance.CurrencyINR,
+			ProcessedAt:         time.Now().UTC(),
+		}
+
+		journal, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.NoError(t, err)
+		require.NotNil(t, journal)
+
+		entries := journal.Entries()
+		require.Len(t, entries, 4)
+
+		// Leg 1: Debit Organizer Payable (2010) = 200
+		assert.Equal(t, domainfinance.EntryTypeDebit, entries[0].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeOrganizerPayable].ID(), entries[0].AccountID())
+		assert.True(t, ticketRefund.Equal(entries[0].Amount().Amount()))
+
+		// Leg 2: Debit Platform Fee Revenue (4010) = 20
+		assert.Equal(t, domainfinance.EntryTypeDebit, entries[1].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodePlatformFeeRevenue].ID(), entries[1].AccountID())
+		assert.True(t, feeRefund.Equal(entries[1].Amount().Amount()))
+
+		// Leg 3: Debit Tax Payable (2030) = 30
+		assert.Equal(t, domainfinance.EntryTypeDebit, entries[2].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeTaxPayable].ID(), entries[2].AccountID())
+		assert.True(t, taxRefund.Equal(entries[2].Amount().Amount()))
+
+		// Leg 4: Credit Razorpay Clearing (1010) = 250
+		assert.Equal(t, domainfinance.EntryTypeCredit, entries[3].EntryType())
+		assert.Equal(t, accRepo.accountsByCode[domainfinance.AccountCodeRazorpayClearing].ID(), entries[3].AccountID())
+		assert.True(t, totalRefund.Equal(entries[3].Amount().Amount()))
+
+		balanced, err := journal.IsBalanced()
+		require.NoError(t, err)
+		assert.True(t, balanced)
 	})
 }
 
@@ -1216,6 +1337,37 @@ func TestFinanceUsecase_Refund_ValidationAndEdgeCases(t *testing.T) {
 		}
 		_, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
 		require.ErrorIs(t, err, domain.ErrInvalidPlatformFeeRefundAmount)
+	})
+
+	t.Run("Negative tax refund rejected", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:     uuid.New(),
+			RefundAmount: decimal.NewFromInt(100),
+			PaymentID:    uuid.New(),
+			BookingID:    uuid.New(),
+			EventID:      uuid.New(),
+			OrganizerID:  uuid.New(),
+			TaxRefund:    decimal.NewFromInt(-10),
+			Currency:     domainfinance.CurrencyINR,
+		}
+		_, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.ErrorIs(t, err, domain.ErrInvalidTaxRefundAmount)
+	})
+
+	t.Run("Fee plus tax refund exceeding total refund rejected", func(t *testing.T) {
+		in := domain.RecordRefundInput{
+			RefundID:          uuid.New(),
+			RefundAmount:      decimal.NewFromInt(100),
+			PaymentID:         uuid.New(),
+			BookingID:         uuid.New(),
+			EventID:           uuid.New(),
+			OrganizerID:       uuid.New(),
+			PlatformFeeRefund: decimal.NewFromInt(60),
+			TaxRefund:         decimal.NewFromInt(50),
+			Currency:          domainfinance.CurrencyINR,
+		}
+		_, err := uc.RecordRefundWithinTx(ctx, txRepos, in)
+		require.ErrorIs(t, err, domain.ErrInvalidRefundAmountInput)
 	})
 
 	t.Run("Inactive clearing account rejected", func(t *testing.T) {

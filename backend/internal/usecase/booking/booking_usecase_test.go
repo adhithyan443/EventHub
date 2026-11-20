@@ -2585,13 +2585,13 @@ func TestBookingUsecase_CancelBooking_PartialTicketCancellation_Success(t *testi
 		},
 	}
 
-	// Cancel only ticket1 (price 100, 50% refund = 50. Platform fee 30 excluded!)
+	// Cancel only ticket1 (attributable total paid: 330 * 100/300 = 110. 50% refund = 55)
 	out, err := uc.CancelBooking(ctx, userID, bookingID, ticket1.ID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
 	assert.Equal(t, domain.BookingStatusPartiallyCancelled, out.Status)
-	assert.True(t, out.RefundAmount.Equal(decimal.NewFromInt(50)), "expected 50% of ticket1 price (100) = 50, got %s", out.RefundAmount)
+	assert.True(t, out.RefundAmount.Equal(decimal.NewFromInt(55)), "expected 50% of attributable total paid (110) = 55, got %s", out.RefundAmount)
 	assert.Equal(t, []uuid.UUID{ticket1.ID}, out.CancelledTicketIDs)
 	assert.Equal(t, 2, out.RemainingTicketCount)
 
@@ -2611,9 +2611,9 @@ func TestBookingUsecase_CancelBooking_PartialTicketCancellation_Success(t *testi
 	assert.Equal(t, 1, repos.ticketTypeRepo.releasedQuantity[ticketTypeID])
 	assert.Equal(t, 41, repos.ticketTypeRepo.types[ticketTypeID].AvailableQuantity)
 
-	// Gateway called with 50
+	// Gateway called with 55
 	assert.Equal(t, 1, provider.refundCalls)
-	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(50)))
+	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(55)))
 }
 
 func TestBookingUsecase_CancelBooking_SequentialPartialCancellations_TransitionsToCancelled(t *testing.T) {
@@ -2727,7 +2727,7 @@ func TestBookingUsecase_CancelBooking_SequentialPartialCancellations_Transitions
 	assert.Equal(t, 2, provider.refundCalls)
 }
 
-func TestBookingUsecase_CancelBooking_PlatformFeeExcludedFromRefund(t *testing.T) {
+func TestBookingUsecase_CancelBooking_TotalAmountPaidRefunded(t *testing.T) {
 	uc, repos, provider := setupBookingUsecaseWithRefund()
 	ctx := context.Background()
 	userID := uuid.New()
@@ -2814,14 +2814,14 @@ func TestBookingUsecase_CancelBooking_PlatformFeeExcludedFromRefund(t *testing.T
 		},
 	}
 
-	// Full cancellation: refund must be exactly 400 (subtotal), excluding 50 platform fee
+	// Full cancellation: refund is calculated against total amount paid (450), including platform fee
 	out, err := uc.CancelBooking(ctx, userID, bookingID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
 	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
-	assert.True(t, out.RefundAmount.Equal(decimal.NewFromInt(400)), "expected 400 refund (platform fee excluded), got %s", out.RefundAmount)
-	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(400)))
+	assert.True(t, out.RefundAmount.Equal(decimal.NewFromInt(450)), "expected 450 refund on total payment, got %s", out.RefundAmount)
+	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(450)))
 }
 
 func TestBookingUsecase_CancelBooking_RefundCapCeiling(t *testing.T) {
@@ -3350,4 +3350,209 @@ func TestBookingUsecase_CancelBooking_ConcurrentCheckInRace_Rejected(t *testing.
 	_, err := uc.CancelBooking(ctx, userID, booking.ID, tickets[0].ID)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, domain.ErrTicketAlreadyUsed)
+}
+
+func TestBookingUsecase_CancelBooking_AuditCustomerCancellationScenario(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	eventDate := now.Add(48 * time.Hour)
+	repos.scheduleRepo.schedules[eventID] = &domain.EventSchedule{
+		EventID:   eventID,
+		EventDate: eventDate,
+		StartTime: eventDate,
+	}
+
+	bookingID := uuid.New()
+	booking := &domain.Booking{
+		ID:                        bookingID,
+		BookingNumber:             "BK-AUDIT-250",
+		UserID:                    userID,
+		EventID:                   eventID,
+		Subtotal:                  decimal.NewFromInt(200),
+		PlatformFee:               decimal.NewFromInt(20),
+		Tax:                       decimal.NewFromInt(30),
+		Total:                     decimal.NewFromInt(250),
+		Status:                    domain.BookingStatusConfirmed,
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 24,
+		RefundPolicy:              domain.RefundPolicyPartial,
+		RefundPercentage:          80, // 80% policy
+		CreatedAt:                 now.Add(-2 * time.Hour),
+		UpdatedAt:                 now.Add(-2 * time.Hour),
+	}
+	repos.bookingRepo.bookingsByID[bookingID] = booking
+
+	ticketTypeID := uuid.New()
+	repos.ticketTypeRepo.types[ticketTypeID] = &domain.TicketType{
+		ID:                ticketTypeID,
+		EventID:           eventID,
+		Name:              "Audit Tier",
+		TotalQuantity:     100,
+		AvailableQuantity: 50,
+		Price:             decimal.NewFromInt(200),
+	}
+
+	item := domain.BookingItem{
+		ID:           uuid.New(),
+		BookingID:    bookingID,
+		TicketTypeID: &ticketTypeID,
+		Quantity:     1,
+		UnitPrice:    decimal.NewFromInt(200),
+		TotalPrice:   decimal.NewFromInt(200),
+	}
+	repos.bookingRepo.createdItems = append(repos.bookingRepo.createdItems, []domain.BookingItem{item})
+
+	ticket := domain.Ticket{
+		ID:            uuid.New(),
+		BookingID:     bookingID,
+		BookingItemID: item.ID,
+		UserID:        userID,
+		EventID:       eventID,
+		TicketTypeID:  &ticketTypeID,
+		Price:         decimal.NewFromInt(200),
+		Status:        domain.TicketStatusValid,
+	}
+	repos.ticketRepo.ticketsByBooking[bookingID] = []domain.Ticket{ticket}
+
+	txID := "pay_audit_250"
+	repos.paymentRepo.paymentsByBooking[bookingID.String()] = []domain.Payment{
+		{
+			ID:            uuid.NewString(),
+			BookingID:     bookingID.String(),
+			TransactionID: &txID,
+			Amount:        decimal.NewFromInt(250),
+			Status:        domain.PaymentStatusSuccess,
+			PaidAt:        &now,
+		},
+	}
+
+	// 80% refund on total paid 250 = 200
+	out, err := uc.CancelBooking(ctx, userID, bookingID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out.Status)
+	assert.True(t, out.RefundAmount.Equal(decimal.NewFromInt(200)), "expected 80%% of total paid (250) = 200, got %s", out.RefundAmount)
+	assert.Equal(t, domain.RefundStatusSuccess, out.RefundStatus)
+	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(200)))
+}
+
+func TestBookingUsecase_CancelBooking_MultiTicketPartialProportionalRefund(t *testing.T) {
+	uc, repos, provider := setupBookingUsecaseWithRefund()
+	ctx := context.Background()
+	userID := uuid.New()
+	eventID := uuid.New()
+	now := time.Now()
+
+	eventDate := now.Add(48 * time.Hour)
+	repos.scheduleRepo.schedules[eventID] = &domain.EventSchedule{
+		EventID:   eventID,
+		EventDate: eventDate,
+		StartTime: eventDate,
+	}
+
+	bookingID := uuid.New()
+	booking := &domain.Booking{
+		ID:                        bookingID,
+		BookingNumber:             "BK-MULTI-250",
+		UserID:                    userID,
+		EventID:                   eventID,
+		Subtotal:                  decimal.NewFromInt(200),
+		PlatformFee:               decimal.NewFromInt(20),
+		Tax:                       decimal.NewFromInt(30),
+		Total:                     decimal.NewFromInt(250),
+		Status:                    domain.BookingStatusConfirmed,
+		CancellationAllowed:       true,
+		CancellationDeadlineHours: 24,
+		RefundPolicy:              domain.RefundPolicyPartial,
+		RefundPercentage:          80, // 80% refund policy
+		CreatedAt:                 now.Add(-2 * time.Hour),
+		UpdatedAt:                 now.Add(-2 * time.Hour),
+	}
+	repos.bookingRepo.bookingsByID[bookingID] = booking
+
+	ticketTypeID := uuid.New()
+	repos.ticketTypeRepo.types[ticketTypeID] = &domain.TicketType{
+		ID:                ticketTypeID,
+		EventID:           eventID,
+		Name:              "GA Tier",
+		TotalQuantity:     100,
+		AvailableQuantity: 50,
+		Price:             decimal.NewFromInt(100),
+	}
+
+	item := domain.BookingItem{
+		ID:           uuid.New(),
+		BookingID:    bookingID,
+		TicketTypeID: &ticketTypeID,
+		Quantity:     2,
+		UnitPrice:    decimal.NewFromInt(100),
+		TotalPrice:   decimal.NewFromInt(200),
+	}
+	repos.bookingRepo.createdItems = append(repos.bookingRepo.createdItems, []domain.BookingItem{item})
+
+	ticket1 := domain.Ticket{
+		ID:            uuid.New(),
+		BookingID:     bookingID,
+		BookingItemID: item.ID,
+		UserID:        userID,
+		EventID:       eventID,
+		TicketTypeID:  &ticketTypeID,
+		Price:         decimal.NewFromInt(100),
+		Status:        domain.TicketStatusValid,
+	}
+	ticket2 := domain.Ticket{
+		ID:            uuid.New(),
+		BookingID:     bookingID,
+		BookingItemID: item.ID,
+		UserID:        userID,
+		EventID:       eventID,
+		TicketTypeID:  &ticketTypeID,
+		Price:         decimal.NewFromInt(100),
+		Status:        domain.TicketStatusValid,
+	}
+	repos.ticketRepo.ticketsByBooking[bookingID] = []domain.Ticket{ticket1, ticket2}
+
+	payUUID := uuid.New()
+	txID := "pay_multi_250"
+	repos.paymentRepo.paymentsByBooking[bookingID.String()] = []domain.Payment{
+		{
+			ID:            payUUID.String(),
+			BookingID:     bookingID.String(),
+			TransactionID: &txID,
+			Amount:        decimal.NewFromInt(250),
+			Status:        domain.PaymentStatusSuccess,
+			PaidAt:        &now,
+		},
+	}
+
+	// 1st Cancellation: Cancel ticket 1
+	// Proportional total paid attributable: 250 * (100 / 200) = 125
+	// 80% refund: 125 * 0.8 = 100
+	out1, err1 := uc.CancelBooking(ctx, userID, bookingID, ticket1.ID)
+	require.NoError(t, err1)
+	require.NotNil(t, out1)
+
+	assert.Equal(t, domain.BookingStatusPartiallyCancelled, out1.Status)
+	assert.True(t, out1.RefundAmount.Equal(decimal.NewFromInt(100)), "expected 100 refund on 125 attributable total paid, got %s", out1.RefundAmount)
+	assert.Equal(t, 1, out1.RemainingTicketCount)
+	assert.Equal(t, []uuid.UUID{ticket1.ID}, out1.CancelledTicketIDs)
+	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(100)))
+
+	// 2nd Cancellation: Cancel ticket 2
+	// Proportional total paid attributable: 125
+	// 80% refund: 100. Total refunded = 200 <= 250
+	out2, err2 := uc.CancelBooking(ctx, userID, bookingID, ticket2.ID)
+	require.NoError(t, err2)
+	require.NotNil(t, out2)
+
+	assert.Equal(t, domain.BookingStatusCancelled, out2.Status)
+	assert.True(t, out2.RefundAmount.Equal(decimal.NewFromInt(100)), "expected 100 refund on 125 attributable total paid, got %s", out2.RefundAmount)
+	assert.Equal(t, 0, out2.RemainingTicketCount)
+	assert.Equal(t, []uuid.UUID{ticket2.ID}, out2.CancelledTicketIDs)
+	assert.True(t, provider.lastAmount.Equal(decimal.NewFromInt(100)))
 }

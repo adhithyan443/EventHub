@@ -22,6 +22,8 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/payout"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
+	admindashboard "github.com/adhithyan443/EventHub/backend/internal/usecase/admin_dashboard"
+	adminledger "github.com/adhithyan443/EventHub/backend/internal/usecase/admin_ledger"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
@@ -465,6 +467,16 @@ func main() {
 		logger,
 	)
 
+	// Admin Dashboard dependencies.
+	adminDashboardRepo := repository.NewAdminDashboardRepository(db, logger)
+	adminDashboardUsecase := admindashboard.NewAdminDashboardUsecase(adminDashboardRepo, logger)
+	adminDashboardHandler := handler.NewAdminDashboardHandler(adminDashboardUsecase, logger)
+
+	// Admin Ledger dependencies.
+	adminLedgerRepo := repository.NewAdminLedgerRepository(db, logger)
+	adminLedgerUsecase := adminledger.NewAdminLedgerUsecase(adminLedgerRepo, logger)
+	adminLedgerHandler := handler.NewAdminLedgerHandler(adminLedgerUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -487,6 +499,8 @@ func main() {
 		adminEventHandler,
 		adminPaymentHandler,
 		adminSettlementHandler,
+		adminDashboardHandler,
+		adminLedgerHandler,
 		profileHandler,
 		jwtService,
 		userRepo,

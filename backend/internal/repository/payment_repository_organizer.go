@@ -16,26 +16,29 @@ import (
 )
 
 type organizerPaymentRow struct {
-	ID                string          `gorm:"column:id"`
-	BookingID         string          `gorm:"column:booking_id"`
-	BookingNumber     string          `gorm:"column:booking_number"`
-	UserID            *uuid.UUID      `gorm:"column:user_id"`
-	UserName          *string         `gorm:"column:user_name"`
-	UserEmail         *string         `gorm:"column:user_email"`
-	EventID           *uuid.UUID      `gorm:"column:event_id"`
-	EventTitle        *string         `gorm:"column:event_title"`
-	TicketQuantity    int             `gorm:"column:ticket_quantity"`
-	Amount            decimal.Decimal `gorm:"column:amount"`
-	Status            string          `gorm:"column:status"`
-	PaymentMethod     string          `gorm:"column:payment_method"`
-	Provider          string          `gorm:"column:provider"`
-	TransactionID     *string         `gorm:"column:transaction_id"`
-	ProviderOrderID   *string         `gorm:"column:provider_order_id"`
-	PaidAt            *time.Time      `gorm:"column:paid_at"`
-	CreatedAt         time.Time       `gorm:"column:created_at"`
-	UpdatedAt         time.Time       `gorm:"column:updated_at"`
-	HasGatewayCapture bool            `gorm:"column:has_gateway_capture"`
-	AllocationStatus  string          `gorm:"column:allocation_status"`
+	ID                  string          `gorm:"column:id"`
+	BookingID           string          `gorm:"column:booking_id"`
+	BookingNumber       string          `gorm:"column:booking_number"`
+	UserID              *uuid.UUID      `gorm:"column:user_id"`
+	UserName            *string         `gorm:"column:user_name"`
+	UserEmail           *string         `gorm:"column:user_email"`
+	EventID             *uuid.UUID      `gorm:"column:event_id"`
+	EventTitle          *string         `gorm:"column:event_title"`
+	TicketQuantity      int             `gorm:"column:ticket_quantity"`
+	Amount              decimal.Decimal `gorm:"column:amount"`
+	Status              string          `gorm:"column:status"`
+	PaymentMethod       string          `gorm:"column:payment_method"`
+	Provider            string          `gorm:"column:provider"`
+	TransactionID       *string         `gorm:"column:transaction_id"`
+	ProviderOrderID     *string         `gorm:"column:provider_order_id"`
+	PaidAt              *time.Time      `gorm:"column:paid_at"`
+	CreatedAt           time.Time       `gorm:"column:created_at"`
+	UpdatedAt           time.Time       `gorm:"column:updated_at"`
+	HasGatewayCapture   bool            `gorm:"column:has_gateway_capture"`
+	AllocationStatus    string          `gorm:"column:allocation_status"`
+	RefundedAmount      decimal.Decimal `gorm:"column:refunded_amount"`
+	PendingRefundAmount decimal.Decimal `gorm:"column:pending_refund_amount"`
+	RefundCount         int             `gorm:"column:refund_count"`
 }
 
 type organizerPaymentOverviewRow struct {
@@ -217,7 +220,22 @@ func (r *paymentRepository) FindOrganizerPayments(
 		p.created_at,
 		p.updated_at,
 		(p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) AS has_gateway_capture,
-		(%s) AS allocation_status
+		(%s) AS allocation_status,
+		COALESCE((
+			SELECT SUM(r.amount) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id AND r.status = 'SUCCESS'
+		), 0) AS refunded_amount,
+		COALESCE((
+			SELECT SUM(r.amount) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id AND r.status IN ('PENDING', 'PROCESSING')
+		), 0) AS pending_refund_amount,
+		COALESCE((
+			SELECT COUNT(r.id) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id
+		), 0) AS refund_count
 	`, allocationExpr)
 
 	var rows []organizerPaymentRow
@@ -229,6 +247,53 @@ func (r *paymentRepository) FindOrganizerPayments(
 		Scan(&rows).Error; err != nil {
 		r.logger.ErrorContext(ctx, "failed to query organizer payments", slog.Any("error", err), slog.String("organizer_id", filter.OrganizerID.String()))
 		return nil, err
+	}
+
+	paymentUUIDs := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		if id, err := uuid.Parse(row.ID); err == nil {
+			paymentUUIDs = append(paymentUUIDs, id)
+		}
+	}
+
+	type paymentRefundRow struct {
+		ID              uuid.UUID       `gorm:"column:id"`
+		PaymentID       uuid.UUID       `gorm:"column:payment_id"`
+		GatewayRefundID *string         `gorm:"column:gateway_refund_id"`
+		Amount          decimal.Decimal `gorm:"column:amount"`
+		Status          string          `gorm:"column:status"`
+		Reason          string          `gorm:"column:reason"`
+		CreatedAt       time.Time       `gorm:"column:created_at"`
+		ProcessedAt     *time.Time      `gorm:"column:processed_at"`
+	}
+
+	refundsByPaymentID := make(map[uuid.UUID][]domain.PaymentRefundItem)
+	if len(paymentUUIDs) > 0 {
+		var refundRows []paymentRefundRow
+		if err := r.db.WithContext(ctx).Table("refunds").
+			Select("id, payment_id, gateway_refund_id, amount, status, reason, created_at, processed_at").
+			Where("payment_id IN ?", paymentUUIDs).
+			Order("created_at DESC, id DESC").
+			Scan(&refundRows).Error; err != nil {
+			r.logger.ErrorContext(ctx, "failed to query refunds for organizer payments", slog.Any("error", err), slog.String("organizer_id", filter.OrganizerID.String()))
+			return nil, err
+		}
+		for _, rf := range refundRows {
+			var procAt *time.Time
+			if rf.ProcessedAt != nil {
+				t := rf.ProcessedAt.UTC()
+				procAt = &t
+			}
+			refundsByPaymentID[rf.PaymentID] = append(refundsByPaymentID[rf.PaymentID], domain.PaymentRefundItem{
+				ID:              rf.ID,
+				GatewayRefundID: rf.GatewayRefundID,
+				Amount:          rf.Amount,
+				Status:          rf.Status,
+				Reason:          rf.Reason,
+				CreatedAt:       rf.CreatedAt.UTC(),
+				ProcessedAt:     procAt,
+			})
+		}
 	}
 
 	items := make([]domain.OrganizerPaymentListItem, 0, len(rows))
@@ -260,6 +325,23 @@ func (r *paymentRepository) FindOrganizerPayments(
 			paidAtUTC = &t
 		}
 
+		var payUUID uuid.UUID
+		if parsed, err := uuid.Parse(row.ID); err == nil {
+			payUUID = parsed
+		}
+
+		paymentRefunds := refundsByPaymentID[payUUID]
+		if paymentRefunds == nil {
+			paymentRefunds = []domain.PaymentRefundItem{}
+		}
+
+		netAmount, refundStatus := computePaymentRefundDetails(
+			row.Amount,
+			row.RefundedAmount,
+			row.PendingRefundAmount,
+			row.RefundCount,
+		)
+
 		item := domain.OrganizerPaymentListItem{
 			ID:            row.ID,
 			BookingID:     row.BookingID,
@@ -273,19 +355,25 @@ func (r *paymentRepository) FindOrganizerPayments(
 				ID:    eventID,
 				Title: eventTitle,
 			},
-			TicketQuantity:    row.TicketQuantity,
-			Amount:            row.Amount,
-			Currency:          finance.CurrencyINR,
-			Status:            domain.PaymentStatus(row.Status),
-			HasGatewayCapture: row.HasGatewayCapture,
-			AllocationStatus:  domain.AllocationStatus(row.AllocationStatus),
-			Method:            domain.PaymentMethod(row.PaymentMethod),
-			Provider:          domain.PaymentProvider(row.Provider),
-			TransactionID:     row.TransactionID,
-			ProviderOrderID:   row.ProviderOrderID,
-			PaidAt:            paidAtUTC,
-			CreatedAt:         row.CreatedAt.UTC(),
-			UpdatedAt:         row.UpdatedAt.UTC(),
+			TicketQuantity:      row.TicketQuantity,
+			Amount:              row.Amount,
+			Currency:            finance.CurrencyINR,
+			Status:              domain.PaymentStatus(row.Status),
+			HasGatewayCapture:   row.HasGatewayCapture,
+			AllocationStatus:    domain.AllocationStatus(row.AllocationStatus),
+			RefundedAmount:      row.RefundedAmount,
+			PendingRefundAmount: row.PendingRefundAmount,
+			RefundStatus:        refundStatus,
+			NetAmount:           netAmount,
+			RefundCount:         row.RefundCount,
+			Refunds:             paymentRefunds,
+			Method:              domain.PaymentMethod(row.PaymentMethod),
+			Provider:            domain.PaymentProvider(row.Provider),
+			TransactionID:       row.TransactionID,
+			ProviderOrderID:     row.ProviderOrderID,
+			PaidAt:              paidAtUTC,
+			CreatedAt:           row.CreatedAt.UTC(),
+			UpdatedAt:           row.UpdatedAt.UTC(),
 		}
 		items = append(items, item)
 	}
@@ -341,6 +429,190 @@ func (r *paymentRepository) buildOrganizerEventSummaryBaseQuery(
 	return query
 }
 
+func (r *paymentRepository) getOrganizerLedgerEarnings(
+	ctx context.Context,
+	filter domain.OrganizerPaymentFilter,
+) (decimal.Decimal, decimal.Decimal, error) {
+	// If the filter targets unallocated payments or non-successful statuses,
+	// by financial definition there are zero accounted ledger earnings.
+	if strings.EqualFold(filter.AllocationStatus, "UNALLOCATED") ||
+		strings.EqualFold(filter.Status, "FAILED") ||
+		strings.EqualFold(filter.Status, "PENDING") ||
+		strings.EqualFold(filter.Status, "REFUND_REQUIRED") {
+		return decimal.Zero, decimal.Zero, nil
+	}
+
+	type ledgerSumRow struct {
+		OrganizerEarnings decimal.Decimal `gorm:"column:organizer_earnings"`
+		PlatformFees      decimal.Decimal `gorm:"column:platform_fees"`
+	}
+
+	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
+		Select(`
+			COALESCE(SUM(CASE 
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'DEBIT' AND (
+					fj.financial_event_type IN (?, ?) OR (fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type = ?)
+				) THEN -fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type IN (?, ?) THEN fle.amount
+				ELSE 0
+			END), 0) AS organizer_earnings,
+			COALESCE(SUM(CASE 
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'DEBIT' AND (
+					fj.financial_event_type IN (?, ?) OR (fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type = ?)
+				) THEN -fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type IN (?, ?) THEN fle.amount
+				ELSE 0
+			END), 0) AS platform_fees
+		`,
+			finance.AccountCodeOrganizerPayable, string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodeOrganizerPayable, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund), string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodeOrganizerPayable, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund),
+
+			finance.AccountCodePlatformFeeRevenue, string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodePlatformFeeRevenue, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund), string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodePlatformFeeRevenue, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund),
+		).
+		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Joins("LEFT JOIN finance_journals orig_fj ON orig_fj.id = fj.reversal_reference_id").
+		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
+		Joins("JOIN events e ON e.id = fle.event_id").
+		Where("fa.code IN (?, ?)", finance.AccountCodeOrganizerPayable, finance.AccountCodePlatformFeeRevenue).
+		Where("fj.status = ?", string(finance.PostingStatusPosted)).
+		Where("e.organizer_id = ?", filter.OrganizerID)
+
+	if filter.EventID != nil {
+		query = query.Where("fle.event_id = ?", *filter.EventID)
+	}
+
+	fromUTC, toUTC := normalizeDateRange(filter.From, filter.To)
+	if fromUTC != nil {
+		query = query.Where("COALESCE(fj.posted_at, fj.created_at) >= ?", *fromUTC)
+	}
+	if toUTC != nil {
+		query = query.Where("COALESCE(fj.posted_at, fj.created_at) <= ?", *toUTC)
+	}
+
+	if strings.TrimSpace(filter.Search) != "" {
+		searchTerm := "%" + strings.ToLower(strings.TrimSpace(filter.Search)) + "%"
+		query = query.Where(
+			`(LOWER(COALESCE(e.title, '')) LIKE ? OR e.id::text LIKE ?)`,
+			searchTerm, searchTerm,
+		)
+	}
+
+	var row ledgerSumRow
+	if err := query.Scan(&row).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query organizer ledger earnings",
+			slog.Any("error", err),
+			slog.String("organizer_id", filter.OrganizerID.String()),
+		)
+		return decimal.Zero, decimal.Zero, err
+	}
+
+	return row.OrganizerEarnings, row.PlatformFees, nil
+}
+
+type eventLedgerAmounts struct {
+	OrganizerEarnings decimal.Decimal
+	PlatformFees      decimal.Decimal
+}
+
+func (r *paymentRepository) getOrganizerEventLedgerEarnings(
+	ctx context.Context,
+	filter domain.OrganizerPaymentFilter,
+) (map[uuid.UUID]eventLedgerAmounts, error) {
+	result := make(map[uuid.UUID]eventLedgerAmounts)
+	if strings.EqualFold(filter.AllocationStatus, "UNALLOCATED") ||
+		strings.EqualFold(filter.Status, "FAILED") ||
+		strings.EqualFold(filter.Status, "PENDING") ||
+		strings.EqualFold(filter.Status, "REFUND_REQUIRED") {
+		return result, nil
+	}
+
+	type eventLedgerRow struct {
+		EventID           uuid.UUID       `gorm:"column:event_id"`
+		OrganizerEarnings decimal.Decimal `gorm:"column:organizer_earnings"`
+		PlatformFees      decimal.Decimal `gorm:"column:platform_fees"`
+	}
+
+	query := r.db.WithContext(ctx).Table("finance_ledger_entries AS fle").
+		Select(`
+			fle.event_id,
+			COALESCE(SUM(CASE 
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'DEBIT' AND (
+					fj.financial_event_type IN (?, ?) OR (fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type = ?)
+				) THEN -fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type IN (?, ?) THEN fle.amount
+				ELSE 0
+			END), 0) AS organizer_earnings,
+			COALESCE(SUM(CASE 
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.financial_event_type = ? THEN fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'DEBIT' AND (
+					fj.financial_event_type IN (?, ?) OR (fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type = ?)
+				) THEN -fle.amount
+				WHEN fa.code = ? AND fle.entry_type = 'CREDIT' AND fj.transaction_type = 'REVERSAL' AND orig_fj.financial_event_type IN (?, ?) THEN fle.amount
+				ELSE 0
+			END), 0) AS platform_fees
+		`,
+			finance.AccountCodeOrganizerPayable, string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodeOrganizerPayable, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund), string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodeOrganizerPayable, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund),
+
+			finance.AccountCodePlatformFeeRevenue, string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodePlatformFeeRevenue, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund), string(finance.FinancialEventTicketSaleCaptured),
+			finance.AccountCodePlatformFeeRevenue, string(finance.FinancialEventCustomerRefund), string(finance.FinancialEventEventCancellationRefund),
+		).
+		Joins("JOIN finance_journals fj ON fj.id = fle.journal_id").
+		Joins("LEFT JOIN finance_journals orig_fj ON orig_fj.id = fj.reversal_reference_id").
+		Joins("JOIN finance_accounts fa ON fa.id = fle.account_id").
+		Joins("JOIN events e ON e.id = fle.event_id").
+		Where("fa.code IN (?, ?)", finance.AccountCodeOrganizerPayable, finance.AccountCodePlatformFeeRevenue).
+		Where("fj.status = ?", string(finance.PostingStatusPosted)).
+		Where("e.organizer_id = ?", filter.OrganizerID).
+		Where("fle.event_id IS NOT NULL")
+
+	if filter.EventID != nil {
+		query = query.Where("fle.event_id = ?", *filter.EventID)
+	}
+
+	fromUTC, toUTC := normalizeDateRange(filter.From, filter.To)
+	if fromUTC != nil {
+		query = query.Where("COALESCE(fj.posted_at, fj.created_at) >= ?", *fromUTC)
+	}
+	if toUTC != nil {
+		query = query.Where("COALESCE(fj.posted_at, fj.created_at) <= ?", *toUTC)
+	}
+
+	if strings.TrimSpace(filter.Search) != "" {
+		searchTerm := "%" + strings.ToLower(strings.TrimSpace(filter.Search)) + "%"
+		query = query.Where(
+			`(LOWER(COALESCE(e.title, '')) LIKE ? OR e.id::text LIKE ?)`,
+			searchTerm, searchTerm,
+		)
+	}
+
+	var rows []eventLedgerRow
+	if err := query.Group("fle.event_id").Scan(&rows).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to query event ledger earnings",
+			slog.Any("error", err),
+			slog.String("organizer_id", filter.OrganizerID.String()),
+		)
+		return nil, err
+	}
+
+	for _, row := range rows {
+		result[row.EventID] = eventLedgerAmounts{
+			OrganizerEarnings: row.OrganizerEarnings,
+			PlatformFees:      row.PlatformFees,
+		}
+	}
+
+	return result, nil
+}
+
 func (r *paymentRepository) GetOrganizerPaymentOverview(
 	ctx context.Context,
 	filter domain.OrganizerPaymentFilter,
@@ -356,9 +628,6 @@ func (r *paymentRepository) GetOrganizerPaymentOverview(
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
 		COALESCE(SUM(CASE WHEN %s THEN (SELECT COALESCE(SUM(bi.quantity), 0) FROM booking_items bi WHERE bi.booking_id = b.id) ELSE 0 END), 0) AS total_tickets_sold,
-		COALESCE(SUM(CASE WHEN %s THEN GREATEST(0, (b.subtotal - b.discount) - COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.booking_id = b.id AND r.status = 'SUCCESS'), 0)) ELSE 0 END), 0) AS total_ticket_sales_amount,
-		COALESCE(SUM(CASE WHEN %s THEN b.platform_fee ELSE 0 END), 0) AS total_platform_fees,
-		COALESCE(SUM(CASE WHEN %s THEN GREATEST(0, (b.subtotal - b.discount) - COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.booking_id = b.id AND r.status = 'SUCCESS'), 0)) ELSE 0 END), 0) AS organizer_earnings,
 		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
 			SELECT SUM(r.amount) 
 			FROM refunds r 
@@ -368,7 +637,7 @@ func (r *paymentRepository) GetOrganizerPaymentOverview(
 			  AND r.processed_at IS NOT NULL
 		), 0) THEN 1 END) AS refund_required_count,
 		COUNT(CASE WHEN (%s) = 'UNALLOCATED' THEN 1 END) AS unallocated_captured_count
-	`, primarySuccessfulPaymentCondition, primarySuccessfulPaymentCondition, primarySuccessfulPaymentCondition, primarySuccessfulPaymentCondition, allocationExpr)
+	`, primarySuccessfulPaymentCondition, allocationExpr)
 
 	var row organizerPaymentOverviewRow
 	query := r.buildOrganizerEventSummaryBaseQuery(ctx, filter)
@@ -377,12 +646,18 @@ func (r *paymentRepository) GetOrganizerPaymentOverview(
 		return nil, err
 	}
 
+	// Authoritative organizer earnings and platform fees derived from Account 2010 and 4010 ledger entries
+	ledgerEarnings, ledgerPlatformFees, err := r.getOrganizerLedgerEarnings(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
 	return &domain.OrganizerPaymentOverview{
 		GrossCapturedAmount:                row.GrossCapturedAmount,
 		TotalTicketsSold:                   row.TotalTicketsSold,
-		TotalTicketSalesAmount:             row.TotalTicketSalesAmount,
-		TotalPlatformFees:                  row.TotalPlatformFees,
-		OrganizerEarnings:                  row.OrganizerEarnings,
+		TotalTicketSalesAmount:             ledgerEarnings,
+		TotalPlatformFees:                  ledgerPlatformFees,
+		OrganizerEarnings:                  ledgerEarnings,
 		Currency:                           finance.CurrencyINR,
 		TotalEvents:                        row.TotalEvents,
 		TotalPaymentsCount:                 row.TotalPaymentsCount,
@@ -449,8 +724,6 @@ func (r *paymentRepository) GetOrganizerEventPaymentSummaries(
 		COALESCE(e.title, '') AS event_title,
 		COALESCE(SUM(CASE WHEN %s THEN (SELECT COALESCE(SUM(bi.quantity), 0) FROM booking_items bi WHERE bi.booking_id = b.id) ELSE 0 END), 0) AS tickets_sold,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
-		COALESCE(SUM(CASE WHEN %s THEN b.platform_fee ELSE 0 END), 0) AS platform_fees,
-		COALESCE(SUM(CASE WHEN %s THEN GREATEST(0, (b.subtotal - b.discount) - COALESCE((SELECT SUM(r.amount) FROM refunds r WHERE r.booking_id = b.id AND r.status = 'SUCCESS'), 0)) ELSE 0 END), 0) AS organizer_earnings,
 		COUNT(p.id) AS total_payments_count,
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COUNT(CASE WHEN p.status = 'PENDING' THEN 1 END) AS pending_payments_count,
@@ -472,7 +745,7 @@ func (r *paymentRepository) GetOrganizerEventPaymentSummaries(
 			  AND r.processed_at IS NOT NULL
 		) THEN 1 END) AS payments_with_successful_refunds_count,
 		COUNT(CASE WHEN (%s) = 'UNALLOCATED' THEN 1 END) AS unallocated_captured_count
-	`, primarySuccessfulPaymentCondition, primarySuccessfulPaymentCondition, primarySuccessfulPaymentCondition, allocationExpr)
+	`, primarySuccessfulPaymentCondition, allocationExpr)
 
 	var eventRows []organizerEventPaymentSummaryRow
 	eventQuery := r.buildOrganizerEventSummaryBaseQuery(ctx, filter)
@@ -486,15 +759,21 @@ func (r *paymentRepository) GetOrganizerEventPaymentSummaries(
 		return nil, err
 	}
 
+	eventLedgerMap, err := r.getOrganizerEventLedgerEarnings(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+
 	summaries := make([]domain.OrganizerEventPaymentSummary, 0, len(eventRows))
 	for _, row := range eventRows {
+		eventAmounts := eventLedgerMap[row.EventID]
 		item := domain.OrganizerEventPaymentSummary{
 			EventID:                            row.EventID,
 			EventTitle:                         row.EventTitle,
 			TicketsSold:                        row.TicketsSold,
 			GrossCapturedAmount:                row.GrossCapturedAmount,
-			PlatformFees:                       row.PlatformFees,
-			OrganizerEarnings:                  row.OrganizerEarnings,
+			PlatformFees:                       eventAmounts.PlatformFees,
+			OrganizerEarnings:                  eventAmounts.OrganizerEarnings,
 			Currency:                           finance.CurrencyINR,
 			TotalPaymentsCount:                 row.TotalPaymentsCount,
 			SuccessfullyCompletedPaymentsCount: row.SuccessfullyCompletedPaymentsCount,

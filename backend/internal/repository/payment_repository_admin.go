@@ -16,27 +16,30 @@ import (
 )
 
 type adminPaymentRow struct {
-	ID                string          `gorm:"column:id"`
-	BookingID         string          `gorm:"column:booking_id"`
-	BookingNumber     string          `gorm:"column:booking_number"`
-	UserID            *uuid.UUID      `gorm:"column:user_id"`
-	UserName          *string         `gorm:"column:user_name"`
-	UserEmail         *string         `gorm:"column:user_email"`
-	EventID           *uuid.UUID      `gorm:"column:event_id"`
-	EventTitle        *string         `gorm:"column:event_title"`
-	OrganizerID       *uuid.UUID      `gorm:"column:organizer_id"`
-	BusinessName      *string         `gorm:"column:business_name"`
-	Amount            decimal.Decimal `gorm:"column:amount"`
-	Status            string          `gorm:"column:status"`
-	PaymentMethod     string          `gorm:"column:payment_method"`
-	Provider          string          `gorm:"column:provider"`
-	TransactionID     *string         `gorm:"column:transaction_id"`
-	ProviderOrderID   *string         `gorm:"column:provider_order_id"`
-	PaidAt            *time.Time      `gorm:"column:paid_at"`
-	CreatedAt         time.Time       `gorm:"column:created_at"`
-	UpdatedAt         time.Time       `gorm:"column:updated_at"`
-	HasGatewayCapture bool            `gorm:"column:has_gateway_capture"`
-	AllocationStatus  string          `gorm:"column:allocation_status"`
+	ID                  string          `gorm:"column:id"`
+	BookingID           string          `gorm:"column:booking_id"`
+	BookingNumber       string          `gorm:"column:booking_number"`
+	UserID              *uuid.UUID      `gorm:"column:user_id"`
+	UserName            *string         `gorm:"column:user_name"`
+	UserEmail           *string         `gorm:"column:user_email"`
+	EventID             *uuid.UUID      `gorm:"column:event_id"`
+	EventTitle          *string         `gorm:"column:event_title"`
+	OrganizerID         *uuid.UUID      `gorm:"column:organizer_id"`
+	BusinessName        *string         `gorm:"column:business_name"`
+	Amount              decimal.Decimal `gorm:"column:amount"`
+	Status              string          `gorm:"column:status"`
+	PaymentMethod       string          `gorm:"column:payment_method"`
+	Provider            string          `gorm:"column:provider"`
+	TransactionID       *string         `gorm:"column:transaction_id"`
+	ProviderOrderID     *string         `gorm:"column:provider_order_id"`
+	PaidAt              *time.Time      `gorm:"column:paid_at"`
+	CreatedAt           time.Time       `gorm:"column:created_at"`
+	UpdatedAt           time.Time       `gorm:"column:updated_at"`
+	HasGatewayCapture   bool            `gorm:"column:has_gateway_capture"`
+	AllocationStatus    string          `gorm:"column:allocation_status"`
+	RefundedAmount      decimal.Decimal `gorm:"column:refunded_amount"`
+	PendingRefundAmount decimal.Decimal `gorm:"column:pending_refund_amount"`
+	RefundCount         int             `gorm:"column:refund_count"`
 }
 
 // buildAllocationStatusExpression returns the canonical SQL expression to compute
@@ -224,7 +227,22 @@ func (r *paymentRepository) FindAdminPayments(
 		p.created_at,
 		p.updated_at,
 		(p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) AS has_gateway_capture,
-		(%s) AS allocation_status
+		(%s) AS allocation_status,
+		COALESCE((
+			SELECT SUM(r.amount) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id AND r.status = 'SUCCESS'
+		), 0) AS refunded_amount,
+		COALESCE((
+			SELECT SUM(r.amount) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id AND r.status IN ('PENDING', 'PROCESSING')
+		), 0) AS pending_refund_amount,
+		COALESCE((
+			SELECT COUNT(r.id) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id
+		), 0) AS refund_count
 	`, allocationExpr)
 
 	var rows []adminPaymentRow
@@ -236,6 +254,53 @@ func (r *paymentRepository) FindAdminPayments(
 		Scan(&rows).Error; err != nil {
 		r.logger.ErrorContext(ctx, "failed to query admin payments", slog.Any("error", err))
 		return nil, err
+	}
+
+	paymentUUIDs := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		if id, err := uuid.Parse(row.ID); err == nil {
+			paymentUUIDs = append(paymentUUIDs, id)
+		}
+	}
+
+	type paymentRefundRow struct {
+		ID              uuid.UUID       `gorm:"column:id"`
+		PaymentID       uuid.UUID       `gorm:"column:payment_id"`
+		GatewayRefundID *string         `gorm:"column:gateway_refund_id"`
+		Amount          decimal.Decimal `gorm:"column:amount"`
+		Status          string          `gorm:"column:status"`
+		Reason          string          `gorm:"column:reason"`
+		CreatedAt       time.Time       `gorm:"column:created_at"`
+		ProcessedAt     *time.Time      `gorm:"column:processed_at"`
+	}
+
+	refundsByPaymentID := make(map[uuid.UUID][]domain.PaymentRefundItem)
+	if len(paymentUUIDs) > 0 {
+		var refundRows []paymentRefundRow
+		if err := r.db.WithContext(ctx).Table("refunds").
+			Select("id, payment_id, gateway_refund_id, amount, status, reason, created_at, processed_at").
+			Where("payment_id IN ?", paymentUUIDs).
+			Order("created_at DESC, id DESC").
+			Scan(&refundRows).Error; err != nil {
+			r.logger.ErrorContext(ctx, "failed to query refunds for admin payments", slog.Any("error", err))
+			return nil, err
+		}
+		for _, rf := range refundRows {
+			var procAt *time.Time
+			if rf.ProcessedAt != nil {
+				t := rf.ProcessedAt.UTC()
+				procAt = &t
+			}
+			refundsByPaymentID[rf.PaymentID] = append(refundsByPaymentID[rf.PaymentID], domain.PaymentRefundItem{
+				ID:              rf.ID,
+				GatewayRefundID: rf.GatewayRefundID,
+				Amount:          rf.Amount,
+				Status:          rf.Status,
+				Reason:          rf.Reason,
+				CreatedAt:       rf.CreatedAt.UTC(),
+				ProcessedAt:     procAt,
+			})
+		}
 	}
 
 	items := make([]domain.AdminPaymentListItem, 0, len(rows))
@@ -275,10 +340,27 @@ func (r *paymentRepository) FindAdminPayments(
 			paidAtUTC = &t
 		}
 
+		var payUUID uuid.UUID
+		if parsed, err := uuid.Parse(row.ID); err == nil {
+			payUUID = parsed
+		}
+
+		paymentRefunds := refundsByPaymentID[payUUID]
+		if paymentRefunds == nil {
+			paymentRefunds = []domain.PaymentRefundItem{}
+		}
+
+		netAmount, refundStatus := computePaymentRefundDetails(
+			row.Amount,
+			row.RefundedAmount,
+			row.PendingRefundAmount,
+			row.RefundCount,
+		)
+
 		item := domain.AdminPaymentListItem{
-			ID:            row.ID,
-			BookingID:     row.BookingID,
-			BookingNumber: row.BookingNumber,
+			ID:                  row.ID,
+			BookingID:           row.BookingID,
+			BookingNumber:       row.BookingNumber,
 			Customer: domain.AdminPaymentCustomerInfo{
 				ID:    customerID,
 				Name:  customerName,
@@ -292,18 +374,24 @@ func (r *paymentRepository) FindAdminPayments(
 				ID:           organizerID,
 				BusinessName: businessName,
 			},
-			Amount:            row.Amount,
-			Currency:          finance.CurrencyINR,
-			Status:            domain.PaymentStatus(row.Status),
-			HasGatewayCapture: row.HasGatewayCapture,
-			AllocationStatus:  domain.AllocationStatus(row.AllocationStatus),
-			Method:            domain.PaymentMethod(row.PaymentMethod),
-			Provider:          domain.PaymentProvider(row.Provider),
-			TransactionID:     row.TransactionID,
-			ProviderOrderID:   row.ProviderOrderID,
-			PaidAt:            paidAtUTC,
-			CreatedAt:         row.CreatedAt.UTC(),
-			UpdatedAt:         row.UpdatedAt.UTC(),
+			Amount:              row.Amount,
+			Currency:            finance.CurrencyINR,
+			Status:              domain.PaymentStatus(row.Status),
+			HasGatewayCapture:   row.HasGatewayCapture,
+			AllocationStatus:    domain.AllocationStatus(row.AllocationStatus),
+			RefundedAmount:      row.RefundedAmount,
+			PendingRefundAmount: row.PendingRefundAmount,
+			RefundStatus:        refundStatus,
+			NetAmount:           netAmount,
+			RefundCount:         row.RefundCount,
+			Refunds:             paymentRefunds,
+			Method:              domain.PaymentMethod(row.PaymentMethod),
+			Provider:            domain.PaymentProvider(row.Provider),
+			TransactionID:       row.TransactionID,
+			ProviderOrderID:     row.ProviderOrderID,
+			PaidAt:              paidAtUTC,
+			CreatedAt:           row.CreatedAt.UTC(),
+			UpdatedAt:           row.UpdatedAt.UTC(),
 		}
 		items = append(items, item)
 	}
@@ -521,4 +609,29 @@ func (r *paymentRepository) GetEventPaymentSummaries(
 		Limit:          limit,
 		TotalPages:     totalPages,
 	}, nil
+}
+
+func computePaymentRefundDetails(
+	amount decimal.Decimal,
+	refundedAmount decimal.Decimal,
+	pendingRefundAmount decimal.Decimal,
+	refundCount int,
+) (decimal.Decimal, domain.PaymentRefundStatus) {
+	netAmount := amount.Sub(refundedAmount)
+	if netAmount.IsNegative() {
+		netAmount = decimal.Zero
+	}
+
+	var status domain.PaymentRefundStatus = domain.PaymentRefundStatusNone
+	if refundedAmount.GreaterThanOrEqual(amount) && amount.IsPositive() {
+		status = domain.PaymentRefundStatusFull
+	} else if refundedAmount.IsPositive() {
+		status = domain.PaymentRefundStatusPartial
+	} else if pendingRefundAmount.IsPositive() {
+		status = domain.PaymentRefundStatusPending
+	} else if refundCount > 0 {
+		status = domain.PaymentRefundStatusFailed
+	}
+
+	return netAmount, status
 }

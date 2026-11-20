@@ -40,6 +40,13 @@ const allocationBadgeStyles = {
   NOT_APPLICABLE: "bg-[#f3f4f6] text-[#4b5563] border border-[#e5e7eb]",
 };
 
+const refundBadgeStyles = {
+  PARTIAL: "bg-[#f3e8ff] text-[#7e22ce] border border-[#e9d5ff]",
+  FULL: "bg-[#fae8ff] text-[#86198f] border border-[#f5d0fe]",
+  PENDING: "bg-[#fef9c3] text-[#854d0e] border border-[#fef08a]",
+  FAILED: "bg-[#fee2e2] text-[#b91c1c] border border-[#fecaca]",
+};
+
 const formatCurrency = (amount, currency = "INR") => {
   if (amount === null || amount === undefined || amount === "") return "—";
   const num = typeof amount === "number" ? amount : parseFloat(amount);
@@ -1385,18 +1392,65 @@ export default function OrganizerPaymentsPage() {
                               </span>
                             </td>
 
-                            {/* Payment Amount */}
-                            <td className="px-4 py-3.5 text-right font-bold text-[#141b2b] text-sm">
-                              {formatCurrency(p.amount, p.currency)}
+                            {/* Payment Amount & Refund Breakdown */}
+                            <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                              <div className="flex flex-col items-end">
+                                {p.refunded_amount && parseFloat(p.refunded_amount) > 0 ? (
+                                  <>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-bold text-[#141b2b] text-sm">
+                                        {formatCurrency(p.net_amount !== undefined ? p.net_amount : p.amount, p.currency)}
+                                      </span>
+                                      <span className="text-[10px] text-[#6d7a77] font-medium">net</span>
+                                    </div>
+                                    <div className="text-[10px] text-[#6d7a77] line-through">
+                                      Orig: {formatCurrency(p.amount, p.currency)}
+                                    </div>
+                                    <div className="text-[10px] text-[#7e22ce] font-semibold">
+                                      Refunded: -{formatCurrency(p.refunded_amount, p.currency)}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="font-bold text-[#141b2b] text-sm">
+                                      {formatCurrency(p.amount, p.currency)}
+                                    </span>
+                                    {p.pending_refund_amount && parseFloat(p.pending_refund_amount) > 0 && (
+                                      <span className="text-[10px] text-[#854d0e] font-medium">
+                                        Pending ref: {formatCurrency(p.pending_refund_amount, p.currency)}
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </div>
                             </td>
 
-                            {/* Payment Status */}
-                            <td className="px-4 py-3.5 text-center">
-                              <span
-                                className={`inline-block px-2 py-0.5 text-[11px] font-bold rounded-full ${statusClass}`}
-                              >
-                                {statusKey}
-                              </span>
+                            {/* Payment Status & Refund Badge */}
+                            <td className="px-4 py-3.5 text-center whitespace-nowrap">
+                              <div className="flex flex-col items-center gap-1">
+                                <span
+                                  className={`inline-block px-2 py-0.5 text-[11px] font-bold rounded-full ${statusClass}`}
+                                >
+                                  {statusKey}
+                                </span>
+                                {p.refund_status && p.refund_status !== "NONE" && (
+                                  <span
+                                    className={`inline-block px-1.5 py-0.5 rounded-md text-[9px] font-bold tracking-tight uppercase ${
+                                      refundBadgeStyles[p.refund_status] || "bg-[#f3e8ff] text-[#7e22ce] border border-[#e9d5ff]"
+                                    }`}
+                                  >
+                                    {p.refund_status === "PARTIAL"
+                                      ? "Partial Refund"
+                                      : p.refund_status === "FULL"
+                                      ? "Full Refund"
+                                      : p.refund_status === "PENDING"
+                                      ? "Refund Pending"
+                                      : p.refund_status === "FAILED"
+                                      ? "Refund Failed"
+                                      : p.refund_status}
+                                  </span>
+                                )}
+                              </div>
                             </td>
 
                             {/* Allocation Status */}

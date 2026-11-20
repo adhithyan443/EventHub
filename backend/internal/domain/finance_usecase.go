@@ -17,6 +17,7 @@ var (
 	ErrFinanceAccountInactive         = errors.New("finance account is inactive")
 	ErrInvalidRefundAmountInput       = errors.New("refund amount must not be negative")
 	ErrInvalidPlatformFeeRefundAmount = errors.New("platform fee refund amount is invalid")
+	ErrInvalidTaxRefundAmount         = errors.New("tax refund amount is invalid")
 )
 
 // RecordPaymentCaptureInput represents the validated financial parameters required to record
@@ -51,6 +52,7 @@ type RecordRefundInput struct {
 	IsEventCancellation bool
 	IsEscrowRefund      bool
 	PlatformFeeRefund   decimal.Decimal
+	TaxRefund           decimal.Decimal
 	Currency            string
 	ProcessedAt         time.Time
 }

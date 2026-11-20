@@ -2268,6 +2268,7 @@ func (u *PaymentUsecase) recordRefundJournal(
 	var eventID uuid.UUID
 	var organizerID uuid.UUID
 	var platformFeeRefund decimal.Decimal
+	var taxRefund decimal.Decimal
 	isEventCancellation := false
 
 	if isEscrowRefund {
@@ -2289,28 +2290,54 @@ func (u *PaymentUsecase) recordRefundJournal(
 
 		if targetRefund.Reason == "EVENT_CANCELLATION" {
 			isEventCancellation = true
-			if booking.PlatformFee.IsPositive() {
-				var priorPlatformFeeRefunded decimal.Decimal
-				if tx.RefundRepository() != nil {
-					if allRefunds, rErr := tx.RefundRepository().FindByBookingID(ctx, booking.ID); rErr == nil {
-						for _, r := range allRefunds {
-							if r.ID != targetRefund.ID && r.Reason == "EVENT_CANCELLATION" && r.Status == domain.RefundStatusSuccess {
-								if r.Amount.GreaterThan(booking.PlatformFee) {
-									priorPlatformFeeRefunded = priorPlatformFeeRefunded.Add(booking.PlatformFee)
-								} else {
-									priorPlatformFeeRefunded = priorPlatformFeeRefunded.Add(r.Amount)
-								}
-							}
+		}
+
+		var priorPlatformFeeRefunded decimal.Decimal
+		var priorTaxRefunded decimal.Decimal
+		if tx.RefundRepository() != nil {
+			if allRefunds, rErr := tx.RefundRepository().FindByBookingID(ctx, booking.ID); rErr == nil {
+				for _, r := range allRefunds {
+					if r.ID != targetRefund.ID && r.Status == domain.RefundStatusSuccess {
+						if booking.Total.IsPositive() {
+							priorFee := r.Amount.Mul(booking.PlatformFee).Div(booking.Total).RoundBank(2)
+							priorTax := r.Amount.Mul(booking.Tax).Div(booking.Total).RoundBank(2)
+							priorPlatformFeeRefunded = priorPlatformFeeRefunded.Add(priorFee)
+							priorTaxRefunded = priorTaxRefunded.Add(priorTax)
 						}
 					}
 				}
-				remainingPlatformFee := booking.PlatformFee.Sub(priorPlatformFeeRefunded)
-				if remainingPlatformFee.IsPositive() {
-					if targetRefund.Amount.LessThan(remainingPlatformFee) {
-						platformFeeRefund = targetRefund.Amount
+			}
+		}
+
+		if booking.Total.IsPositive() {
+			if booking.PlatformFee.IsPositive() {
+				remainingFee := booking.PlatformFee.Sub(priorPlatformFeeRefunded)
+				if remainingFee.IsPositive() {
+					computedFee := targetRefund.Amount.Mul(booking.PlatformFee).Div(booking.Total).RoundBank(2)
+					if computedFee.GreaterThan(remainingFee) {
+						platformFeeRefund = remainingFee
 					} else {
-						platformFeeRefund = remainingPlatformFee
+						platformFeeRefund = computedFee
 					}
+				}
+			}
+			if booking.Tax.IsPositive() {
+				remainingTax := booking.Tax.Sub(priorTaxRefunded)
+				if remainingTax.IsPositive() {
+					computedTax := targetRefund.Amount.Mul(booking.Tax).Div(booking.Total).RoundBank(2)
+					if computedTax.GreaterThan(remainingTax) {
+						taxRefund = remainingTax
+					} else {
+						taxRefund = computedTax
+					}
+				}
+			}
+			if platformFeeRefund.Add(taxRefund).GreaterThan(targetRefund.Amount) {
+				if platformFeeRefund.GreaterThan(targetRefund.Amount) {
+					platformFeeRefund = targetRefund.Amount
+					taxRefund = decimal.Zero
+				} else {
+					taxRefund = targetRefund.Amount.Sub(platformFeeRefund)
 				}
 			}
 		}
@@ -2326,6 +2353,7 @@ func (u *PaymentUsecase) recordRefundJournal(
 		IsEventCancellation: isEventCancellation,
 		IsEscrowRefund:      isEscrowRefund,
 		PlatformFeeRefund:   platformFeeRefund,
+		TaxRefund:           taxRefund,
 		Currency:            domainfinance.CurrencyINR,
 		ProcessedAt:         processedAt,
 	}

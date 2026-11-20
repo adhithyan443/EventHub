@@ -9,6 +9,8 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
+	"github.com/adhithyan443/EventHub/backend/internal/service/payout"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/settlement"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
@@ -193,6 +195,77 @@ func seedAccountedJournal(
 			INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, event_id, created_at)
 			VALUES (?, ?, ?, 'CREDIT', ?, 'INR', ?, NOW())
 		`, uuid.New(), journalID, acc4010, fee, eventID).Error; err != nil {
+			return err
+		}
+
+		// Post the balanced journal
+		return tx.Exec(`UPDATE finance_journals SET status = 'POSTED', posted_at = NOW() WHERE id = ?`, journalID).Error
+	})
+	require.NoError(t, err)
+
+	return journalID
+}
+
+func seedAccountedRefundJournal(
+	t *testing.T,
+	db *gorm.DB,
+	refundID uuid.UUID,
+	totalRefund decimal.Decimal,
+	orgRefund decimal.Decimal,
+	feeRefund decimal.Decimal,
+	orgID uuid.UUID,
+	eventID uuid.UUID,
+	acc1010, acc2010, acc4010 uuid.UUID,
+	isEventCancellation bool,
+) uuid.UUID {
+	t.Helper()
+	journalID := uuid.New()
+	fingerprint := fmt.Sprintf("%064x", 456)
+	eventType := "CUSTOMER_REFUND"
+	if isEventCancellation {
+		eventType = "EVENT_CANCELLATION_REFUND"
+	}
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`
+			INSERT INTO finance_journals (
+				id, transaction_type, financial_event_type, source_type, source_id,
+				idempotency_key, idempotency_fingerprint, currency, description,
+				status, created_at, is_reversed
+			) VALUES (
+				?, 'REFUND', ?, 'REFUND', ?,
+				?, ?, 'INR', 'Refund journal',
+				'DRAFT', NOW(), FALSE
+			)
+		`, journalID, eventType, refundID.String(), "key_"+refundID.String(), fingerprint).Error; err != nil {
+			return err
+		}
+
+		// Leg 1: Debit Organizer Payable (2010)
+		if orgRefund.IsPositive() {
+			if err := tx.Exec(`
+				INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, organizer_id, event_id, created_at)
+				VALUES (?, ?, ?, 'DEBIT', ?, 'INR', ?, ?, NOW())
+			`, uuid.New(), journalID, acc2010, orgRefund, orgID, eventID).Error; err != nil {
+				return err
+			}
+		}
+
+		// Leg 2: Debit Platform Fee Revenue (4010)
+		if feeRefund.IsPositive() {
+			if err := tx.Exec(`
+				INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, event_id, created_at)
+				VALUES (?, ?, ?, 'DEBIT', ?, 'INR', ?, NOW())
+			`, uuid.New(), journalID, acc4010, feeRefund, eventID).Error; err != nil {
+				return err
+			}
+		}
+
+		// Leg 3: Credit Razorpay Clearing (1010)
+		if err := tx.Exec(`
+			INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, created_at)
+			VALUES (?, ?, ?, 'CREDIT', ?, 'INR', NOW())
+		`, uuid.New(), journalID, acc1010, totalRefund).Error; err != nil {
 			return err
 		}
 
@@ -801,6 +874,8 @@ func TestPaymentRepository_DuplicateSuccessfulPaymentsProtection_Postgres(t *tes
 	repo := repository.NewPaymentRepository(db, slog.Default())
 	ctx := context.Background()
 
+	acc1010, acc2010, acc4010, _ := setupAdminFinanceAccounts(t, db)
+
 	orgID := uuid.New()
 	userID := uuid.New()
 	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Org User', 'org_dup@example.com')`, userID).Error)
@@ -832,6 +907,7 @@ func TestPaymentRepository_DuplicateSuccessfulPaymentsProtection_Postgres(t *tes
 		INSERT INTO payments (id, booking_id, transaction_id, provider, payment_method, amount, status, paid_at, created_at, updated_at)
 		VALUES (?::uuid, ?, 'tx_dup_1', 'RAZORPAY', 'UPI', 660.00, 'SUCCESS', ?, ?, ?)
 	`, p1, bookingID, now.Add(-5*time.Minute), now.Add(-5*time.Minute), now.Add(-5*time.Minute)).Error)
+	seedAccountedJournal(t, db, p1, decimal.NewFromInt(660), decimal.NewFromInt(600), decimal.NewFromInt(60), orgID, eventID, acc1010, acc2010, acc4010)
 
 	// Payment 2: Duplicate SUCCESS attempt 2 for the exact same booking
 	p2 := uuid.New().String()
@@ -933,19 +1009,21 @@ func TestPaymentRepository_OrganizerEarnings_DeductsSuccessfulRefunds_Postgres(t
 		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
 		VALUES (?, ?, ?::uuid, 300.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', 'rfnd_gw_300', ?, ?, ?)
 	`, refundID, bookingID, paymentID, now, now, now).Error)
+	seedAccountedRefundJournal(t, db, refundID, decimal.NewFromInt(300), decimal.NewFromInt(270), decimal.NewFromInt(30), orgID, eventID, acc1010, acc2010, acc4010, false)
 
 	// Post-refund check:
-	// Earnings should now be 600.00 (900 - 300)
+	// Proportional organizer refund: 300 * 900 / 1000 = 270.00.
+	// Earnings should now be 630.00 (900 - 270)
 	postOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
 	require.NoError(t, err)
-	assert.True(t, decimal.NewFromInt(600).Equal(postOverview.OrganizerEarnings), "Organizer earnings must deduct successful refunds")
-	assert.True(t, decimal.NewFromInt(600).Equal(postOverview.TotalTicketSalesAmount), "Ticket sales must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(630).Equal(postOverview.OrganizerEarnings), "Organizer earnings must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(630).Equal(postOverview.TotalTicketSalesAmount), "Ticket sales must deduct successful refunds")
 
 	// Verify Event-wise Summary
 	eventSummaries, err := repo.GetOrganizerEventPaymentSummaries(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
 	require.NoError(t, err)
 	require.Len(t, eventSummaries.Summaries, 1)
-	assert.True(t, decimal.NewFromInt(600).Equal(eventSummaries.Summaries[0].OrganizerEarnings), "Event summary organizer earnings must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(630).Equal(eventSummaries.Summaries[0].OrganizerEarnings), "Event summary organizer earnings must deduct successful refunds")
 
 	// -------------------------------------------------------------------------
 	// Verification of No Double Deduction:
@@ -969,6 +1047,7 @@ func TestPaymentRepository_OrganizerEarnings_DeductsSuccessfulRefunds_Postgres(t
 		INSERT INTO payments (id, booking_id, transaction_id, provider, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
 		VALUES (?::uuid, ?, 'tx_refund_cancelled', 'RAZORPAY', 'order_ref_canc', 'UPI', 550.00, 'SUCCESS', ?, ?, ?)
 	`, cancelledPaymentID, cancelledBookingID, now, now, now).Error)
+	seedAccountedJournal(t, db, cancelledPaymentID, decimal.NewFromInt(550), decimal.NewFromInt(500), decimal.NewFromInt(50), orgID, eventID, acc1010, acc2010, acc4010)
 
 	// Refund for the cancelled booking
 	cancelledRefundID := uuid.New()
@@ -976,12 +1055,13 @@ func TestPaymentRepository_OrganizerEarnings_DeductsSuccessfulRefunds_Postgres(t
 		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
 		VALUES (?, ?, ?::uuid, 550.00, 'SUCCESS', 'EVENT_CANCELLATION', 'rfnd_gw_550', ?, ?, ?)
 	`, cancelledRefundID, cancelledBookingID, cancelledPaymentID, now, now, now).Error)
+	seedAccountedRefundJournal(t, db, cancelledRefundID, decimal.NewFromInt(550), decimal.NewFromInt(500), decimal.NewFromInt(50), orgID, eventID, acc1010, acc2010, acc4010, true)
 
-	// Query overview again: earnings must remain exactly 600.00 (from the confirmed booking only)!
+	// Query overview again: earnings must remain exactly 630.00 (from the confirmed booking only)!
 	postCancellationOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
 	require.NoError(t, err)
-	assert.True(t, decimal.NewFromInt(600).Equal(postCancellationOverview.OrganizerEarnings), "Cancelled booking refund must not be double deducted from organizer earnings")
-	assert.True(t, decimal.NewFromInt(600).Equal(postCancellationOverview.TotalTicketSalesAmount), "Cancelled booking refund must not reduce confirmed ticket sales")
+	assert.True(t, decimal.NewFromInt(630).Equal(postCancellationOverview.OrganizerEarnings), "Cancelled booking refund must not be double deducted from organizer earnings")
+	assert.True(t, decimal.NewFromInt(630).Equal(postCancellationOverview.TotalTicketSalesAmount), "Cancelled booking refund must not reduce confirmed ticket sales")
 
 	// -------------------------------------------------------------------------
 	// Verification of GREATEST(0, ...):
@@ -1001,15 +1081,567 @@ func TestPaymentRepository_OrganizerEarnings_DeductsSuccessfulRefunds_Postgres(t
 		INSERT INTO payments (id, booking_id, transaction_id, provider, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
 		VALUES (?::uuid, ?, 'tx_refund_excess', 'RAZORPAY', 'order_ref_exc', 'UPI', 170.00, 'SUCCESS', ?, ?, ?)
 	`, zeroPaymentID, zeroBookingID, now, now, now).Error)
+	seedAccountedJournal(t, db, zeroPaymentID, decimal.NewFromInt(170), decimal.NewFromInt(150), decimal.NewFromInt(20), orgID, eventID, acc1010, acc2010, acc4010)
+
 	// Refund of 200 on subtotal-discount (200-50 = 150) -> net would be -50 without GREATEST
 	excessRefundID := uuid.New()
 	require.NoError(t, db.Exec(`
 		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
 		VALUES (?, ?, ?::uuid, 200.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', 'rfnd_gw_excess', ?, ?, ?)
 	`, excessRefundID, zeroBookingID, zeroPaymentID, now, now, now).Error)
+	seedAccountedRefundJournal(t, db, excessRefundID, decimal.NewFromInt(170), decimal.NewFromInt(150), decimal.NewFromInt(20), orgID, eventID, acc1010, acc2010, acc4010, false)
 
 	postExcessOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
 	require.NoError(t, err)
-	// 600 from BK-REFUND-001 + GREATEST(0, 150-200) = 600 + 0 = 600!
-	assert.True(t, decimal.NewFromInt(600).Equal(postExcessOverview.OrganizerEarnings), "Earnings must never become negative due to GREATEST protection")
+	// 630 from BK-REFUND-001 + GREATEST(0, 150-200) = 630 + 0 = 630!
+	assert.True(t, decimal.NewFromInt(630).Equal(postExcessOverview.OrganizerEarnings), "Earnings must never become negative due to GREATEST protection")
+}
+
+func TestFinancialConsistency_AcrossPaymentsAndSettlements_Postgres(t *testing.T) {
+	db := initTestDatabase(t)
+	setupOrganizerPaymentTestTables(t, db)
+	acc1010, acc2010, acc4010, _ := setupAdminFinanceAccounts(t, db)
+
+	upSQL, err := loadMigrationSQL("000019_create_settlements.up.sql")
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(upSQL).Error)
+
+	logger := slog.Default()
+	ctx := context.Background()
+
+	paymentRepo := repository.NewPaymentRepository(db, logger)
+	journalRepo := repository.NewFinanceJournalRepository(db, logger)
+	settlementRepo := repository.NewSettlementRepository(db, logger)
+	txManager := repository.NewTransactionManager(db, logger)
+
+	// Setup Organizer
+	userID := uuid.New()
+	adminID := uuid.New()
+	orgID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Fin Org User', 'finorg@example.com')`, userID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO organizers (id, user_id, status) VALUES (?, ?, 'ACTIVE')`, orgID, userID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO organizer_profiles (id, organizer_id, business_name) VALUES (?, ?, 'Consistent Productions')`, uuid.New(), orgID).Error)
+
+	custID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Fin Customer', 'fincust@example.com')`, custID).Error)
+
+	// Setup Completed Event
+	event1ID := uuid.New()
+	pastDate := time.Now().UTC().AddDate(0, 0, -3)
+	startTime := "10:00:00"
+	endTime := "18:00:00"
+	require.NoError(t, db.Exec(`INSERT INTO events (id, organizer_id, category_id, title) VALUES (?, ?, ?, 'Fin Festival')`, event1ID, orgID, uuid.New()).Error)
+
+	oRepo := &mockOrganizerRepoForIntegration{
+		organizer: &domain.Organizer{
+			ID:     orgID,
+			UserID: userID,
+			Status: "ACTIVE",
+		},
+	}
+	bRepo := &mockBankAccountRepoForIntegration{
+		bankAccount: &domain.OrganizerBankAccount{
+			ID:                 uuid.New(),
+			OrganizerID:        orgID,
+			AccountNumberLast4: "9876",
+			IFSCCode:           "HDFC0000099",
+		},
+	}
+	eRepo := &mockEventRepoForIntegration{
+		events: []*domain.OrganizerEvent{
+			{
+				ID:          event1ID,
+				OrganizerID: orgID,
+				Title:       "Fin Festival",
+				Status:      domain.EventStatusPublished,
+				EventDate:   pastDate,
+				StartTime:   &startTime,
+				EndTime:     &endTime,
+			},
+		},
+	}
+	rRepo := &mockRefundRepoForIntegration{}
+
+	balanceUC, err := settlement.NewOrganizerBalanceUsecase(journalRepo, oRepo, eRepo, bRepo, rRepo, logger)
+	require.NoError(t, err)
+	balanceUC.SetSettlementRepository(settlementRepo)
+
+	payoutProvider := payout.NewMockPayoutProvider()
+	settlementUC, err := settlement.NewSettlementUsecase(txManager, settlementRepo, oRepo, bRepo, balanceUC, payoutProvider, logger)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+
+	// -------------------------------------------------------------------------
+	// 1. Initial Payment Capture & Account 2010 Payable
+	// -------------------------------------------------------------------------
+	booking1ID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-FIN-001', ?, ?, 900.00, 100.00, 0.00, 0.00, 1000.00, 'CONFIRMED', ?)
+	`, booking1ID, custID, event1ID, now).Error)
+	require.NoError(t, db.Exec(`
+		INSERT INTO booking_items (id, booking_id, quantity, unit_price, total_price)
+		VALUES (?, ?, 3, 300.00, 900.00)
+	`, uuid.New(), booking1ID).Error)
+
+	pay1ID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_fin_001', 'RAZORPAY', 'UPI', 1000.00, 'SUCCESS', ?, ?, ?)
+	`, pay1ID, booking1ID, now, now, now).Error)
+	seedAccountedJournal(t, db, pay1ID, decimal.NewFromInt(1000), decimal.NewFromInt(900), decimal.NewFromInt(100), orgID, event1ID, acc1010, acc2010, acc4010)
+
+	overview1, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	subledger1, err := journalRepo.GetOrganizerBalance(ctx, orgID)
+	require.NoError(t, err)
+	proj1, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+
+	// Strict financial equality across Payments, Ledger Subledger, and Balance Projection
+	assert.True(t, overview1.OrganizerEarnings.Equal(decimal.NewFromInt(900)), "Payments overview must derive 900 from Account 2010")
+	assert.True(t, subledger1.NetEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, proj1.NetEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, proj1.AvailableBalance.Equal(decimal.NewFromInt(900)))
+	assert.True(t, overview1.GrossCapturedAmount.Equal(decimal.NewFromInt(1000)))
+	assert.Equal(t, int64(0), overview1.UnallocatedCapturedCount)
+
+	// -------------------------------------------------------------------------
+	// 2. Unallocated Payment Handling: Must Not Silently Inflate Organizer Earnings
+	// -------------------------------------------------------------------------
+	bookingUnallocID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-FIN-UNALLOC', ?, ?, 450.00, 50.00, 0.00, 0.00, 500.00, 'EXPIRED', ?)
+	`, bookingUnallocID, custID, event1ID, now).Error)
+	payUnallocID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_fin_unalloc', 'RAZORPAY', 'CARD', 500.00, 'REFUND_REQUIRED', ?, ?, ?)
+	`, payUnallocID, bookingUnallocID, now, now, now).Error)
+	// Notice: NO journal seeded for payUnallocID -> UNALLOCATED
+
+	overviewUnalloc, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), overviewUnalloc.UnallocatedCapturedCount, "Unallocated captured payment must be detected")
+	assert.True(t, overviewUnalloc.GrossCapturedAmount.Equal(decimal.NewFromInt(1500)), "Gross captured must preserve payment transaction history")
+	assert.True(t, overviewUnalloc.OrganizerEarnings.Equal(decimal.NewFromInt(900)), "Unallocated payment must NOT inflate organizer earnings")
+
+	projUnalloc, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+	assert.True(t, projUnalloc.AvailableBalance.Equal(decimal.NewFromInt(900)), "Unallocated payment must NOT inflate available balance")
+
+	// -------------------------------------------------------------------------
+	// 3. Proportional Customer Cancellation Refund
+	// -------------------------------------------------------------------------
+	// Refund of 300 for 1 ticket (270 ticket refund, 30 fee refund)
+	ref1ID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?::uuid, 300.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', 'gw_ref_1', ?, ?, ?)
+	`, ref1ID, booking1ID, pay1ID, now, now, now).Error)
+	seedAccountedRefundJournal(t, db, ref1ID, decimal.NewFromInt(300), decimal.NewFromInt(270), decimal.NewFromInt(30), orgID, event1ID, acc1010, acc2010, acc4010, false)
+
+	overviewRef1, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	subledgerRef1, err := journalRepo.GetOrganizerBalance(ctx, orgID)
+	require.NoError(t, err)
+	projRef1, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+
+	assert.True(t, overviewRef1.OrganizerEarnings.Equal(decimal.NewFromInt(630)), "Payments overview must reflect 630 after refund")
+	assert.True(t, subledgerRef1.NetEarnings.Equal(decimal.NewFromInt(630)))
+	assert.True(t, projRef1.NetEarnings.Equal(decimal.NewFromInt(630)))
+	assert.True(t, projRef1.AvailableBalance.Equal(decimal.NewFromInt(630)))
+
+	// -------------------------------------------------------------------------
+	// 4. Multiple Partial Refunds
+	// -------------------------------------------------------------------------
+	// Customer cancels second ticket: another 300 refund (270 ticket refund, 30 fee refund)
+	ref2ID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?::uuid, 300.00, 'SUCCESS', 'CUSTOMER_CANCELLATION', 'gw_ref_2', ?, ?, ?)
+	`, ref2ID, booking1ID, pay1ID, now, now, now).Error)
+	seedAccountedRefundJournal(t, db, ref2ID, decimal.NewFromInt(300), decimal.NewFromInt(270), decimal.NewFromInt(30), orgID, event1ID, acc1010, acc2010, acc4010, false)
+
+	overviewRef2, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	projRef2, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+
+	assert.True(t, overviewRef2.OrganizerEarnings.Equal(decimal.NewFromInt(360)), "Payments overview must reflect 360 after second refund")
+	assert.True(t, projRef2.NetEarnings.Equal(decimal.NewFromInt(360)))
+	assert.True(t, projRef2.AvailableBalance.Equal(decimal.NewFromInt(360)))
+
+	// -------------------------------------------------------------------------
+	// 5. Pending Settlement Deduction: Deducted Exactly Once
+	// -------------------------------------------------------------------------
+	sPending, err := settlementUC.RequestSettlement(ctx, userID, decimal.NewFromInt(200), &event1ID)
+	require.NoError(t, err)
+	require.NotNil(t, sPending)
+	assert.Equal(t, domain.SettlementStatusPending, sPending.Status)
+
+	projAfterReq, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+	assert.True(t, projAfterReq.InFlightSettlementHold.Equal(decimal.NewFromInt(200)))
+	// Available must be 360 - 200 = 160 (deducted exactly once!)
+	assert.True(t, projAfterReq.AvailableBalance.Equal(decimal.NewFromInt(160)), "Pending settlement must be deducted exactly once")
+	assert.True(t, projAfterReq.EventBalances[0].AvailableBalance.Equal(decimal.NewFromInt(160)))
+
+	// Overview organizer earnings must remain lifetime net ticket earnings
+	overviewAfterReq, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.True(t, overviewAfterReq.OrganizerEarnings.Equal(decimal.NewFromInt(360)))
+
+	// -------------------------------------------------------------------------
+	// 6. Duplicate Settlement Request Rejection
+	// -------------------------------------------------------------------------
+	// Requesting 250 when only 160 is available must be rejected
+	_, errDup := settlementUC.RequestSettlement(ctx, userID, decimal.NewFromInt(250), &event1ID)
+	assert.ErrorIs(t, errDup, domain.ErrInsufficientAvailableBalance)
+
+	// -------------------------------------------------------------------------
+	// 7. Completed Payout Deduction: Reflected via Ledger Posting Without Double Deduction
+	// -------------------------------------------------------------------------
+	approvedSettlement, err := settlementUC.ApproveSettlement(ctx, adminID, sPending.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SettlementStatusCompleted, approvedSettlement.Status)
+
+	projAfterPayout, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+	assert.True(t, projAfterPayout.InFlightSettlementHold.IsZero(), "Completed settlement hold must be 0")
+	assert.True(t, projAfterPayout.SettledAmount.Equal(decimal.NewFromInt(200)))
+	assert.True(t, projAfterPayout.OrganizerPayable.Equal(decimal.NewFromInt(160)))
+	assert.True(t, projAfterPayout.AvailableBalance.Equal(decimal.NewFromInt(160)), "Available balance must remain 160 after payout posting")
+
+	// -------------------------------------------------------------------------
+	// 8. Event Cancellation Refund
+	// -------------------------------------------------------------------------
+	event2ID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO events (id, organizer_id, category_id, title) VALUES (?, ?, ?, 'Cancelled Festival')`, event2ID, orgID, uuid.New()).Error)
+	eRepo.events = append(eRepo.events, &domain.OrganizerEvent{
+		ID:          event2ID,
+		OrganizerID: orgID,
+		Title:       "Cancelled Festival",
+		Status:      domain.EventStatusCancelled,
+		EventDate:   pastDate,
+	})
+
+	booking2ID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-FIN-002', ?, ?, 540.00, 60.00, 0.00, 0.00, 600.00, 'CONFIRMED', ?)
+	`, booking2ID, custID, event2ID, now).Error)
+	pay2ID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_fin_002', 'RAZORPAY', 'UPI', 600.00, 'SUCCESS', ?, ?, ?)
+	`, pay2ID, booking2ID, now, now, now).Error)
+	seedAccountedJournal(t, db, pay2ID, decimal.NewFromInt(600), decimal.NewFromInt(540), decimal.NewFromInt(60), orgID, event2ID, acc1010, acc2010, acc4010)
+
+	// Event is cancelled: 100% full reversal refund
+	refEventCancelID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO refunds (id, booking_id, payment_id, amount, status, reason, gateway_refund_id, processed_at, created_at, updated_at)
+		VALUES (?, ?, ?::uuid, 600.00, 'SUCCESS', 'EVENT_CANCELLATION', 'gw_ref_event_cancel', ?, ?, ?)
+	`, refEventCancelID, booking2ID, pay2ID, now, now, now).Error)
+	seedAccountedRefundJournal(t, db, refEventCancelID, decimal.NewFromInt(600), decimal.NewFromInt(540), decimal.NewFromInt(60), orgID, event2ID, acc1010, acc2010, acc4010, true)
+
+	overviewAfterEventCancel, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	// Event 2 net earnings is 540 - 540 = 0. Overall organizer earnings remains 360!
+	assert.True(t, overviewAfterEventCancel.OrganizerEarnings.Equal(decimal.NewFromInt(360)))
+
+	// -------------------------------------------------------------------------
+	// 9. Failed Settlement and Retry Flow
+	// -------------------------------------------------------------------------
+	s2Req, err := settlementUC.RequestSettlement(ctx, userID, decimal.NewFromInt(100), &event1ID)
+	require.NoError(t, err)
+
+	// Configure mock payout provider to fail for first payout attempt
+	payoutProvider.SetFailure(s2Req.ID, "Simulated network timeout at gateway")
+	failedSettlement, err := settlementUC.ApproveSettlement(ctx, adminID, s2Req.ID)
+	assert.ErrorIs(t, err, domain.ErrPayoutFailed)
+	assert.Equal(t, domain.SettlementStatusFailed, failedSettlement.Status)
+
+	// Retry payout: configure mock provider to succeed
+	payoutProvider.ClearFailure(s2Req.ID)
+	retriedSettlement, err := settlementUC.RetrySettlement(ctx, adminID, s2Req.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SettlementStatusCompleted, retriedSettlement.Status)
+
+	finalProj, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+	// Available balance is now 160 - 100 = 60!
+	assert.True(t, finalProj.AvailableBalance.Equal(decimal.NewFromInt(60)))
+	assert.True(t, finalProj.OrganizerPayable.Equal(decimal.NewFromInt(60)))
+	assert.True(t, finalProj.SettledAmount.Equal(decimal.NewFromInt(300)))
+}
+
+func TestReversedJournal_Consistency_Postgres(t *testing.T) {
+	db := initTestDatabase(t)
+	setupOrganizerPaymentTestTables(t, db)
+	acc1010, acc2010, acc4010, _ := setupAdminFinanceAccounts(t, db)
+
+	upSQL, err := loadMigrationSQL("000019_create_settlements.up.sql")
+	require.NoError(t, err)
+	require.NoError(t, db.Exec(upSQL).Error)
+
+	logger := slog.Default()
+	ctx := context.Background()
+
+	paymentRepo := repository.NewPaymentRepository(db, logger)
+	journalRepo := repository.NewFinanceJournalRepository(db, logger)
+	settlementRepo := repository.NewSettlementRepository(db, logger)
+	txManager := repository.NewTransactionManager(db, logger)
+
+	// Setup Organizer
+	userID := uuid.New()
+	adminID := uuid.New()
+	orgID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Reversal Org User', 'revorg@example.com')`, userID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO organizers (id, user_id, status) VALUES (?, ?, 'ACTIVE')`, orgID, userID).Error)
+	require.NoError(t, db.Exec(`INSERT INTO organizer_profiles (id, organizer_id, business_name) VALUES (?, ?, 'Reversal Productions')`, uuid.New(), orgID).Error)
+
+	custID := uuid.New()
+	require.NoError(t, db.Exec(`INSERT INTO users (id, full_name, email) VALUES (?, 'Reversal Customer', 'revcust@example.com')`, custID).Error)
+
+	// Setup Event 1 (Completed, retains normal payment)
+	event1ID := uuid.New()
+	// Setup Event 2 (Completed, will have payment that gets reversed)
+	event2ID := uuid.New()
+	pastDate := time.Now().UTC().AddDate(0, 0, -5)
+	startTime := "10:00:00"
+	endTime := "18:00:00"
+
+	require.NoError(t, db.Exec(`INSERT INTO events (id, organizer_id, category_id, title) VALUES (?, ?, ?, 'Event Normal')`, event1ID, orgID, uuid.New()).Error)
+	require.NoError(t, db.Exec(`INSERT INTO events (id, organizer_id, category_id, title) VALUES (?, ?, ?, 'Event To Be Reversed')`, event2ID, orgID, uuid.New()).Error)
+
+	oRepo := &mockOrganizerRepoForIntegration{
+		organizer: &domain.Organizer{
+			ID:     orgID,
+			UserID: userID,
+			Status: "ACTIVE",
+		},
+	}
+	bRepo := &mockBankAccountRepoForIntegration{
+		bankAccount: &domain.OrganizerBankAccount{
+			ID:                 uuid.New(),
+			OrganizerID:        orgID,
+			AccountNumberLast4: "5555",
+			IFSCCode:           "HDFC0000055",
+		},
+	}
+	eRepo := &mockEventRepoForIntegration{
+		events: []*domain.OrganizerEvent{
+			{
+				ID:          event1ID,
+				OrganizerID: orgID,
+				Title:       "Event Normal",
+				Status:      domain.EventStatusPublished,
+				EventDate:   pastDate,
+				StartTime:   &startTime,
+				EndTime:     &endTime,
+			},
+			{
+				ID:          event2ID,
+				OrganizerID: orgID,
+				Title:       "Event To Be Reversed",
+				Status:      domain.EventStatusPublished,
+				EventDate:   pastDate,
+				StartTime:   &startTime,
+				EndTime:     &endTime,
+			},
+		},
+	}
+
+	rRepo := &mockRefundRepoForIntegration{}
+
+	balanceUC, err := settlement.NewOrganizerBalanceUsecase(journalRepo, oRepo, eRepo, bRepo, rRepo, logger)
+	require.NoError(t, err)
+	balanceUC.SetSettlementRepository(settlementRepo)
+
+	payoutProvider := payout.NewMockPayoutProvider()
+	settlementUC, err := settlement.NewSettlementUsecase(txManager, settlementRepo, oRepo, bRepo, balanceUC, payoutProvider, logger)
+	require.NoError(t, err)
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// -------------------------------------------------------------------------
+	// 1. Normal Non-Reversed Payment (Event 1): 1000 gross, 900 organizer, 100 platform fee
+	// -------------------------------------------------------------------------
+	booking1ID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-NR-001', ?, ?, 900.00, 100.00, 0.00, 0.00, 1000.00, 'CONFIRMED', ?)
+	`, booking1ID, custID, event1ID, now).Error)
+	pay1ID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_nr_001', 'RAZORPAY', 'UPI', 1000.00, 'SUCCESS', ?, ?, ?)
+	`, pay1ID, booking1ID, now, now, now).Error)
+	_ = seedAccountedJournal(t, db, pay1ID, decimal.NewFromInt(1000), decimal.NewFromInt(900), decimal.NewFromInt(100), orgID, event1ID, acc1010, acc2010, acc4010)
+
+	// Assert normal non-reversed payment behavior
+	orgBal1, err := journalRepo.GetOrganizerBalance(ctx, orgID)
+	require.NoError(t, err)
+	assert.True(t, orgBal1.NetPayable.Equal(decimal.NewFromInt(900)))
+	assert.True(t, orgBal1.GrossEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, orgBal1.NetEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, orgBal1.TotalCredits.Equal(decimal.NewFromInt(900)))
+	assert.True(t, orgBal1.TotalDebits.IsZero())
+
+	// -------------------------------------------------------------------------
+	// 2. Second Payment (Event 2): 600 gross, 540 organizer, 60 fee
+	// -------------------------------------------------------------------------
+	booking2ID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status, created_at)
+		VALUES (?, 'BK-REV-002', ?, ?, 540.00, 60.00, 0.00, 0.00, 600.00, 'CONFIRMED', ?)
+	`, booking2ID, custID, event2ID, now).Error)
+	pay2ID := uuid.New().String()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?::uuid, ?, 'tx_rev_002', 'RAZORPAY', 'CARD', 600.00, 'SUCCESS', ?, ?, ?)
+	`, pay2ID, booking2ID, now, now, now).Error)
+	j2ID := seedAccountedJournal(t, db, pay2ID, decimal.NewFromInt(600), decimal.NewFromInt(540), decimal.NewFromInt(60), orgID, event2ID, acc1010, acc2010, acc4010)
+
+	// Pre-reversal combined checks
+	orgBalPre, err := journalRepo.GetOrganizerBalance(ctx, orgID)
+	require.NoError(t, err)
+	assert.True(t, orgBalPre.NetPayable.Equal(decimal.NewFromInt(1440)))
+	assert.True(t, orgBalPre.GrossEarnings.Equal(decimal.NewFromInt(1440)))
+	assert.True(t, orgBalPre.NetEarnings.Equal(decimal.NewFromInt(1440)))
+
+	ovPre, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.True(t, ovPre.OrganizerEarnings.Equal(decimal.NewFromInt(1440)))
+	assert.True(t, ovPre.TotalPlatformFees.Equal(decimal.NewFromInt(160)))
+
+	// -------------------------------------------------------------------------
+	// 3. Full Reversal of Journal J2
+	// -------------------------------------------------------------------------
+	origJ2, err := journalRepo.FindByID(ctx, j2ID)
+	require.NoError(t, err)
+	require.NotNil(t, origJ2)
+
+	revJ2, err := origJ2.CreateReversal("key_rev_j2_"+uuid.New().String(), "Compensating full reversal of Payment 2", now.Add(time.Second))
+	require.NoError(t, err)
+
+	postedRevJ2, err := journalRepo.RecordJournal(ctx, revJ2)
+	require.NoError(t, err)
+	require.NotNil(t, postedRevJ2)
+
+	// Verify database state of reversal
+	type testJournalRow struct {
+		ID                  uuid.UUID
+		Status              string
+		IsReversed          bool
+		ReversalReferenceID *uuid.UUID
+		ReversedByJournalID *uuid.UUID
+	}
+	var origJ2DB, revJ2DB testJournalRow
+	require.NoError(t, db.Table("finance_journals").Where("id = ?", j2ID).First(&origJ2DB).Error)
+	require.NoError(t, db.Table("finance_journals").Where("id = ?", postedRevJ2.ID()).First(&revJ2DB).Error)
+	assert.True(t, origJ2DB.IsReversed)
+	assert.Equal(t, postedRevJ2.ID(), *origJ2DB.ReversedByJournalID)
+	assert.False(t, revJ2DB.IsReversed)
+	assert.Equal(t, j2ID, *revJ2DB.ReversalReferenceID)
+	assert.Equal(t, "POSTED", revJ2DB.Status)
+
+	// -------------------------------------------------------------------------
+	// 4. Organizer Balance After Reversal: J2 and revJ2 net to ZERO
+	// -------------------------------------------------------------------------
+	orgBalPost, err := journalRepo.GetOrganizerBalance(ctx, orgID)
+	require.NoError(t, err)
+	// Total credits: 900 (J1) + 540 (J2) = 1440
+	assert.True(t, orgBalPost.TotalCredits.Equal(decimal.NewFromInt(1440)))
+	// Total debits: 540 (revJ2)
+	assert.True(t, orgBalPost.TotalDebits.Equal(decimal.NewFromInt(540)))
+	// Net payable: 1440 - 540 = 900! Event 2 netted to zero; only Event 1 remains.
+	assert.True(t, orgBalPost.NetPayable.Equal(decimal.NewFromInt(900)))
+	// Gross earnings: 900 (J1) + 540 (J2) - 540 (revJ2) = 900!
+	assert.True(t, orgBalPost.GrossEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, orgBalPost.NetEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, orgBalPost.RefundsDeducted.IsZero())
+	assert.True(t, orgBalPost.SettledAmount.IsZero())
+
+	// Payment Overview earnings after reversal:
+	ovPost, err := paymentRepo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	assert.True(t, ovPost.OrganizerEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, ovPost.TotalPlatformFees.Equal(decimal.NewFromInt(100)))
+
+	// -------------------------------------------------------------------------
+	// 5. Event Balance After Reversal: Event 2 nets to 0, Event 1 remains 900
+	// -------------------------------------------------------------------------
+	evt2Bal, err := journalRepo.GetEventBalance(ctx, orgID, event2ID)
+	require.NoError(t, err)
+	assert.True(t, evt2Bal.NetPayable.IsZero(), "Event 2 NetPayable must be 0 after reversal, got %s", evt2Bal.NetPayable)
+	assert.True(t, evt2Bal.GrossEarnings.IsZero(), "Event 2 GrossEarnings must be 0 after reversal, got %s", evt2Bal.GrossEarnings)
+	assert.True(t, evt2Bal.NetEarnings.IsZero(), "Event 2 NetEarnings must be 0 after reversal, got %s", evt2Bal.NetEarnings)
+	assert.True(t, evt2Bal.TotalCredits.Equal(decimal.NewFromInt(540)))
+	assert.True(t, evt2Bal.TotalDebits.Equal(decimal.NewFromInt(540)))
+
+	evt1Bal, err := journalRepo.GetEventBalance(ctx, orgID, event1ID)
+	require.NoError(t, err)
+	assert.True(t, evt1Bal.NetPayable.Equal(decimal.NewFromInt(900)))
+	assert.True(t, evt1Bal.GrossEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, evt1Bal.NetEarnings.Equal(decimal.NewFromInt(900)))
+
+	// Event Payment Summaries reconcile with Overview
+	eventSummariesRes, err := paymentRepo.GetOrganizerEventPaymentSummaries(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
+	require.NoError(t, err)
+	require.Len(t, eventSummariesRes.Summaries, 2)
+
+	var sumEvtEarnings decimal.Decimal
+	var sumEvtFees decimal.Decimal
+	for _, s := range eventSummariesRes.Summaries {
+		if s.EventID == event2ID {
+			assert.True(t, s.OrganizerEarnings.IsZero(), "Reversed event earnings must be 0, got %s", s.OrganizerEarnings)
+			assert.True(t, s.PlatformFees.IsZero(), "Reversed event fees must be 0, got %s", s.PlatformFees)
+		} else if s.EventID == event1ID {
+			assert.True(t, s.OrganizerEarnings.Equal(decimal.NewFromInt(900)))
+			assert.True(t, s.PlatformFees.Equal(decimal.NewFromInt(100)))
+		}
+		sumEvtEarnings = sumEvtEarnings.Add(s.OrganizerEarnings)
+		sumEvtFees = sumEvtFees.Add(s.PlatformFees)
+	}
+	assert.True(t, sumEvtEarnings.Equal(ovPost.OrganizerEarnings))
+	assert.True(t, sumEvtFees.Equal(ovPost.TotalPlatformFees))
+
+	// -------------------------------------------------------------------------
+	// 6. Settlement Availability After Reversal
+	// -------------------------------------------------------------------------
+	proj, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+	assert.True(t, proj.AvailableBalance.Equal(decimal.NewFromInt(900)), "Available balance must equal 900 (Event 1 only), got %s", proj.AvailableBalance)
+	assert.True(t, proj.OrganizerPayable.Equal(decimal.NewFromInt(900)))
+	assert.True(t, proj.GrossEarnings.Equal(decimal.NewFromInt(900)))
+	assert.True(t, proj.NetEarnings.Equal(decimal.NewFromInt(900)))
+
+	// Verify Event 2 cannot be settled (has 0 available balance)
+	_, err = settlementUC.RequestSettlement(ctx, userID, decimal.NewFromInt(10), &event2ID)
+	assert.ErrorIs(t, err, domain.ErrEventNotEligibleForSettlement)
+
+	// Verify settlement exceeding 900 is rejected
+	_, err = settlementUC.RequestSettlement(ctx, userID, decimal.NewFromInt(950), nil)
+	assert.ErrorIs(t, err, domain.ErrInsufficientAvailableBalance)
+
+	// Request valid settlement for Event 1
+	sReq, err := settlementUC.RequestSettlement(ctx, userID, decimal.NewFromInt(900), &event1ID)
+	require.NoError(t, err)
+
+	completedSettlement, err := settlementUC.ApproveSettlement(ctx, adminID, sReq.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SettlementStatusCompleted, completedSettlement.Status)
+
+	// Final check: Available balance is 0, payable is 0, settled is 900
+	finalProj, err := balanceUC.GetOrganizerBalanceProjection(ctx, userID)
+	require.NoError(t, err)
+	assert.True(t, finalProj.AvailableBalance.IsZero())
+	assert.True(t, finalProj.OrganizerPayable.IsZero())
+	assert.True(t, finalProj.SettledAmount.Equal(decimal.NewFromInt(900)))
 }
