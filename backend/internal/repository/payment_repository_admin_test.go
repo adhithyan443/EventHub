@@ -81,6 +81,19 @@ func setupAdminPaymentTestTables(t *testing.T, db *gorm.DB) {
 		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 	);
 
+	CREATE TABLE IF NOT EXISTS booking_items (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		booking_id UUID NOT NULL,
+		seat_id UUID,
+		ticket_type_id UUID,
+		quantity INTEGER NOT NULL,
+		unit_price NUMERIC(10, 2) NOT NULL,
+		total_price NUMERIC(10, 2) NOT NULL,
+		created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+		updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	);
+	CREATE INDEX IF NOT EXISTS idx_booking_items_booking_id ON booking_items(booking_id);
+
 	CREATE TABLE IF NOT EXISTS payments (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		booking_id UUID NOT NULL,
@@ -132,8 +145,15 @@ func setupAdminPaymentTestTables(t *testing.T, db *gorm.DB) {
 
 func setupAdminFinanceAccounts(t *testing.T, db *gorm.DB) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) {
 	t.Helper()
+	acc1010, acc2010, _, acc4010, acc5010 := setupAdminFinanceAccountsWithTax(t, db)
+	return acc1010, acc2010, acc4010, acc5010
+}
+
+func setupAdminFinanceAccountsWithTax(t *testing.T, db *gorm.DB) (uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID) {
+	t.Helper()
 	acc1010 := uuid.New()
 	acc2010 := uuid.New()
+	acc2030 := uuid.New()
 	acc4010 := uuid.New()
 	acc5010 := uuid.New()
 
@@ -142,12 +162,13 @@ func setupAdminFinanceAccounts(t *testing.T, db *gorm.DB) (uuid.UUID, uuid.UUID,
 		VALUES 
 			(?, '1010', 'Razorpay Clearing', 'ASSET', 'DEBIT', 'INR', TRUE, NOW()),
 			(?, '2010', 'Organizer Payable', 'LIABILITY', 'CREDIT', 'INR', TRUE, NOW()),
+			(?, '2030', 'Tax Payable', 'LIABILITY', 'CREDIT', 'INR', TRUE, NOW()),
 			(?, '4010', 'Platform Fee Revenue', 'REVENUE', 'CREDIT', 'INR', TRUE, NOW()),
 			(?, '5010', 'Payment Gateway Expense', 'EXPENSE', 'DEBIT', 'INR', TRUE, NOW())
-	`, acc1010, acc2010, acc4010, acc5010).Error
+	`, acc1010, acc2010, acc2030, acc4010, acc5010).Error
 	require.NoError(t, err)
 
-	return acc1010, acc2010, acc4010, acc5010
+	return acc1010, acc2010, acc2030, acc4010, acc5010
 }
 
 func TestPaymentRepository_FindAdminPayments_Postgres(t *testing.T) {
@@ -401,7 +422,7 @@ func TestPaymentRepository_FindAdminPayments_Postgres(t *testing.T) {
 		VALUES (?, ?, NULL, NULL, 'CARD', 0.00, 'SUCCESS', NULL, ?, ?)
 	`, payIDZeroFree, freeBookingID, tYesterday, tYesterday).Error)
 
-	// Case 6: Captured payment with unsupported tax (REFUND_REQUIRED) -> UNALLOCATED
+	// Case 6: Captured payment with no journal recorded (e.g. reservation expired/refund required) -> UNALLOCATED
 	payIDTaxUnsupported := uuid.New()
 	txIDTax := "pay_tx_tax"
 	orderIDTax := "order_tax"
@@ -567,7 +588,7 @@ func TestPaymentRepository_FindAdminPayments_Postgres(t *testing.T) {
 		assert.True(t, pWrongFee.HasGatewayCapture)
 		assert.Equal(t, domain.AllocationStatusUnallocated, pWrongFee.AllocationStatus)
 
-		// Verify Unsupported tax -> UNALLOCATED
+		// Verify Captured payment with no journal -> UNALLOCATED
 		pTax, exists := payMap[payIDTaxUnsupported.String()]
 		require.True(t, exists)
 		assert.Equal(t, domain.PaymentStatusRefundRequired, pTax.Status)
@@ -1303,4 +1324,332 @@ func TestPaymentRepository_Postgres_TimezoneInvariance(t *testing.T) {
 
 	// Reset timezone
 	_ = pinnedDB.Exec("SET TIME ZONE 'UTC'")
+}
+
+func TestPaymentRepository_AllocationStatus_TaxAndDiscount_Regression(t *testing.T) {
+	db := initTestDatabase(t)
+	setupAdminPaymentTestTables(t, db)
+	repo := repository.NewPaymentRepository(db, slog.Default())
+	ctx := context.Background()
+
+	userID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO users (id, full_name, email) VALUES (?, 'Test Customer', 'customer@example.com')
+	`, userID).Error)
+
+	orgUserID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO users (id, full_name, email) VALUES (?, 'Test Org User', 'orguser@example.com')
+	`, orgUserID).Error)
+
+	orgID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO organizers (id, user_id) VALUES (?, ?)
+	`, orgID, orgUserID).Error)
+
+	orgProfID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO organizer_profiles (id, organizer_id, business_name) VALUES (?, ?, 'Tax Regression Events LLC')
+	`, orgProfID, orgID).Error)
+
+	eventID := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO events (id, organizer_id, category_id, title) VALUES (?, ?, ?, 'Tax & Discount Fest 2026')
+	`, eventID, orgID, uuid.New()).Error)
+
+	now := time.Now().UTC().Truncate(time.Second)
+	acc1010, acc2010, acc2030, acc4010, _ := setupAdminFinanceAccountsWithTax(t, db)
+
+	insertJournal := func(jID uuid.UUID, payID uuid.UUID, key string, isReversed bool, entries []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}) {
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec(`
+				INSERT INTO finance_journals (id, transaction_type, financial_event_type, source_type, source_id, idempotency_key, idempotency_fingerprint, currency, description, status, is_reversed, created_at)
+				VALUES (?, 'PAYMENT', 'TICKET_SALE_CAPTURED', 'PAYMENT', ?, ?, ?, 'INR', 'Capture Journal', 'DRAFT', FALSE, ?)
+			`, jID, payID.String(), key, "fp_"+key, now).Error; err != nil {
+				return err
+			}
+			for _, e := range entries {
+				if err := tx.Exec(`
+					INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, created_at)
+					VALUES (?, ?, ?, ?, ?, 'INR', ?)
+				`, uuid.New(), jID, e.accID, e.eType, e.amount, now).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Exec(`UPDATE finance_journals SET status = 'POSTED', posted_at = ? WHERE id = ?`, now, jID).Error; err != nil {
+				return err
+			}
+			if isReversed {
+				revJID := uuid.New()
+				if err := tx.Exec(`
+					INSERT INTO finance_journals (id, transaction_type, financial_event_type, source_type, source_id, idempotency_key, idempotency_fingerprint, currency, description, status, is_reversed, reversal_reference_id, created_at)
+					VALUES (?, 'REVERSAL', 'JOURNAL_REVERSED', 'PAYMENT', ?, ?, ?, 'INR', 'Reversal Journal', 'DRAFT', FALSE, ?, ?)
+				`, revJID, payID.String(), "rev_"+key, "fp_rev_"+key, jID, now).Error; err != nil {
+					return err
+				}
+				for _, e := range entries {
+					revType := "DEBIT"
+					if e.eType == "DEBIT" {
+						revType = "CREDIT"
+					}
+					if err := tx.Exec(`
+						INSERT INTO finance_ledger_entries (id, journal_id, account_id, entry_type, amount, currency, created_at)
+						VALUES (?, ?, ?, ?, ?, 'INR', ?)
+					`, uuid.New(), revJID, e.accID, revType, e.amount, now).Error; err != nil {
+						return err
+					}
+				}
+				if err := tx.Exec(`UPDATE finance_journals SET status = 'POSTED', posted_at = ? WHERE id = ?`, now, revJID).Error; err != nil {
+					return err
+				}
+				return tx.Exec(`UPDATE finance_journals SET is_reversed = TRUE, reversed_by_journal_id = ?, reversed_at = ? WHERE id = ?`, revJID, now, jID).Error
+			}
+			return nil
+		})
+		require.NoError(t, err)
+	}
+
+	// 1. Valid posted journal with tax -> ACCOUNTED
+	// Booking: Subtotal 1000, Platform Fee 50, Tax 180, Total 1230
+	bkTaxValid := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-01', ?, ?, 1000.00, 50.00, 180.00, 0.00, 1230.00, 'CONFIRMED')
+	`, bkTaxValid, userID, eventID).Error)
+
+	payTaxValid := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_01', 'ord_reg_01', 'CARD', 1230.00, 'SUCCESS', ?, ?, ?)
+	`, payTaxValid, bkTaxValid, now, now, now).Error)
+
+	insertJournal(uuid.New(), payTaxValid, "key_reg_01", false, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 1230.00},
+		{acc2010, "CREDIT", 1000.00},
+		{acc4010, "CREDIT", 50.00},
+		{acc2030, "CREDIT", 180.00},
+	})
+
+	// 2. Missing tax journal leg -> UNALLOCATED
+	// Booking has Tax 180, but journal credits 4010 with 230 and omits 2030
+	bkTaxMissing := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-02', ?, ?, 1000.00, 50.00, 180.00, 0.00, 1230.00, 'CONFIRMED')
+	`, bkTaxMissing, userID, eventID).Error)
+
+	payTaxMissing := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_02', 'ord_reg_02', 'CARD', 1230.00, 'SUCCESS', ?, ?, ?)
+	`, payTaxMissing, bkTaxMissing, now, now, now).Error)
+
+	insertJournal(uuid.New(), payTaxMissing, "key_reg_02", false, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 1230.00},
+		{acc2010, "CREDIT", 1000.00},
+		{acc4010, "CREDIT", 230.00},
+	})
+
+	// 3. Incorrect tax amount -> UNALLOCATED
+	// Booking has Tax 180, but journal credits 2030 with 150 and 4010 with 80
+	bkTaxWrong := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-03', ?, ?, 1000.00, 50.00, 180.00, 0.00, 1230.00, 'CONFIRMED')
+	`, bkTaxWrong, userID, eventID).Error)
+
+	payTaxWrong := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_03', 'ord_reg_03', 'CARD', 1230.00, 'SUCCESS', ?, ?, ?)
+	`, payTaxWrong, bkTaxWrong, now, now, now).Error)
+
+	insertJournal(uuid.New(), payTaxWrong, "key_reg_03", false, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 1230.00},
+		{acc2010, "CREDIT", 1000.00},
+		{acc4010, "CREDIT", 80.00},
+		{acc2030, "CREDIT", 150.00},
+	})
+
+	// 4. Unbalanced journal -> UNALLOCATED
+	bkUnbalanced := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-04', ?, ?, 1000.00, 50.00, 180.00, 0.00, 1230.00, 'CONFIRMED')
+	`, bkUnbalanced, userID, eventID).Error)
+
+	payUnbalanced := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_04', 'ord_reg_04', 'CARD', 1230.00, 'SUCCESS', ?, ?, ?)
+	`, payUnbalanced, bkUnbalanced, now, now, now).Error)
+
+	require.NoError(t, db.Exec(`ALTER TABLE finance_journals DISABLE TRIGGER trg_validate_journal_double_entry`).Error)
+	insertJournal(uuid.New(), payUnbalanced, "key_reg_04", false, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 1230.00},
+		{acc2010, "CREDIT", 1000.00},
+		{acc4010, "CREDIT", 50.00},
+		{acc2030, "CREDIT", 100.00},
+	})
+	require.NoError(t, db.Exec(`ALTER TABLE finance_journals ENABLE TRIGGER trg_validate_journal_double_entry`).Error)
+
+	// 5. Discounted booking with correct net organizer payable -> ACCOUNTED
+	// Subtotal 1000, Discount 200, Fee 50, Tax 180, Total 1030
+	// Net Organizer Revenue = Subtotal - Discount = 800.00
+	bkDiscounted := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-05', ?, ?, 1000.00, 50.00, 180.00, 200.00, 1030.00, 'CONFIRMED')
+	`, bkDiscounted, userID, eventID).Error)
+
+	payDiscounted := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_05', 'ord_reg_05', 'CARD', 1030.00, 'SUCCESS', ?, ?, ?)
+	`, payDiscounted, bkDiscounted, now, now, now).Error)
+
+	insertJournal(uuid.New(), payDiscounted, "key_reg_05", false, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 1030.00},
+		{acc2010, "CREDIT", 800.00},
+		{acc4010, "CREDIT", 50.00},
+		{acc2030, "CREDIT", 180.00},
+	})
+
+	// 6. Reversed journal -> UNALLOCATED
+	bkReversed := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-06', ?, ?, 1000.00, 50.00, 180.00, 0.00, 1230.00, 'CONFIRMED')
+	`, bkReversed, userID, eventID).Error)
+
+	payReversed := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_06', 'ord_reg_06', 'CARD', 1230.00, 'SUCCESS', ?, ?, ?)
+	`, payReversed, bkReversed, now, now, now).Error)
+
+	insertJournal(uuid.New(), payReversed, "key_reg_06", true, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 1230.00},
+		{acc2010, "CREDIT", 1000.00},
+		{acc4010, "CREDIT", 50.00},
+		{acc2030, "CREDIT", 180.00},
+	})
+
+	// 7. Zero-tax booking -> ACCOUNTED
+	// Subtotal 500, Platform Fee 25, Tax 0, Total 525
+	bkZeroTax := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO bookings (id, booking_number, user_id, event_id, subtotal, platform_fee, tax, discount, total, status)
+		VALUES (?, 'BK-REG-07', ?, ?, 500.00, 25.00, 0.00, 0.00, 525.00, 'CONFIRMED')
+	`, bkZeroTax, userID, eventID).Error)
+
+	payZeroTax := uuid.New()
+	require.NoError(t, db.Exec(`
+		INSERT INTO payments (id, booking_id, transaction_id, provider_order_id, payment_method, amount, status, paid_at, created_at, updated_at)
+		VALUES (?, ?, 'pay_reg_07', 'ord_reg_07', 'UPI', 525.00, 'SUCCESS', ?, ?, ?)
+	`, payZeroTax, bkZeroTax, now, now, now).Error)
+
+	insertJournal(uuid.New(), payZeroTax, "key_reg_07", false, []struct {
+		accID  uuid.UUID
+		eType  string
+		amount float64
+	}{
+		{acc1010, "DEBIT", 525.00},
+		{acc2010, "CREDIT", 500.00},
+		{acc4010, "CREDIT", 25.00},
+	})
+
+	// Execute FindAdminPayments
+	res, err := repo.FindAdminPayments(ctx, domain.AdminPaymentFilter{
+		Limit: 50,
+	})
+	require.NoError(t, err)
+
+	payMap := make(map[string]domain.AdminPaymentListItem)
+	for _, item := range res.Payments {
+		payMap[item.ID] = item
+	}
+
+	// 1. Valid posted journal with tax -> ACCOUNTED
+	p1, ok1 := payMap[payTaxValid.String()]
+	require.True(t, ok1)
+	assert.Equal(t, domain.AllocationStatusAccounted, p1.AllocationStatus, "Valid posted journal with tax must be ACCOUNTED")
+
+	// 2. Missing tax journal leg -> UNALLOCATED
+	p2, ok2 := payMap[payTaxMissing.String()]
+	require.True(t, ok2)
+	assert.Equal(t, domain.AllocationStatusUnallocated, p2.AllocationStatus, "Missing tax journal leg must be UNALLOCATED")
+
+	// 3. Incorrect tax amount -> UNALLOCATED
+	p3, ok3 := payMap[payTaxWrong.String()]
+	require.True(t, ok3)
+	assert.Equal(t, domain.AllocationStatusUnallocated, p3.AllocationStatus, "Incorrect tax amount must be UNALLOCATED")
+
+	// 4. Unbalanced journal -> UNALLOCATED
+	p4, ok4 := payMap[payUnbalanced.String()]
+	require.True(t, ok4)
+	assert.Equal(t, domain.AllocationStatusUnallocated, p4.AllocationStatus, "Unbalanced journal must be UNALLOCATED")
+
+	// 5. Discounted booking with correct net organizer payable -> ACCOUNTED
+	p5, ok5 := payMap[payDiscounted.String()]
+	require.True(t, ok5)
+	assert.Equal(t, domain.AllocationStatusAccounted, p5.AllocationStatus, "Discounted booking with correct net organizer payable must be ACCOUNTED")
+
+	// 6. Reversed journal -> UNALLOCATED
+	p6, ok6 := payMap[payReversed.String()]
+	require.True(t, ok6)
+	assert.Equal(t, domain.AllocationStatusUnallocated, p6.AllocationStatus, "Reversed journal must be UNALLOCATED")
+
+	// 7. Zero-tax booking -> ACCOUNTED
+	p7, ok7 := payMap[payZeroTax.String()]
+	require.True(t, ok7)
+	assert.Equal(t, domain.AllocationStatusAccounted, p7.AllocationStatus, "Zero-tax booking with valid journal must be ACCOUNTED")
+
+	// Also verify Organizer repository produces identical results for this organizer
+	orgRepo := repository.NewPaymentRepository(db, slog.Default())
+	orgRes, err := orgRepo.FindOrganizerPayments(ctx, domain.OrganizerPaymentFilter{
+		OrganizerID: orgID,
+		Limit:       50,
+	})
+	require.NoError(t, err)
+	orgPayMap := make(map[string]domain.OrganizerPaymentListItem)
+	for _, item := range orgRes.Payments {
+		orgPayMap[item.ID] = item
+	}
+
+	assert.Equal(t, domain.AllocationStatusAccounted, orgPayMap[payTaxValid.String()].AllocationStatus)
+	assert.Equal(t, domain.AllocationStatusUnallocated, orgPayMap[payTaxMissing.String()].AllocationStatus)
+	assert.Equal(t, domain.AllocationStatusUnallocated, orgPayMap[payTaxWrong.String()].AllocationStatus)
+	assert.Equal(t, domain.AllocationStatusUnallocated, orgPayMap[payUnbalanced.String()].AllocationStatus)
+	assert.Equal(t, domain.AllocationStatusAccounted, orgPayMap[payDiscounted.String()].AllocationStatus)
+	assert.Equal(t, domain.AllocationStatusUnallocated, orgPayMap[payReversed.String()].AllocationStatus)
+	assert.Equal(t, domain.AllocationStatusAccounted, orgPayMap[payZeroTax.String()].AllocationStatus)
 }

@@ -46,12 +46,12 @@ type adminPaymentRow struct {
 //   - ACCOUNTED:
 //     1. Captured payment with an active, non-reversed POSTED financial journal
 //     matching financial_event_type = 'TICKET_SALE_CAPTURED', transaction_type = 'PAYMENT',
-//     source_type = 'PAYMENT', respecting v1 tax/discount restrictions (tax = 0, discount = 0),
-//     and verifying the complete balanced double-entry distribution:
+//     source_type = 'PAYMENT', and verifying the complete balanced double-entry distribution:
 //       - Total debits = Total credits = payment total (p.amount).
 //       - Debit 1010 Razorpay Clearing = payment total (p.amount).
-//       - Credit 2010 Organizer Payable = booking subtotal (b.subtotal).
+//       - Credit 2010 Organizer Payable = net ticket revenue (b.subtotal - COALESCE(b.discount, 0)).
 //       - Credit 4010 Platform Fee Revenue = platform fee (b.platform_fee).
+//       - Credit 2030 Tax Payable = statutory tax (b.tax).
 //     2. OR legitimate free booking payment (amount = 0, status = 'SUCCESS', supported
 //     by confirmed booking evidence: b.total = 0 AND b.status = 'CONFIRMED').
 //   - UNALLOCATED:
@@ -67,8 +67,6 @@ func buildAllocationStatusExpression() string {
 		  AND fj.financial_event_type = '%s'
 		  AND fj.status = '%s'
 		  AND fj.is_reversed = FALSE
-		  AND COALESCE(b.tax, 0) = 0
-		  AND COALESCE(b.discount, 0) = 0
 		  AND EXISTS (
 			  SELECT 1 FROM finance_ledger_entries fle
 			  JOIN finance_accounts fa ON fa.id = fle.account_id
@@ -77,8 +75,9 @@ func buildAllocationStatusExpression() string {
 			      COALESCE(SUM(CASE WHEN fle.entry_type = 'DEBIT' THEN fle.amount ELSE 0 END), 0) = p.amount
 			      AND COALESCE(SUM(CASE WHEN fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) = p.amount
 			      AND COALESCE(SUM(CASE WHEN fa.code = '%s' AND fle.entry_type = 'DEBIT' THEN fle.amount ELSE 0 END), 0) = p.amount
-			      AND COALESCE(SUM(CASE WHEN fa.code = '%s' AND fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) = b.subtotal
-			      AND COALESCE(SUM(CASE WHEN fa.code = '%s' AND fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) = b.platform_fee
+			      AND COALESCE(SUM(CASE WHEN fa.code = '%s' AND fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) = (COALESCE(b.subtotal, 0) - COALESCE(b.discount, 0))
+			      AND COALESCE(SUM(CASE WHEN fa.code = '%s' AND fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) = COALESCE(b.platform_fee, 0)
+			      AND COALESCE(SUM(CASE WHEN fa.code = '%s' AND fle.entry_type = 'CREDIT' THEN fle.amount ELSE 0 END), 0) = COALESCE(b.tax, 0)
 		  )
 	)`,
 		finance.SourceTypePayment,
@@ -88,6 +87,7 @@ func buildAllocationStatusExpression() string {
 		finance.AccountCodeRazorpayClearing,
 		finance.AccountCodeOrganizerPayable,
 		finance.AccountCodePlatformFeeRevenue,
+		finance.AccountCodeTaxPayable,
 	)
 
 	return fmt.Sprintf(`CASE
