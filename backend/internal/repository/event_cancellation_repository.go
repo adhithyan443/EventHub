@@ -94,6 +94,8 @@ func (r *EventCancellationRepository) Update(
 			"cancellation_deadline_hours": cancellationModel.CancellationDeadlineHours,
 			"refund_policy":               cancellationModel.RefundPolicy,
 			"refund_percentage":           cancellationModel.RefundPercentage,
+			"cancelled_at":                cancellationModel.CancelledAt,
+			"cancellation_reason":         cancellationModel.CancellationReason,
 			"updated_at":                  time.Now(),
 		})
 

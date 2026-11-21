@@ -105,6 +105,30 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
       ),
     },
     {
+      label: "Payments",
+      path: ORGANIZER_ROUTES.PAYMENTS,
+      icon: (active) => (
+        <svg width="20" height="18" viewBox="0 0 20 18" fill="none">
+          <path
+            d="M18 2H2C0.89 2 0.01 2.89 0.01 4L0 14C0 15.11 0.89 16 2 16H18C19.1 16 20 15.11 20 14V4C20 2.89 19.1 2 18 2ZM18 14H2V8H18V14ZM18 5H2V4H18V5Z"
+            fill={active ? "#00685F" : "#3D4947"}
+          />
+        </svg>
+      ),
+    },
+    {
+      label: "Settlements",
+      path: ORGANIZER_ROUTES.SETTLEMENTS,
+      icon: (active) => (
+        <svg width="20" height="18" viewBox="0 0 20 18" fill="none">
+          <path
+            d="M10 1L2 5V7H18V5L10 1ZM3 8V14H5V8H3ZM7 8V14H9V8H7ZM11 8V14H13V8H11ZM15 8V14H17V8H15ZM1 15V17H19V15H1Z"
+            fill={active ? "#00685F" : "#3D4947"}
+          />
+        </svg>
+      ),
+    },
+    {
       label: "Reports",
       path: ORGANIZER_ROUTES.REPORTS,
       icon: (active) => (

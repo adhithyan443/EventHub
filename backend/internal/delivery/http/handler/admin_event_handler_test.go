@@ -157,6 +157,9 @@ func (m *mockAdminBookingRepoForHandler) CountByEventID(ctx context.Context, id 
 func (m *mockAdminBookingRepoForHandler) GetBookingStatsByEventID(ctx context.Context, id uuid.UUID) (domain.AdminEventBookingStats, error) {
 	return domain.AdminEventBookingStats{}, nil
 }
+func (m *mockAdminBookingRepoForHandler) FindByEventID(ctx context.Context, id uuid.UUID) ([]domain.Booking, error) {
+	return nil, nil
+}
 
 type mockAdminTicketRepoForHandler struct {
 	domain.TicketRepository
@@ -164,6 +167,24 @@ type mockAdminTicketRepoForHandler struct {
 
 func (m *mockAdminTicketRepoForHandler) CountByEventID(ctx context.Context, id uuid.UUID) (int64, error) {
 	return 0, nil
+}
+func (m *mockAdminTicketRepoForHandler) FindByEventID(ctx context.Context, id uuid.UUID) ([]domain.Ticket, error) {
+	return nil, nil
+}
+
+type mockAdminRefundRepoForHandler struct {
+	domain.RefundRepository
+}
+
+func (m *mockAdminRefundRepoForHandler) FindByEventID(ctx context.Context, id uuid.UUID) ([]domain.Refund, error) {
+	return nil, nil
+}
+
+func (m *mockAdminTxReposForHandler) RefundRepository() domain.RefundRepository {
+	return &mockAdminRefundRepoForHandler{}
+}
+func (m *mockAdminTxReposForHandler) PaymentRepository() domain.PaymentRepository {
+	return nil
 }
 
 type mockAdminResRepoForHandler struct {
@@ -207,7 +228,28 @@ type mockAdminCancellationRepoForHandler struct {
 }
 
 func (m *mockAdminCancellationRepoForHandler) FindByEventID(id uuid.UUID) (*domain.EventCancellation, error) {
-	return m.cancellations[id], nil
+	if m.cancellations == nil {
+		return nil, domain.ErrEventNotFound
+	}
+	c, ok := m.cancellations[id]
+	if !ok {
+		return nil, domain.ErrEventNotFound
+	}
+	return c, nil
+}
+func (m *mockAdminCancellationRepoForHandler) Create(c *domain.EventCancellation) error {
+	if m.cancellations == nil {
+		m.cancellations = make(map[uuid.UUID]*domain.EventCancellation)
+	}
+	m.cancellations[c.EventID] = c
+	return nil
+}
+func (m *mockAdminCancellationRepoForHandler) Update(c *domain.EventCancellation) error {
+	if m.cancellations == nil {
+		m.cancellations = make(map[uuid.UUID]*domain.EventCancellation)
+	}
+	m.cancellations[c.EventID] = c
+	return nil
 }
 func (m *mockAdminCancellationRepoForHandler) DeleteByEventID(id uuid.UUID) error {
 	delete(m.cancellations, id)
@@ -328,6 +370,8 @@ func setupAdminEventTestRouter(
 	admin.PUT("/events/:id", adminEventHandler.UpdateEvent)
 	admin.PATCH("/events/:id/publish", adminEventHandler.PublishEvent)
 	admin.DELETE("/events/:id", adminEventHandler.DeleteEvent)
+	admin.POST("/events/:id/cancel", adminEventHandler.CancelEvent)
+	admin.GET("/events/:id/cancellation", adminEventHandler.GetEventCancellationStatus)
 
 	return router
 }
@@ -511,5 +555,70 @@ func TestAdminEventHandler_UpdateEvent(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+}
+
+func TestAdminEventHandler_CancelEventAndStatus(t *testing.T) {
+	jwtService := token.NewJWTService("01234567890123456789012345678901")
+	adminToken, err := jwtService.GenerateAccessToken(uuid.New(), "ADMIN")
+	require.NoError(t, err)
+
+	customerToken, err := jwtService.GenerateAccessToken(uuid.New(), "CUSTOMER")
+	require.NoError(t, err)
+
+	eventID := uuid.New()
+	eventRepo := &mockAdminEventRepoForHandlerTest{
+		events: map[uuid.UUID]*domain.Event{
+			eventID: {
+				ID:          eventID,
+				OrganizerID: uuid.New(),
+				Title:       "Summit to Cancel",
+				Status:      domain.EventStatusPublished,
+			},
+		},
+	}
+	bookingRepo := &mockAdminBookingRepoForHandler{}
+	resRepo := &mockAdminResRepoForHandler{}
+	router := setupAdminEventTestRouter(eventRepo, bookingRepo, resRepo, jwtService)
+
+	t.Run("non-admin customer is rejected with 403 Forbidden", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/admin/events/"+eventID.String()+"/cancel", nil)
+		req.Header.Set("Authorization", "Bearer "+customerToken)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("authorized admin cancels event successfully", func(t *testing.T) {
+		body := map[string]interface{}{
+			"reason": "Safety hazard discovered",
+		}
+		bodyBytes, _ := json.Marshal(body)
+
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/admin/events/"+eventID.String()+"/cancel", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		assert.Equal(t, "event cancelled successfully", resp["message"])
+	})
+
+	t.Run("authorized admin gets cancellation status successfully", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/events/"+eventID.String()+"/cancellation", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
 	})
 }

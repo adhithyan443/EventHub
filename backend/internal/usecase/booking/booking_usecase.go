@@ -715,35 +715,58 @@ func (u *BookingUsecase) GetBookingPDFData(
 }
 
 type CancelBookingOutput struct {
-	BookingID     uuid.UUID       `json:"booking_id"`
-	BookingNumber string          `json:"booking_number"`
-	Status        string          `json:"status"`
-	RefundAmount  decimal.Decimal `json:"refund_amount"`
-	RefundStatus  string          `json:"refund_status"`
-	RefundID      string          `json:"refund_id,omitempty"`
-	CancelledAt   time.Time       `json:"cancelled_at"`
+	BookingID            uuid.UUID       `json:"booking_id"`
+	BookingNumber        string          `json:"booking_number"`
+	Status               string          `json:"status"`
+	RefundAmount         decimal.Decimal `json:"refund_amount"`
+	RefundStatus         string          `json:"refund_status"`
+	RefundID             string          `json:"refund_id,omitempty"`
+	CancelledTicketIDs   []uuid.UUID     `json:"cancelled_ticket_ids,omitempty"`
+	RemainingTicketCount int             `json:"remaining_ticket_count"`
+	CancelledAt          time.Time       `json:"cancelled_at"`
 }
 
 func (u *BookingUsecase) CancelBooking(
 	ctx context.Context,
 	userID uuid.UUID,
 	bookingID uuid.UUID,
+	ticketIDs ...uuid.UUID,
 ) (*CancelBookingOutput, error) {
 	if userID == uuid.Nil || bookingID == uuid.Nil {
 		return nil, domain.ErrBookingNotFound
 	}
 
+	var uniqueRequestedTicketIDs []uuid.UUID
+	if len(ticketIDs) > 0 {
+		seen := make(map[uuid.UUID]bool, len(ticketIDs))
+		for _, id := range ticketIDs {
+			if id != uuid.Nil && !seen[id] {
+				seen[id] = true
+				uniqueRequestedTicketIDs = append(uniqueRequestedTicketIDs, id)
+			}
+		}
+		if len(uniqueRequestedTicketIDs) == 0 {
+			return nil, domain.ErrTicketNotFound
+		}
+	}
+
 	var (
-		booking           *domain.Booking
-		refundAmount      decimal.Decimal
-		successfulPayment *domain.Payment
-		paymentUUID       uuid.UUID
-		pendingRefund     *domain.Refund
-		isFreeOrNoRefund  bool
-		now               = time.Now()
+		booking              *domain.Booking
+		refundAmount         decimal.Decimal
+		successfulPayment    *domain.Payment
+		paymentUUID          uuid.UUID
+		pendingRefund        *domain.Refund
+		isFreeOrNoRefund     bool
+		isRefundRetry        bool
+		ticketsToCancel      []domain.Ticket
+		cancelledTicketIDs   []uuid.UUID
+		remainingValidCount  int
+		targetBookingStatus  string
+		allExistingRefunds   []domain.Refund
+		now                  = time.Now()
 	)
 
-	// Phase 1: Validate booking state, policy, deadline, tickets, and prepare refund record.
+	// Phase 1: Validate booking state, policy, deadline, tickets, cancel tickets & release inventory in DB.
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
 			var err error
@@ -760,11 +783,119 @@ func (u *BookingUsecase) CancelBooking(
 				return domain.ErrBookingNotFound
 			}
 
+			// Check tickets
+			allTickets, err := tx.TicketRepository().FindByBookingID(ctx, booking.ID)
+			if err != nil {
+				return err
+			}
+
+			// Load existing refunds for this booking
+			allExistingRefunds, err = tx.RefundRepository().FindByBookingID(ctx, booking.ID)
+			if err != nil {
+				return err
+			}
+
+			ticketByID := make(map[uuid.UUID]domain.Ticket, len(allTickets))
+			var totalValidTickets int
+			var allCancelledTickets []domain.Ticket
+			for _, t := range allTickets {
+				ticketByID[t.ID] = t
+				if t.Status == domain.TicketStatusValid {
+					totalValidTickets++
+				} else if t.Status == domain.TicketStatusCancelled || t.Status == domain.TicketStatusRefunded {
+					allCancelledTickets = append(allCancelledTickets, t)
+				}
+			}
+
+			// Check if this is a RETRY or RECOVERY of an earlier cancellation attempt:
+			var retryRefund *domain.Refund
+			for i := range allExistingRefunds {
+				r := &allExistingRefunds[i]
+				if r.Status == domain.RefundStatusFailed || r.Status == domain.RefundStatusPending {
+					retryRefund = r
+					break
+				}
+			}
+
+			if retryRefund != nil {
+				if len(uniqueRequestedTicketIDs) > 0 {
+					allReqCancelled := true
+					for _, reqID := range uniqueRequestedTicketIDs {
+						tk, exists := ticketByID[reqID]
+						if !exists || tk.UserID != userID {
+							allReqCancelled = false
+							break
+						}
+						if tk.Status != domain.TicketStatusCancelled && tk.Status != domain.TicketStatusRefunded {
+							allReqCancelled = false
+							break
+						}
+					}
+					if allReqCancelled {
+						isRefundRetry = true
+					}
+				} else {
+					if (booking.Status == domain.BookingStatusCancelled || totalValidTickets == 0) && len(allCancelledTickets) > 0 {
+						isRefundRetry = true
+					}
+				}
+			}
+
+			if isRefundRetry {
+				// Retry / Recovery path:
+				// Tickets are already cancelled and inventory was already restored in the initial attempt.
+				// Do not re-cancel tickets and do not re-release inventory!
+				pendingRefund = retryRefund
+				if pendingRefund.Status != domain.RefundStatusPending {
+					pendingRefund.Status = domain.RefundStatusPending
+					pendingRefund.UpdatedAt = now
+					if err := tx.RefundRepository().Update(ctx, pendingRefund); err != nil {
+						return err
+					}
+				}
+
+				refundAmount = pendingRefund.Amount
+				targetBookingStatus = booking.Status
+				remainingValidCount = totalValidTickets
+				if len(uniqueRequestedTicketIDs) > 0 {
+					cancelledTicketIDs = uniqueRequestedTicketIDs
+				} else {
+					for _, t := range allCancelledTickets {
+						cancelledTicketIDs = append(cancelledTicketIDs, t.ID)
+					}
+				}
+
+				// Locate successful payment
+				payments, err := tx.PaymentRepository().FindByBookingID(ctx, booking.ID.String())
+				if err != nil {
+					return err
+				}
+				for i := range payments {
+					if payments[i].Status == domain.PaymentStatusSuccess {
+						successfulPayment = &payments[i]
+						break
+					}
+				}
+				if successfulPayment == nil || successfulPayment.TransactionID == nil || *successfulPayment.TransactionID == "" {
+					return domain.ErrPaymentNotFound
+				}
+				return nil
+			}
+
+			// Not a retry/recovery: check for in-progress refund conflict (PENDING within last 2 minutes without gateway id)
+			for i := range allExistingRefunds {
+				r := &allExistingRefunds[i]
+				if r.Status == domain.RefundStatusPending && (r.GatewayRefundID == nil || *r.GatewayRefundID == "") && time.Since(r.CreatedAt) < 2*time.Minute {
+					return domain.ErrRefundInProgress
+				}
+			}
+
+			// Normal cancellation validation
 			if booking.Status == domain.BookingStatusCancelled {
 				return domain.ErrBookingAlreadyCancelled
 			}
 
-			if booking.Status != domain.BookingStatusConfirmed {
+			if booking.Status != domain.BookingStatusConfirmed && booking.Status != domain.BookingStatusPartiallyCancelled {
 				return domain.ErrBookingCannotBeCancelled
 			}
 
@@ -806,32 +937,124 @@ func (u *BookingUsecase) CancelBooking(
 				return domain.ErrCancellationDeadlinePassed
 			}
 
-			// Check tickets - cannot cancel if any ticket is used.
-			tickets, err := tx.TicketRepository().FindByBookingID(ctx, booking.ID)
-			if err != nil {
-				return err
-			}
-			for _, t := range tickets {
-				if t.Status == domain.TicketStatusUsed {
-					return domain.ErrTicketAlreadyUsed
+			if len(uniqueRequestedTicketIDs) > 0 {
+				for _, reqID := range uniqueRequestedTicketIDs {
+					tk, exists := ticketByID[reqID]
+					if !exists || tk.UserID != userID {
+						return domain.ErrTicketNotFound
+					}
+					if tk.Status == domain.TicketStatusUsed {
+						return domain.ErrTicketAlreadyUsed
+					}
+					if tk.Status == domain.TicketStatusCancelled || tk.Status == domain.TicketStatusRefunded {
+						return domain.ErrTicketAlreadyCancelled
+					}
+					if tk.Status != domain.TicketStatusValid {
+						return domain.ErrTicketAlreadyCancelled
+					}
+					ticketsToCancel = append(ticketsToCancel, tk)
+					cancelledTicketIDs = append(cancelledTicketIDs, tk.ID)
+				}
+			} else {
+				for _, t := range allTickets {
+					if t.Status == domain.TicketStatusUsed {
+						return domain.ErrTicketAlreadyUsed
+					}
+					if t.Status == domain.TicketStatusValid {
+						ticketsToCancel = append(ticketsToCancel, t)
+						cancelledTicketIDs = append(cancelledTicketIDs, t.ID)
+					}
+				}
+				if len(allTickets) > 0 && len(ticketsToCancel) == 0 {
+					return domain.ErrBookingAlreadyCancelled
 				}
 			}
 
-			// Calculate eligible refund amount based on snapshotted policy.
-			if booking.Total.IsZero() || !booking.Total.IsPositive() {
+			remainingValidCount = totalValidTickets - len(ticketsToCancel)
+			if remainingValidCount < 0 {
+				remainingValidCount = 0
+			}
+			if remainingValidCount == 0 {
+				targetBookingStatus = domain.BookingStatusCancelled
+			} else {
+				targetBookingStatus = domain.BookingStatusPartiallyCancelled
+			}
+
+			items, _ := tx.BookingRepository().FindItemsByBookingID(ctx, booking.ID)
+			itemByID := make(map[uuid.UUID]domain.BookingItem, len(items))
+			itemByTypeID := make(map[uuid.UUID]domain.BookingItem, len(items))
+			itemBySeatID := make(map[uuid.UUID]domain.BookingItem, len(items))
+			for _, it := range items {
+				itemByID[it.ID] = it
+				if it.TicketTypeID != nil {
+					itemByTypeID[*it.TicketTypeID] = it
+				}
+				if it.SeatID != nil {
+					itemBySeatID[*it.SeatID] = it
+				}
+			}
+
+			// Calculate ticket price sum for the tickets being cancelled.
+			var ticketPriceSum decimal.Decimal = decimal.Zero
+			for i := range ticketsToCancel {
+				t := &ticketsToCancel[i]
+				price := t.Price
+				if price.IsZero() {
+					if it, ok := itemByID[t.BookingItemID]; ok && it.UnitPrice.IsPositive() {
+						price = it.UnitPrice
+					} else if t.TicketTypeID != nil {
+						if it, ok := itemByTypeID[*t.TicketTypeID]; ok && it.UnitPrice.IsPositive() {
+							price = it.UnitPrice
+						}
+					} else if t.SeatID != nil {
+						if it, ok := itemBySeatID[*t.SeatID]; ok && it.UnitPrice.IsPositive() {
+							price = it.UnitPrice
+						}
+					}
+					if price.IsZero() && len(allTickets) > 0 {
+						if booking.Subtotal.IsPositive() {
+							price = booking.Subtotal.Div(decimal.NewFromInt(int64(len(allTickets))))
+						} else if booking.Total.IsPositive() {
+							price = booking.Total.Div(decimal.NewFromInt(int64(len(allTickets))))
+						}
+					}
+					t.Price = price
+				}
+				ticketPriceSum = ticketPriceSum.Add(price)
+			}
+
+			// Calculate the proportion of total paid amount attributable to the cancelled tickets.
+			var cancelledTotalPaid decimal.Decimal = decimal.Zero
+			if len(cancelledTicketIDs) == len(allTickets) {
+				cancelledTotalPaid = booking.Total
+			} else if booking.Subtotal.IsPositive() && ticketPriceSum.IsPositive() {
+				cancelledRatio := ticketPriceSum.Div(booking.Subtotal)
+				if cancelledRatio.GreaterThan(decimal.NewFromInt(1)) {
+					cancelledRatio = decimal.NewFromInt(1)
+				}
+				cancelledTotalPaid = booking.Total.Mul(cancelledRatio)
+			} else if len(allTickets) > 0 && len(ticketsToCancel) > 0 {
+				cancelledRatio := decimal.NewFromInt(int64(len(ticketsToCancel))).Div(decimal.NewFromInt(int64(len(allTickets))))
+				cancelledTotalPaid = booking.Total.Mul(cancelledRatio)
+			} else {
+				cancelledTotalPaid = booking.Total
+			}
+
+			// Calculate eligible refund amount based on snapshotted policy applied to customer's total paid amount.
+			if cancelledTotalPaid.IsZero() || !cancelledTotalPaid.IsPositive() {
 				refundAmount = decimal.Zero
 				isFreeOrNoRefund = true
 			} else {
 				switch strings.ToUpper(strings.TrimSpace(booking.RefundPolicy)) {
 				case domain.RefundPolicyFull:
-					refundAmount = booking.Total
+					refundAmount = cancelledTotalPaid.RoundBank(2)
 				case domain.RefundPolicyPartial:
 					if booking.RefundPercentage <= 0 {
 						refundAmount = decimal.Zero
 						isFreeOrNoRefund = true
 					} else {
 						pct := decimal.NewFromInt(int64(booking.RefundPercentage))
-						refundAmount = booking.Total.Mul(pct).Div(decimal.NewFromInt(100)).RoundBank(2)
+						refundAmount = cancelledTotalPaid.Mul(pct).Div(decimal.NewFromInt(100)).RoundBank(2)
 						if refundAmount.IsZero() || !refundAmount.IsPositive() {
 							refundAmount = decimal.Zero
 							isFreeOrNoRefund = true
@@ -846,75 +1069,98 @@ func (u *BookingUsecase) CancelBooking(
 				}
 			}
 
-			if isFreeOrNoRefund {
-				// Immediate cancellation without gateway call.
-				if err := tx.BookingRepository().UpdateStatus(ctx, booking.ID, domain.BookingStatusCancelled); err != nil {
+			if !isFreeOrNoRefund {
+				payments, err := tx.PaymentRepository().FindByBookingID(ctx, booking.ID.String())
+				if err != nil {
 					return err
 				}
-				if err := tx.TicketRepository().UpdateStatusByBookingID(ctx, booking.ID, domain.TicketStatusCancelled); err != nil {
-					return err
+				for i := range payments {
+					if payments[i].Status == domain.PaymentStatusSuccess {
+						successfulPayment = &payments[i]
+						break
+					}
 				}
-				return u.restoreInventory(ctx, tx, booking.ID)
+				if successfulPayment == nil || successfulPayment.TransactionID == nil || *successfulPayment.TransactionID == "" {
+					u.logger.ErrorContext(ctx, "successful payment record missing for paid booking cancellation",
+						slog.String("booking_id", bookingID.String()),
+					)
+					return domain.ErrPaymentNotFound
+				}
+
+				paymentUUID, err = uuid.Parse(successfulPayment.ID)
+				if err != nil {
+					return fmt.Errorf("invalid payment id format: %w", err)
+				}
+
+				// Check existing refund records for this booking.
+				for i := range allExistingRefunds {
+					r := &allExistingRefunds[i]
+					if (r.Status == domain.RefundStatusSuccess || r.Status == domain.RefundStatusPending) && r.GatewayRefundID != nil && *r.GatewayRefundID != "" {
+						if pendingRefund == nil && (len(uniqueRequestedTicketIDs) == 0 && len(allExistingRefunds) == 1) {
+							pendingRefund = r
+						}
+					}
+				}
+
+				var totalAlreadyRefunded decimal.Decimal = decimal.Zero
+				for i := range allExistingRefunds {
+					r := &allExistingRefunds[i]
+					if pendingRefund != nil && r.ID == pendingRefund.ID {
+						continue
+					}
+					if r.Status == domain.RefundStatusSuccess || (r.Status == domain.RefundStatusPending && r.GatewayRefundID != nil && *r.GatewayRefundID != "") {
+						totalAlreadyRefunded = totalAlreadyRefunded.Add(r.Amount)
+					}
+				}
+
+				maxRefundable := successfulPayment.Amount.Sub(totalAlreadyRefunded)
+				if maxRefundable.IsNegative() {
+					maxRefundable = decimal.Zero
+				}
+				if refundAmount.GreaterThan(maxRefundable) {
+					refundAmount = maxRefundable
+				}
+
+				if refundAmount.IsZero() || !refundAmount.IsPositive() {
+					refundAmount = decimal.Zero
+					isFreeOrNoRefund = true
+				}
 			}
 
-			// Paid booking: locate successful payment.
-			payments, err := tx.PaymentRepository().FindByBookingID(ctx, booking.ID.String())
-			if err != nil {
+			// Invalidate tickets and update booking status IMMEDIATELY in DB:
+			if err := tx.BookingRepository().UpdateStatus(ctx, booking.ID, targetBookingStatus); err != nil {
 				return err
 			}
-			for i := range payments {
-				if payments[i].Status == domain.PaymentStatusSuccess {
-					successfulPayment = &payments[i]
-					break
-				}
-			}
-			if successfulPayment == nil || successfulPayment.TransactionID == nil || *successfulPayment.TransactionID == "" {
-				u.logger.ErrorContext(ctx, "successful payment record missing for paid booking cancellation",
-					slog.String("booking_id", bookingID.String()),
-				)
-				return domain.ErrPaymentNotFound
-			}
-
-			paymentUUID, err = uuid.Parse(successfulPayment.ID)
-			if err != nil {
-				return fmt.Errorf("invalid payment id format: %w", err)
-			}
-
-			// Check existing refund records for this booking.
-			existingRefunds, err := tx.RefundRepository().FindByBookingID(ctx, booking.ID)
-			if err != nil {
-				return err
-			}
-			for i := range existingRefunds {
-				r := &existingRefunds[i]
-				if r.Status == domain.RefundStatusSuccess || (r.Status == domain.RefundStatusPending && r.GatewayRefundID != nil && *r.GatewayRefundID != "") {
-					// Gateway refund is already recorded locally from an earlier accepted attempt,
-					// but booking cancellation was interrupted. Reuse this refund to complete cancellation.
-					pendingRefund = r
-					break
-				}
-				if r.Status == domain.RefundStatusPending && time.Since(r.CreatedAt) < 2*time.Minute {
-					return domain.ErrRefundInProgress
-				}
-			}
-
-			if pendingRefund == nil {
-				// Create PENDING refund record before invoking gateway outside transaction.
-				pendingRefund = &domain.Refund{
-					ID:        uuid.New(),
-					BookingID: booking.ID,
-					PaymentID: paymentUUID,
-					Amount:    refundAmount,
-					Status:    domain.RefundStatusPending,
-					Reason:    "CUSTOMER_CANCELLATION",
-					CreatedAt: now,
-					UpdatedAt: now,
-				}
-
-				if err := tx.RefundRepository().Create(ctx, pendingRefund); err != nil {
+			if len(cancelledTicketIDs) > 0 {
+				if err := tx.TicketRepository().UpdateStatusForTicketIDs(ctx, cancelledTicketIDs, domain.TicketStatusCancelled); err != nil {
 					return err
 				}
 			}
+			// Restore inventory for the cancelled tickets
+			if err := u.restoreInventoryForTickets(ctx, tx, booking.ID, ticketsToCancel); err != nil {
+				return err
+			}
+
+			if !isFreeOrNoRefund {
+				if pendingRefund == nil {
+					// Create PENDING refund record
+					pendingRefund = &domain.Refund{
+						ID:        uuid.New(),
+						BookingID: booking.ID,
+						PaymentID: paymentUUID,
+						Amount:    refundAmount,
+						Status:    domain.RefundStatusPending,
+						Reason:    "CUSTOMER_CANCELLATION",
+						CreatedAt: now,
+						UpdatedAt: now,
+					}
+
+					if err := tx.RefundRepository().Create(ctx, pendingRefund); err != nil {
+						return err
+					}
+				}
+			}
+
 			return nil
 		},
 	)
@@ -926,17 +1172,22 @@ func (u *BookingUsecase) CancelBooking(
 		u.logger.InfoContext(ctx, "booking_cancelled_successfully",
 			slog.String("booking_id", booking.ID.String()),
 			slog.String("booking_number", booking.BookingNumber),
+			slog.String("status", targetBookingStatus),
 			slog.String("refund_policy", booking.RefundPolicy),
 			slog.String("refund_amount", decimal.Zero.String()),
+			slog.Int("cancelled_ticket_count", len(cancelledTicketIDs)),
+			slog.Int("remaining_ticket_count", remainingValidCount),
 		)
 
 		return &CancelBookingOutput{
-			BookingID:     booking.ID,
-			BookingNumber: booking.BookingNumber,
-			Status:        domain.BookingStatusCancelled,
-			RefundAmount:  decimal.Zero,
-			RefundStatus:  "NO_REFUND",
-			CancelledAt:   now,
+			BookingID:            booking.ID,
+			BookingNumber:        booking.BookingNumber,
+			Status:               targetBookingStatus,
+			RefundAmount:         decimal.Zero,
+			RefundStatus:         "NO_REFUND",
+			CancelledTicketIDs:   cancelledTicketIDs,
+			RemainingTicketCount: remainingValidCount,
+			CancelledAt:          now,
 		}, nil
 	}
 
@@ -951,8 +1202,7 @@ func (u *BookingUsecase) CancelBooking(
 
 	var refundResult *domain.RefundResult
 
-	// 1. If pendingRefund already has a GatewayRefundID (e.g. recovered from previous attempt),
-	// use it directly.
+	// 1. If pendingRefund already has a GatewayRefundID, use it directly.
 	if pendingRefund.GatewayRefundID != nil && *pendingRefund.GatewayRefundID != "" {
 		refundResult = &domain.RefundResult{
 			RefundID: *pendingRefund.GatewayRefundID,
@@ -967,7 +1217,7 @@ func (u *BookingUsecase) CancelBooking(
 	if refundResult == nil {
 		gatewayRefunds, fetchErr := u.refundProvider.FetchRefunds(ctx, gatewayPaymentID)
 		if fetchErr == nil && len(gatewayRefunds) > 0 {
-			refundResult = findMatchingGatewayRefund(gatewayRefunds, booking.ID, &pendingRefund.ID, refundAmount)
+			refundResult = findMatchingGatewayRefund(gatewayRefunds, booking.ID, &pendingRefund.ID, refundAmount, allExistingRefunds)
 			if refundResult != nil {
 				u.logger.InfoContext(ctx, "reconciled_existing_gateway_refund_preflight",
 					slog.String("booking_id", booking.ID.String()),
@@ -981,15 +1231,13 @@ func (u *BookingUsecase) CancelBooking(
 	// 3. Issue Gateway Refund if no existing gateway refund was discovered.
 	if refundResult == nil {
 		res, gatewayErr := u.refundProvider.Refund(ctx, gatewayPaymentID, refundAmount, "INR", idempotencyKey)
-		if gatewayErr == nil && res != nil && (res.Status == domain.RefundStatusSuccess || res.Status == domain.RefundStatusPending) {
+		if gatewayErr == nil && res != nil && (res.Status == domain.RefundStatusSuccess || res.Status == domain.RefundStatusPending || res.Status == domain.RefundStatusProcessing) {
 			refundResult = res
 		} else {
 			// 4. Ambiguous Timeout Recovery / Post-failure Reconciliation:
-			// If the gateway returned an error (such as network timeout / 5xx) or non-success status,
-			// query FetchRefunds to discover if the gateway actually accepted and processed the refund.
 			reconciledRefunds, fetchErr := u.refundProvider.FetchRefunds(ctx, gatewayPaymentID)
 			if fetchErr == nil && len(reconciledRefunds) > 0 {
-				matched := findMatchingGatewayRefund(reconciledRefunds, booking.ID, &pendingRefund.ID, refundAmount)
+				matched := findMatchingGatewayRefund(reconciledRefunds, booking.ID, &pendingRefund.ID, refundAmount, allExistingRefunds)
 				if matched != nil {
 					u.logger.InfoContext(ctx, "recovered_refund_from_gateway_reconciliation",
 						slog.String("booking_id", booking.ID.String()),
@@ -1023,39 +1271,19 @@ func (u *BookingUsecase) CancelBooking(
 		}
 	}
 
-	// Phase 2: Gateway confirmed refund. Mark refund, booking CANCELLED, tickets CANCELLED, release inventory.
+	// Gateway confirmed refund: update refund record.
 	completionTime := time.Now()
 	err = u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
-			b, err := tx.BookingRepository().FindByIDForUpdate(ctx, booking.ID)
-			if err != nil {
-				return err
-			}
-			if b.Status == domain.BookingStatusCancelled {
-				return nil
-			}
-
 			pendingRefund.Status = refundResult.Status
 			pendingRefund.GatewayRefundID = &refundResult.RefundID
 			pendingRefund.ProcessedAt = &completionTime
 			pendingRefund.UpdatedAt = completionTime
-			if err := tx.RefundRepository().Update(ctx, pendingRefund); err != nil {
-				return err
-			}
-
-			if err := tx.BookingRepository().UpdateStatus(ctx, b.ID, domain.BookingStatusCancelled); err != nil {
-				return err
-			}
-
-			if err := tx.TicketRepository().UpdateStatusByBookingID(ctx, b.ID, domain.TicketStatusCancelled); err != nil {
-				return err
-			}
-
-			return u.restoreInventory(ctx, tx, b.ID)
+			return tx.RefundRepository().Update(ctx, pendingRefund)
 		},
 	)
 	if err != nil {
-		u.logger.ErrorContext(ctx, "booking_cancellation_finalization_failed",
+		u.logger.ErrorContext(ctx, "booking_cancellation_refund_update_failed",
 			slog.String("booking_id", booking.ID.String()),
 			slog.String("refund_id", pendingRefund.ID.String()),
 			slog.Any("error", err),
@@ -1066,22 +1294,104 @@ func (u *BookingUsecase) CancelBooking(
 	u.logger.InfoContext(ctx, "booking_cancelled_with_refund_success",
 		slog.String("booking_id", booking.ID.String()),
 		slog.String("booking_number", booking.BookingNumber),
+		slog.String("status", targetBookingStatus),
 		slog.String("refund_id", pendingRefund.ID.String()),
 		slog.String("gateway_refund_id", refundResult.RefundID),
 		slog.String("refund_amount", refundAmount.String()),
 		slog.String("refund_status", refundResult.Status),
 		slog.String("refund_policy", booking.RefundPolicy),
+		slog.Int("cancelled_ticket_count", len(cancelledTicketIDs)),
+		slog.Int("remaining_ticket_count", remainingValidCount),
 	)
 
 	return &CancelBookingOutput{
-		BookingID:     booking.ID,
-		BookingNumber: booking.BookingNumber,
-		Status:        domain.BookingStatusCancelled,
-		RefundAmount:  refundAmount,
-		RefundStatus:  refundResult.Status,
-		RefundID:      refundResult.RefundID,
-		CancelledAt:   completionTime,
+		BookingID:            booking.ID,
+		BookingNumber:        booking.BookingNumber,
+		Status:               targetBookingStatus,
+		RefundAmount:         refundAmount,
+		RefundStatus:         refundResult.Status,
+		RefundID:             refundResult.RefundID,
+		CancelledTicketIDs:   cancelledTicketIDs,
+		RemainingTicketCount: remainingValidCount,
+		CancelledAt:          completionTime,
 	}, nil
+}
+
+func (u *BookingUsecase) restoreInventoryForTickets(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	bookingID uuid.UUID,
+	tickets []domain.Ticket,
+) error {
+	if len(tickets) == 0 {
+		return u.restoreInventory(ctx, tx, bookingID)
+	}
+
+	items, _ := tx.BookingRepository().FindItemsByBookingID(ctx, bookingID)
+	itemByID := make(map[uuid.UUID]domain.BookingItem, len(items))
+	for _, it := range items {
+		itemByID[it.ID] = it
+	}
+
+	gaQuantities := make(map[uuid.UUID]int)
+	var seatedIDs []uuid.UUID
+	seenSeats := make(map[uuid.UUID]bool)
+
+	for _, t := range tickets {
+		seatID := t.SeatID
+		typeID := t.TicketTypeID
+
+		if (seatID == nil || *seatID == uuid.Nil) && (typeID == nil || *typeID == uuid.Nil) && t.BookingItemID != uuid.Nil {
+			if it, ok := itemByID[t.BookingItemID]; ok {
+				if it.SeatID != nil && *it.SeatID != uuid.Nil {
+					seatID = it.SeatID
+				} else if it.TicketTypeID != nil && *it.TicketTypeID != uuid.Nil {
+					typeID = it.TicketTypeID
+				}
+			}
+		}
+
+		if seatID != nil && *seatID != uuid.Nil {
+			if !seenSeats[*seatID] {
+				seenSeats[*seatID] = true
+				seatedIDs = append(seatedIDs, *seatID)
+			}
+		} else if typeID != nil && *typeID != uuid.Nil {
+			gaQuantities[*typeID]++
+		}
+	}
+
+	for typeID, qty := range gaQuantities {
+		if err := tx.TicketTypeRepository().ReleaseReservedQuantity(
+			ctx,
+			typeID,
+			qty,
+		); err != nil {
+			u.logger.ErrorContext(ctx, "failed to release ticket quantity on cancellation",
+				slog.String("booking_id", bookingID.String()),
+				slog.String("ticket_type_id", typeID.String()),
+				slog.Int("quantity", qty),
+				slog.Any("error", err),
+			)
+			return err
+		}
+	}
+
+	for _, seatID := range seatedIDs {
+		if err := tx.SeatRepository().ReleaseBookedSeat(
+			ctx,
+			seatID,
+		); err != nil {
+			u.logger.ErrorContext(ctx, "failed to release booked seat on cancellation",
+				slog.String("booking_id", bookingID.String()),
+				slog.String("seat_id", seatID.String()),
+				slog.Any("error", err),
+			)
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (u *BookingUsecase) restoreInventory(
@@ -1134,41 +1444,41 @@ func findMatchingGatewayRefund(
 	bookingID uuid.UUID,
 	pendingRefundID *uuid.UUID,
 	expectedAmount decimal.Decimal,
+	existingRefunds []domain.Refund,
 ) *domain.RefundResult {
+	usedGatewayIDs := make(map[string]bool, len(existingRefunds))
+	for _, er := range existingRefunds {
+		if er.GatewayRefundID != nil && *er.GatewayRefundID != "" {
+			usedGatewayIDs[*er.GatewayRefundID] = true
+		}
+	}
+
 	bookingIDStr := bookingID.String()
 	var pendingRefundIDStr string
 	if pendingRefundID != nil {
 		pendingRefundIDStr = pendingRefundID.String()
 	}
 
-	// First pass: exact receipt match against booking ID or pending refund ID.
 	for i := range refunds {
 		r := &refunds[i]
 		if r.Status != domain.RefundStatusSuccess && r.Status != domain.RefundStatusPending {
 			continue
 		}
-		if r.Receipt != "" && (r.Receipt == bookingIDStr || (pendingRefundIDStr != "" && r.Receipt == pendingRefundIDStr)) {
-			copied := *r
-			return &copied
-		}
-	}
-
-	// Second pass: amount match when exactly one active gateway refund exists.
-	var amountMatch *domain.RefundResult
-	count := 0
-	for i := range refunds {
-		r := &refunds[i]
-		if r.Status != domain.RefundStatusSuccess && r.Status != domain.RefundStatusPending {
+		// Never match a gateway refund that is already associated with an existing EventHub refund record
+		if usedGatewayIDs[r.RefundID] {
 			continue
 		}
-		if r.Amount.Equal(expectedAmount) {
-			copied := *r
-			amountMatch = &copied
-			count++
+		// Exact receipt match against pending refund ID or booking ID with matching amount
+		if r.Receipt != "" {
+			if pendingRefundIDStr != "" && r.Receipt == pendingRefundIDStr && r.Amount.Equal(expectedAmount) {
+				copied := *r
+				return &copied
+			}
+			if r.Receipt == bookingIDStr && r.Amount.Equal(expectedAmount) {
+				copied := *r
+				return &copied
+			}
 		}
-	}
-	if count == 1 {
-		return amountMatch
 	}
 
 	return nil

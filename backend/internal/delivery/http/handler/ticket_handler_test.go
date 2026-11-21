@@ -49,10 +49,16 @@ func (s *stubTicketRepo) FindByBookingID(ctx context.Context, bookingID uuid.UUI
 func (s *stubTicketRepo) FindByUserID(ctx context.Context, userID uuid.UUID) ([]domain.Ticket, error) {
 	return nil, nil
 }
+func (s *stubTicketRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Ticket, error) {
+	return nil, nil
+}
 func (s *stubTicketRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return s.err
 }
 func (s *stubTicketRepo) UpdateStatusByBookingID(ctx context.Context, bookingID uuid.UUID, status string) error {
+	return s.err
+}
+func (s *stubTicketRepo) UpdateStatusForTicketIDs(ctx context.Context, ticketIDs []uuid.UUID, status string) error {
 	return s.err
 }
 func (s *stubTicketRepo) CountByEventID(ctx context.Context, eventID uuid.UUID) (int64, error) {
@@ -494,4 +500,46 @@ func TestDownloadTicketPDF_MissingOptionalVenueOrTicketType(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/pdf", rec.Header().Get("Content-Type"))
 	assert.True(t, bytes.HasPrefix(rec.Body.Bytes(), []byte("%PDF-")))
+}
+
+func TestGetMyTicketQR_CancelledTicket_Rejected(t *testing.T) {
+	f := setupHandlerFixture(t)
+	f.ticketRepo.ticket.Status = domain.TicketStatusCancelled
+
+	f.router.GET("/api/v1/tickets/:id/qr", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.GetMyTicketQR(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tickets/"+f.ticketID.String()+"/qr", nil)
+	rec := httptest.NewRecorder()
+
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp map[string]string
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "ticket is not valid", resp["error"])
+}
+
+func TestDownloadTicketPDF_CancelledTicket_Rejected(t *testing.T) {
+	f := setupHandlerFixture(t)
+	f.ticketRepo.ticket.Status = domain.TicketStatusCancelled
+
+	f.router.GET("/api/v1/tickets/:id/download", func(c *gin.Context) {
+		c.Set("user_id", f.userID)
+		f.handler.DownloadTicketPDF(c)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tickets/"+f.ticketID.String()+"/download", nil)
+	rec := httptest.NewRecorder()
+
+	f.router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	var resp map[string]string
+	err := json.Unmarshal(rec.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	assert.Equal(t, "ticket is not valid", resp["error"])
 }

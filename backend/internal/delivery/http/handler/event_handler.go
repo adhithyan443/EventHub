@@ -1329,6 +1329,132 @@ func (h *EventHandler) DeleteEvent(c *gin.Context) {
 	})
 }
 
+type CancelEventRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *EventHandler) CancelEvent(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		h.logger.Warn(
+			"event_cancel_invalid_id",
+			"user_id", userID,
+			"event_id", c.Param("id"),
+		)
+
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	var req CancelEventRequest
+	if c.Request.Body != nil && c.Request.ContentLength > 0 {
+		_ = c.ShouldBindJSON(&req)
+	}
+
+	summary, err := h.eventUsecase.CancelEvent(
+		c.Request.Context(),
+		userID,
+		eventID,
+		req.Reason,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to cancel this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		default:
+			h.logger.Error(
+				"event_cancel_handler_failed",
+				"user_id", userID,
+				"event_id", eventID,
+				"error", err,
+			)
+
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to cancel event",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "event cancelled successfully",
+		"data":    summary,
+	})
+}
+
+func (h *EventHandler) GetEventCancellationStatus(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	eventID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	summary, err := h.eventUsecase.GetCancellationStatus(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to view cancellation for this event",
+			})
+
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to retrieve event cancellation status",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    summary,
+	})
+}
+
 func detectBannerContentType(file io.ReadSeeker) (string, error) {
 	buffer := make([]byte, 512)
 

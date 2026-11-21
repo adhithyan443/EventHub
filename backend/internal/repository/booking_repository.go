@@ -302,9 +302,11 @@ func (r *bookingRepository) FindByUserIDPaginated(
 	status := strings.ToUpper(strings.TrimSpace(filter.Status))
 	switch status {
 	case "CONFIRMED":
-		query = query.Where("bookings.status IN ?", []string{domain.BookingStatusConfirmed, "COMPLETED"})
+		query = query.Where("bookings.status IN ?", []string{domain.BookingStatusConfirmed, "COMPLETED", domain.BookingStatusPartiallyCancelled})
 	case "CANCELLED":
 		query = query.Where("bookings.status = ?", domain.BookingStatusCancelled)
+	case "PARTIALLY_CANCELLED":
+		query = query.Where("bookings.status = ?", domain.BookingStatusPartiallyCancelled)
 	case "REFUNDED":
 		query = query.Where("bookings.status = ?", "REFUNDED")
 	}
@@ -442,6 +444,31 @@ func (r *bookingRepository) FindItemsByBookingIDs(
 	}
 
 	return result, nil
+}
+
+func (r *bookingRepository) FindByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) ([]domain.Booking, error) {
+	var bookingModels []models.BookingModel
+
+	if err := r.db.WithContext(ctx).
+		Where("event_id = ?", eventID).
+		Order("created_at ASC").
+		Find(&bookingModels).Error; err != nil {
+		r.logger.ErrorContext(ctx, "failed to find bookings by event id",
+			slog.String("event_id", eventID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	bookings := make([]domain.Booking, len(bookingModels))
+	for i := range bookingModels {
+		bookings[i] = *bookingFromModel(&bookingModels[i])
+	}
+
+	return bookings, nil
 }
 
 func (r *bookingRepository) CountConfirmedByEventID(

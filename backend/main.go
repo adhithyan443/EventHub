@@ -19,18 +19,24 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
 	"github.com/adhithyan443/EventHub/backend/internal/service/encryption"
 	"github.com/adhithyan443/EventHub/backend/internal/service/google"
+	"github.com/adhithyan443/EventHub/backend/internal/service/payout"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
 	"github.com/adhithyan443/EventHub/backend/internal/token"
+	admindashboard "github.com/adhithyan443/EventHub/backend/internal/usecase/admin_dashboard"
+	adminledger "github.com/adhithyan443/EventHub/backend/internal/usecase/admin_ledger"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/category"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/checkout"
 	eventUC "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
+	financeusecase "github.com/adhithyan443/EventHub/backend/internal/usecase/finance"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/organizer"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/pricingtax"
 	profileUC "github.com/adhithyan443/EventHub/backend/internal/usecase/profile"
+	refundUC "github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/settlement"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
@@ -81,6 +87,13 @@ func main() {
 	}
 
 	logger.Info("category seeding completed")
+
+	if err := database.SeedFinanceAccounts(db, logger); err != nil {
+		logger.Error("finance accounts seeding failed", "error", err)
+		return
+	}
+
+	logger.Info("finance accounts seeding completed")
 
 	qrService, err := ticket.NewQRService(cfg.QRSecret)
 	if err != nil {
@@ -177,19 +190,49 @@ func main() {
 		logger,
 	)
 
+	refundUsecase := refundUC.NewRefundUsecase(
+		txManager,
+		razorpayProvider,
+		logger,
+	)
+
+	refundReconciliationWorker := worker.NewRefundReconciliationWorker(
+		refundUsecase,
+		logger,
+		2*time.Minute,
+		5*time.Minute,
+	)
+
 	bookingHandler := handler.NewBookingHandler(
 		bookingUsecase,
 		qrService,
 		logger,
 	)
 
+	// Finance dependencies.
+	financeUsecase, err := financeusecase.NewFinanceUsecase(
+		txManager,
+		logger,
+	)
+	if err != nil {
+		logger.Error("finance usecase initialization failed", "error", err)
+		return
+	}
+	refundUsecase.SetFinanceUsecase(financeUsecase)
+
 	// Payment dependencies.
-	paymentUsecase := payment.NewPaymentUsecase(
+	paymentUsecase, err := payment.NewPaymentUsecase(
 		txManager,
 		bookingUsecase,
+		financeUsecase,
 		razorpayProvider,
 		logger,
 	)
+	if err != nil {
+		logger.Error("payment usecase initialization failed", "error", err)
+		return
+	}
+	paymentUsecase.SetRefundProcessor(refundUsecase)
 
 	paymentHandler := handler.NewPaymentHandler(
 		paymentUsecase,
@@ -233,6 +276,7 @@ func main() {
 		s3Service,
 		logger,
 	)
+	eventUsecase.SetRefundProcessor(refundUsecase)
 
 	eventHandler := handler.NewEventHandler(
 		eventUsecase,
@@ -354,7 +398,84 @@ func main() {
 	adminOrganizerHandler := handler.NewAdminOrganizerHandler(adminOrganizerUsecase, logger)
 
 	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)
+	adminEventUsecase.SetRefundProcessor(refundUsecase)
 	adminEventHandler := handler.NewAdminEventHandler(adminEventUsecase, logger)
+
+	// Admin payments dependencies.
+	paymentRepo := repository.NewPaymentRepository(db, logger)
+	adminPaymentUsecase, err := payment.NewAdminPaymentUsecase(paymentRepo, logger)
+	if err != nil {
+		logger.Error("admin payment usecase initialization failed", "error", err)
+		return
+	}
+	adminPaymentHandler := handler.NewAdminPaymentHandler(adminPaymentUsecase, logger)
+
+	// Organizer payments dependencies.
+	organizerPaymentUsecase, err := payment.NewOrganizerPaymentUsecase(
+		paymentRepo,
+		organizerRepo,
+		eventRepository,
+		logger,
+	)
+	if err != nil {
+		logger.Error("organizer payment usecase initialization failed", "error", err)
+		return
+	}
+	organizerPaymentHandler := handler.NewOrganizerPaymentHandler(organizerPaymentUsecase, logger)
+
+	// Organizer settlement & balance projection dependencies.
+	financeJournalRepo := repository.NewFinanceJournalRepository(db, logger)
+	refundRepo := repository.NewRefundRepository(db, logger)
+	settlementRepo := repository.NewSettlementRepository(db, logger)
+	mockPayoutProvider := payout.NewMockPayoutProvider()
+
+	organizerBalanceUsecase, err := settlement.NewOrganizerBalanceUsecase(
+		financeJournalRepo,
+		organizerRepo,
+		eventRepository,
+		organizerBankAccountRepo,
+		refundRepo,
+		logger,
+	)
+	if err != nil {
+		logger.Error("organizer balance usecase initialization failed", "error", err)
+		return
+	}
+	organizerBalanceUsecase.SetSettlementRepository(settlementRepo)
+
+	settlementUsecase, err := settlement.NewSettlementUsecase(
+		txManager,
+		settlementRepo,
+		organizerRepo,
+		organizerBankAccountRepo,
+		organizerBalanceUsecase,
+		mockPayoutProvider,
+		logger,
+	)
+	if err != nil {
+		logger.Error("settlement usecase initialization failed", "error", err)
+		return
+	}
+
+	organizerSettlementHandler := handler.NewOrganizerSettlementHandler(
+		organizerBalanceUsecase,
+		settlementUsecase,
+		logger,
+	)
+	adminSettlementHandler := handler.NewAdminSettlementHandler(
+		settlementUsecase,
+		logger,
+	)
+
+	// Admin Dashboard dependencies.
+	adminDashboardRepo := repository.NewAdminDashboardRepository(db, logger)
+	adminDashboardUsecase := admindashboard.NewAdminDashboardUsecase(adminDashboardRepo, logger)
+	adminDashboardHandler := handler.NewAdminDashboardHandler(adminDashboardUsecase, logger)
+
+	// Admin Ledger dependencies.
+	adminLedgerRepo := repository.NewAdminLedgerRepository(db, logger)
+	adminLedgerUsecase := adminledger.NewAdminLedgerUsecase(adminLedgerRepo, logger)
+	adminLedgerHandler := handler.NewAdminLedgerHandler(adminLedgerUsecase, logger)
 
 	// Router setup.
 	router := setupRouter(
@@ -362,6 +483,8 @@ func main() {
 		authHandler,
 		organizerApplicationHandler,
 		organizerProfileHandler,
+		organizerPaymentHandler,
+		organizerSettlementHandler,
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,
@@ -374,6 +497,10 @@ func main() {
 		adminUserHandler,
 		adminOrganizerHandler,
 		adminEventHandler,
+		adminPaymentHandler,
+		adminSettlementHandler,
+		adminDashboardHandler,
+		adminLedgerHandler,
 		profileHandler,
 		jwtService,
 		userRepo,
@@ -398,12 +525,23 @@ func main() {
 		Handler: router,
 	}
 
+	dispatchTracker := worker.NewDispatchTracker()
+	eventUsecase.SetDispatchTracker(dispatchTracker)
+	adminEventUsecase.SetDispatchTracker(dispatchTracker)
+	paymentUsecase.SetDispatchTracker(dispatchTracker)
+
 	var workerWG sync.WaitGroup
 
 	workerWG.Add(1)
 	go func() {
 		defer workerWG.Done()
 		reservationExpiryWorker.Run(ctx)
+	}()
+
+	workerWG.Add(1)
+	go func() {
+		defer workerWG.Done()
+		refundReconciliationWorker.Run(ctx)
 	}()
 
 	middleware.StartUserStatusCacheCleaner(ctx, 1*time.Minute)
@@ -433,6 +571,22 @@ func main() {
 		if closeErr := server.Close(); closeErr != nil {
 			logger.Error("forced server close failed", "error", closeErr)
 		}
+	}
+
+	// Close tracker to atomically reject any new background dispatches from remaining handlers,
+	// then wait for active background refund tasks within the remaining shutdown timeout.
+	dispatchTracker.Close()
+	refundDispatchDone := make(chan struct{})
+	go func() {
+		dispatchTracker.Wait()
+		close(refundDispatchDone)
+	}()
+
+	select {
+	case <-refundDispatchDone:
+		logger.Info("all background refund tasks completed")
+	case <-shutdownCtx.Done():
+		logger.Warn("background refund tasks timed out during shutdown; remaining refunds will be processed by reconciliation worker")
 	}
 
 	stop()

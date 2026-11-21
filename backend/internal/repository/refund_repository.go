@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -88,6 +89,117 @@ func (r *refundRepository) FindByBookingID(ctx context.Context, bookingID uuid.U
 	if err != nil {
 		r.logger.ErrorContext(ctx, "failed to find refunds by booking ID",
 			slog.String("booking_id", bookingID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	refunds := make([]domain.Refund, len(refundModels))
+	for i := range refundModels {
+		refunds[i] = *toRefundDomain(&refundModels[i])
+	}
+
+	return refunds, nil
+}
+
+func (r *refundRepository) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.Refund, error) {
+	var refundModels []models.RefundModel
+	err := r.db.WithContext(ctx).
+		Table("refunds").
+		Joins("JOIN bookings ON refunds.booking_id = bookings.id").
+		Where("bookings.event_id = ?", eventID).
+		Order("refunds.created_at ASC").
+		Find(&refundModels).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to find refunds by event ID",
+			slog.String("event_id", eventID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	refunds := make([]domain.Refund, len(refundModels))
+	for i := range refundModels {
+		refunds[i] = *toRefundDomain(&refundModels[i])
+	}
+
+	return refunds, nil
+}
+
+func (r *refundRepository) FindByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]domain.Refund, error) {
+	var refundModels []models.RefundModel
+	err := r.db.WithContext(ctx).
+		Where("payment_id = ?", paymentID).
+		Order("created_at ASC").
+		Find(&refundModels).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to find refunds by payment ID",
+			slog.String("payment_id", paymentID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	refunds := make([]domain.Refund, len(refundModels))
+	for i := range refundModels {
+		refunds[i] = *toRefundDomain(&refundModels[i])
+	}
+
+	return refunds, nil
+}
+
+func (r *refundRepository) FindByGatewayRefundID(ctx context.Context, gatewayRefundID string) (*domain.Refund, error) {
+	var model models.RefundModel
+	err := r.db.WithContext(ctx).
+		Where("gateway_refund_id = ?", gatewayRefundID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrRefundNotFound
+		}
+		r.logger.ErrorContext(ctx, "failed to find refund by gateway refund ID",
+			slog.String("gateway_refund_id", gatewayRefundID),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	return toRefundDomain(&model), nil
+}
+
+func (r *refundRepository) FindByGatewayRefundIDForUpdate(ctx context.Context, gatewayRefundID string) (*domain.Refund, error) {
+	var model models.RefundModel
+	err := r.db.WithContext(ctx).
+		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("gateway_refund_id = ?", gatewayRefundID).
+		First(&model).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.ErrRefundNotFound
+		}
+		r.logger.ErrorContext(ctx, "failed to lock refund by gateway refund ID",
+			slog.String("gateway_refund_id", gatewayRefundID),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	return toRefundDomain(&model), nil
+}
+
+func (r *refundRepository) FindStuckRefunds(ctx context.Context, olderThan time.Time, limit int) ([]domain.Refund, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var refundModels []models.RefundModel
+	err := r.db.WithContext(ctx).
+		Where("status IN (?, ?) AND updated_at <= ?", domain.RefundStatusPending, domain.RefundStatusProcessing, olderThan).
+		Order("updated_at ASC").
+		Limit(limit).
+		Find(&refundModels).Error
+	if err != nil {
+		r.logger.ErrorContext(ctx, "failed to find stuck refunds",
+			slog.Time("older_than", olderThan),
 			slog.String("error", err.Error()),
 		)
 		return nil, err

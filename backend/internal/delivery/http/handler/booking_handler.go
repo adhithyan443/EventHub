@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -298,6 +299,10 @@ func sanitizeBookingFilename(eventName string, bookingID uuid.UUID) string {
 	return fmt.Sprintf("%s-%s.pdf", cleanedStr, bookingID.String())
 }
 
+type CancelBookingRequest struct {
+	TicketIDs []uuid.UUID `json:"ticket_ids"`
+}
+
 // CancelBooking handles POST /api/v1/bookings/:id/cancel.
 func (h *BookingHandler) CancelBooking(c *gin.Context) {
 	userID, ok := authenticatedUserID(c)
@@ -316,10 +321,21 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 		return
 	}
 
+	var req CancelBookingRequest
+	if c.Request.Body != nil {
+		if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid request body",
+			})
+			return
+		}
+	}
+
 	result, err := h.bookingUsecase.CancelBooking(
 		c.Request.Context(),
 		userID,
 		bookingID,
+		req.TicketIDs...,
 	)
 	if err != nil {
 		switch {
@@ -327,9 +343,21 @@ func (h *BookingHandler) CancelBooking(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "booking not found",
 			})
+		case errors.Is(err, domain.ErrTicketNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": "ticket not found",
+			})
 		case errors.Is(err, domain.ErrBookingAlreadyCancelled):
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": "booking has already been cancelled",
+			})
+		case errors.Is(err, domain.ErrTicketAlreadyCancelled):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "one or more tickets have already been cancelled",
+			})
+		case errors.Is(err, domain.ErrNoValidTicketsToCancel):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "no valid tickets to cancel",
 			})
 		case errors.Is(err, domain.ErrBookingCannotBeCancelled):
 			c.JSON(http.StatusBadRequest, gin.H{

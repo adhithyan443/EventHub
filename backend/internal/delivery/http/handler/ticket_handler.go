@@ -133,8 +133,8 @@ func (h *TicketHandler) GetMyTicketQR(c *gin.Context) {
 		return
 	}
 
-	// Verify ticket ownership before generating the QR image.
-	result, err := h.ticketUsecase.GetMyTicket(
+	// Verify ticket ownership and validity before generating the QR image.
+	result, err := h.ticketUsecase.GetTicketQRData(
 		c.Request.Context(),
 		userID,
 		ticketID,
@@ -143,6 +143,12 @@ func (h *TicketHandler) GetMyTicketQR(c *gin.Context) {
 		if errors.Is(err, domain.ErrTicketNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "ticket not found",
+			})
+			return
+		}
+		if errors.Is(err, domain.ErrTicketNotValid) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "ticket is not valid",
 			})
 			return
 		}
@@ -194,6 +200,12 @@ func (h *TicketHandler) DownloadTicketPDF(c *gin.Context) {
 		if errors.Is(err, domain.ErrTicketNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": "ticket not found",
+			})
+			return
+		}
+		if errors.Is(err, domain.ErrTicketNotValid) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "ticket is not valid",
 			})
 			return
 		}

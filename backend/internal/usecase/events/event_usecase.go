@@ -13,6 +13,7 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/service/storage"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 )
@@ -37,9 +38,10 @@ const (
 )
 
 type EventUsecase struct {
-	transactionManager domain.TransactionManager
-	storageService     *storage.S3Service
-	logger             *slog.Logger
+	transactionManager  domain.TransactionManager
+	storageService      *storage.S3Service
+	logger              *slog.Logger
+	cancellationUsecase *EventCancellationUsecase
 }
 
 func NewEventUsecase(
@@ -52,10 +54,46 @@ func NewEventUsecase(
 	}
 
 	return &EventUsecase{
-		transactionManager: transactionManager,
-		storageService:     storageService,
-		logger:             logger,
+		transactionManager:  transactionManager,
+		storageService:      storageService,
+		logger:              logger,
+		cancellationUsecase: NewEventCancellationUsecase(transactionManager, nil, logger),
 	}
+}
+
+func (u *EventUsecase) SetRefundProcessor(processor refund.RefundProcessor) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetRefundProcessor(processor)
+	}
+}
+
+func (u *EventUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetDispatchTracker(tracker)
+	}
+}
+
+func (u *EventUsecase) CancelEvent(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+	reason string,
+) (*domain.EventCancellationSummary, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.transactionManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.CancelEventByOrganizer(ctx, userID, eventID, reason)
+}
+
+func (u *EventUsecase) GetCancellationStatus(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) (*domain.EventCancellationSummary, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.transactionManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.GetEventCancellationStatusForOrganizer(ctx, userID, eventID)
 }
 
 type EventContactInput struct {

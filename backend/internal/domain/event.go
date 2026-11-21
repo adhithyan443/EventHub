@@ -5,11 +5,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 var (
-	ErrEventNotFound  = errors.New("event not found")
-	ErrEventNotPublic = errors.New("event is not publicly available")
+	ErrEventNotFound         = errors.New("event not found")
+	ErrEventNotPublic        = errors.New("event is not publicly available")
+	ErrEventAlreadyCancelled = errors.New("event is already cancelled")
+	ErrEventCannotBeCancelled = errors.New("event cannot be cancelled")
 )
 
 const (
@@ -84,6 +87,24 @@ type EventCancellation struct {
 	CancellationReason        *string
 	CreatedAt                 time.Time
 	UpdatedAt                 time.Time
+}
+
+type EventCancellationSummary struct {
+	EventID                   uuid.UUID       `json:"event_id"`
+	EventTitle                string          `json:"event_title"`
+	EventStatus               string          `json:"event_status"`
+	CancelledAt               *time.Time      `json:"cancelled_at,omitempty"`
+	CancellationReason        string          `json:"cancellation_reason,omitempty"`
+	TotalBookingsAffected     int             `json:"total_bookings_affected"`
+	TotalTicketsAffected      int             `json:"total_tickets_affected"`
+	TotalEligibleRefundAmount decimal.Decimal `json:"total_eligible_refund_amount"`
+	TotalRefundedAmount       decimal.Decimal `json:"total_refunded_amount"`
+	PendingRefundAmount       decimal.Decimal `json:"pending_refund_amount"`
+	PendingRefundCount        int             `json:"pending_refund_count"`
+	FailedRefundAmount        decimal.Decimal `json:"failed_refund_amount"`
+	FailedRefundCount         int             `json:"failed_refund_count"`
+	SuccessfulRefundCount     int             `json:"successful_refund_count"`
+	CompletionStatus          string          `json:"completion_status"`
 }
 
 type EventRepository interface {
