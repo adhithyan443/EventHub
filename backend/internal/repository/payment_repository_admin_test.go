@@ -1045,8 +1045,10 @@ func TestPaymentRepository_GetEventPaymentSummaries_Postgres(t *testing.T) {
 		assert.Equal(t, int64(3), e1.TotalPaymentsCount) // Exactly 3 payments, NOT multiplied by refunds!
 		assert.Equal(t, int64(0), e1.SuccessfullyCompletedPaymentsCount)
 		assert.True(t, decimal.NewFromInt(1900).Equal(e1.GrossCapturedAmount))
-		assert.Equal(t, int64(2), e1.RefundRequiredCount)               // P1_1 (400 outstanding) + P1_3 (400 outstanding)
-		assert.Equal(t, int64(2), e1.PaymentsWithSuccessfulRefundsCount) // P1_1 and P1_2 have successful refunds
+		assert.True(t, decimal.NewFromInt(1100).Equal(e1.TotalRefundedAmount)) // 300 + 300 + 500 = 1100
+		assert.True(t, decimal.NewFromInt(800).Equal(e1.NetCapturedAmount))     // 1900 - 1100 = 800
+		assert.Equal(t, int64(2), e1.RefundRequiredCount)                       // P1_1 (400 outstanding) + P1_3 (400 outstanding)
+		assert.Equal(t, int64(2), e1.PaymentsWithSuccessfulRefundsCount)         // P1_1 and P1_2 have successful refunds
 	})
 
 	t.Run("Scenario 2: successful and failed refunds associated with same payment", func(t *testing.T) {
@@ -1113,10 +1115,14 @@ func TestPaymentRepository_GetEventPaymentSummaries_Postgres(t *testing.T) {
 	})
 
 	t.Run("Scenario 7: overall summary consistency across pagination pages", func(t *testing.T) {
-		expectedGross := decimal.NewFromInt(3720) // 1900 + 1100 + 220 + 150 + 350
+		expectedGross := decimal.NewFromInt(3720)       // 1900 + 1100 + 220 + 150 + 350
+		expectedRefunded := decimal.NewFromInt(1100)    // E1: 300 + 300 + 500 = 1100
+		expectedNetCaptured := decimal.NewFromInt(2620) // 3720 - 1100 = 2620
 		expectedOverall := domain.AdminOverallPaymentSummary{
 			TotalEvents:              5,
 			GrossCapturedAmount:      expectedGross,
+			TotalRefundedAmount:      expectedRefunded,
+			NetCapturedAmount:        expectedNetCaptured,
 			Currency:                 finance.CurrencyINR,
 			RefundRequiredCount:      2,
 			UnallocatedCapturedCount: 7, // E1(3) + E2(1) + E3(1) + E4(1) + E5(1)
@@ -1135,6 +1141,8 @@ func TestPaymentRepository_GetEventPaymentSummaries_Postgres(t *testing.T) {
 		assert.Len(t, p1.Summaries, 2)
 		assert.Equal(t, expectedOverall.TotalEvents, p1.OverallSummary.TotalEvents)
 		assert.True(t, expectedOverall.GrossCapturedAmount.Equal(p1.OverallSummary.GrossCapturedAmount))
+		assert.True(t, expectedOverall.TotalRefundedAmount.Equal(p1.OverallSummary.TotalRefundedAmount))
+		assert.True(t, expectedOverall.NetCapturedAmount.Equal(p1.OverallSummary.NetCapturedAmount))
 		assert.Equal(t, expectedOverall.RefundRequiredCount, p1.OverallSummary.RefundRequiredCount)
 		assert.Equal(t, expectedOverall.UnallocatedCapturedCount, p1.OverallSummary.UnallocatedCapturedCount)
 
@@ -1157,6 +1165,8 @@ func TestPaymentRepository_GetEventPaymentSummaries_Postgres(t *testing.T) {
 		// Overall summary must be IDENTICAL across pages!
 		assert.Equal(t, p1.OverallSummary.TotalEvents, p2.OverallSummary.TotalEvents)
 		assert.True(t, p1.OverallSummary.GrossCapturedAmount.Equal(p2.OverallSummary.GrossCapturedAmount))
+		assert.True(t, p1.OverallSummary.TotalRefundedAmount.Equal(p2.OverallSummary.TotalRefundedAmount))
+		assert.True(t, p1.OverallSummary.NetCapturedAmount.Equal(p2.OverallSummary.NetCapturedAmount))
 		assert.Equal(t, p1.OverallSummary.RefundRequiredCount, p2.OverallSummary.RefundRequiredCount)
 		assert.Equal(t, p1.OverallSummary.UnallocatedCapturedCount, p2.OverallSummary.UnallocatedCapturedCount)
 
@@ -1174,6 +1184,8 @@ func TestPaymentRepository_GetEventPaymentSummaries_Postgres(t *testing.T) {
 		// Overall summary must still be IDENTICAL!
 		assert.Equal(t, p1.OverallSummary.TotalEvents, p3.OverallSummary.TotalEvents)
 		assert.True(t, p1.OverallSummary.GrossCapturedAmount.Equal(p3.OverallSummary.GrossCapturedAmount))
+		assert.True(t, p1.OverallSummary.TotalRefundedAmount.Equal(p3.OverallSummary.TotalRefundedAmount))
+		assert.True(t, p1.OverallSummary.NetCapturedAmount.Equal(p3.OverallSummary.NetCapturedAmount))
 		assert.Equal(t, p1.OverallSummary.RefundRequiredCount, p3.OverallSummary.RefundRequiredCount)
 		assert.Equal(t, p1.OverallSummary.UnallocatedCapturedCount, p3.OverallSummary.UnallocatedCapturedCount)
 	})
@@ -1920,5 +1932,58 @@ func TestPaymentRepository_RefundVisibility_Postgres(t *testing.T) {
 		require.Len(t, searchRes.Payments, 1)
 		assert.Equal(t, "BK-PARTIAL", searchRes.Payments[0].BookingNumber)
 		assert.True(t, decimal.NewFromInt(50).Equal(searchRes.Payments[0].RefundedAmount))
+	})
+
+	// --- 10. Admin and Organizer aggregate consistency across refund states ---
+	t.Run("10. Admin and Organizer aggregate consistency across refund states", func(t *testing.T) {
+		// Admin summaries and overall summary
+		adminResult, err := repo.GetEventPaymentSummaries(ctx, domain.AdminPaymentFilter{
+			EventID: &eventID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), adminResult.TotalRecords)
+		require.Len(t, adminResult.Summaries, 1)
+
+		adminOverall := adminResult.OverallSummary
+		assert.True(t, decimal.NewFromInt(2650).Equal(adminOverall.GrossCapturedAmount), "Admin overall GrossCaptured must be 2650")
+		assert.True(t, decimal.NewFromInt(1000).Equal(adminOverall.TotalRefundedAmount), "Admin overall TotalRefunded must be 1000 (SUCCESS refunds only)")
+		assert.True(t, decimal.NewFromInt(1650).Equal(adminOverall.NetCapturedAmount), "Admin overall NetCaptured must be 1650")
+
+		aes := adminResult.Summaries[0]
+		assert.True(t, decimal.NewFromInt(2650).Equal(aes.GrossCapturedAmount), "Admin event GrossCaptured must be 2650")
+		assert.True(t, decimal.NewFromInt(1000).Equal(aes.TotalRefundedAmount), "Admin event TotalRefunded must be 1000")
+		assert.True(t, decimal.NewFromInt(1650).Equal(aes.NetCapturedAmount), "Admin event NetCaptured must be 1650")
+
+		// Organizer overview
+		orgOverview, err := repo.GetOrganizerPaymentOverview(ctx, domain.OrganizerPaymentFilter{
+			OrganizerID: orgID,
+			EventID:     &eventID,
+		})
+		require.NoError(t, err)
+		assert.True(t, decimal.NewFromInt(2650).Equal(orgOverview.GrossCapturedAmount), "Organizer overview GrossCaptured must match Admin (2650)")
+		assert.True(t, decimal.NewFromInt(1000).Equal(orgOverview.TotalRefundedAmount), "Organizer overview TotalRefunded must match Admin (1000)")
+		assert.True(t, decimal.NewFromInt(1650).Equal(orgOverview.NetCapturedAmount), "Organizer overview NetCaptured must match Admin (1650)")
+
+		// Organizer event-wise summary
+		orgResult, err := repo.GetOrganizerEventPaymentSummaries(ctx, domain.OrganizerPaymentFilter{
+			OrganizerID: orgID,
+			EventID:     &eventID,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), orgResult.TotalRecords)
+		require.Len(t, orgResult.Summaries, 1)
+
+		oes := orgResult.Summaries[0]
+		assert.True(t, decimal.NewFromInt(2650).Equal(oes.GrossCapturedAmount), "Organizer event GrossCaptured must match Admin (2650)")
+		assert.True(t, decimal.NewFromInt(1000).Equal(oes.TotalRefundedAmount), "Organizer event TotalRefunded must match Admin (1000)")
+		assert.True(t, decimal.NewFromInt(1650).Equal(oes.NetCapturedAmount), "Organizer event NetCaptured must match Admin (1650)")
+
+		// Direct cross-assertion
+		assert.True(t, adminOverall.GrossCapturedAmount.Equal(orgOverview.GrossCapturedAmount))
+		assert.True(t, adminOverall.TotalRefundedAmount.Equal(orgOverview.TotalRefundedAmount))
+		assert.True(t, adminOverall.NetCapturedAmount.Equal(orgOverview.NetCapturedAmount))
+		assert.True(t, aes.GrossCapturedAmount.Equal(oes.GrossCapturedAmount))
+		assert.True(t, aes.TotalRefundedAmount.Equal(oes.TotalRefundedAmount))
+		assert.True(t, aes.NetCapturedAmount.Equal(oes.NetCapturedAmount))
 	})
 }

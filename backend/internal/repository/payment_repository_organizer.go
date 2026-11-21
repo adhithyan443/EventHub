@@ -46,6 +46,7 @@ type organizerPaymentOverviewRow struct {
 	TotalPaymentsCount                 int64           `gorm:"column:total_payments_count"`
 	SuccessfullyCompletedPaymentsCount int64           `gorm:"column:successfully_completed_payments_count"`
 	GrossCapturedAmount                decimal.Decimal `gorm:"column:gross_captured_amount"`
+	TotalRefundedAmount                decimal.Decimal `gorm:"column:total_refunded_amount"`
 	TotalTicketsSold                   int64           `gorm:"column:total_tickets_sold"`
 	TotalTicketSalesAmount             decimal.Decimal `gorm:"column:total_ticket_sales_amount"`
 	TotalPlatformFees                  decimal.Decimal `gorm:"column:total_platform_fees"`
@@ -59,6 +60,7 @@ type organizerEventPaymentSummaryRow struct {
 	EventTitle                         string          `gorm:"column:event_title"`
 	TicketsSold                        int64           `gorm:"column:tickets_sold"`
 	GrossCapturedAmount                decimal.Decimal `gorm:"column:gross_captured_amount"`
+	TotalRefundedAmount                decimal.Decimal `gorm:"column:total_refunded_amount"`
 	PlatformFees                       decimal.Decimal `gorm:"column:platform_fees"`
 	OrganizerEarnings                  decimal.Decimal `gorm:"column:organizer_earnings"`
 	TotalPaymentsCount                 int64           `gorm:"column:total_payments_count"`
@@ -627,6 +629,12 @@ func (r *paymentRepository) GetOrganizerPaymentOverview(
 		COUNT(p.id) AS total_payments_count,
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
+		COALESCE(SUM((
+			SELECT COALESCE(SUM(r.amount), 0)
+			FROM refunds r
+			WHERE r.payment_id = p.id
+			  AND r.status = 'SUCCESS'
+		)), 0) AS total_refunded_amount,
 		COALESCE(SUM(CASE WHEN %s THEN (SELECT COALESCE(SUM(bi.quantity), 0) FROM booking_items bi WHERE bi.booking_id = b.id) ELSE 0 END), 0) AS total_tickets_sold,
 		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
 			SELECT SUM(r.amount) 
@@ -652,8 +660,15 @@ func (r *paymentRepository) GetOrganizerPaymentOverview(
 		return nil, err
 	}
 
+	netCaptured := row.GrossCapturedAmount.Sub(row.TotalRefundedAmount)
+	if netCaptured.IsNegative() {
+		netCaptured = decimal.Zero
+	}
+
 	return &domain.OrganizerPaymentOverview{
 		GrossCapturedAmount:                row.GrossCapturedAmount,
+		TotalRefundedAmount:                row.TotalRefundedAmount,
+		NetCapturedAmount:                  netCaptured,
 		TotalTicketsSold:                   row.TotalTicketsSold,
 		TotalTicketSalesAmount:             ledgerEarnings,
 		TotalPlatformFees:                  ledgerPlatformFees,
@@ -724,6 +739,12 @@ func (r *paymentRepository) GetOrganizerEventPaymentSummaries(
 		COALESCE(e.title, '') AS event_title,
 		COALESCE(SUM(CASE WHEN %s THEN (SELECT COALESCE(SUM(bi.quantity), 0) FROM booking_items bi WHERE bi.booking_id = b.id) ELSE 0 END), 0) AS tickets_sold,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
+		COALESCE(SUM((
+			SELECT COALESCE(SUM(r.amount), 0)
+			FROM refunds r
+			WHERE r.payment_id = p.id
+			  AND r.status = 'SUCCESS'
+		)), 0) AS total_refunded_amount,
 		COUNT(p.id) AS total_payments_count,
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COUNT(CASE WHEN p.status = 'PENDING' THEN 1 END) AS pending_payments_count,
@@ -767,11 +788,18 @@ func (r *paymentRepository) GetOrganizerEventPaymentSummaries(
 	summaries := make([]domain.OrganizerEventPaymentSummary, 0, len(eventRows))
 	for _, row := range eventRows {
 		eventAmounts := eventLedgerMap[row.EventID]
+		netCaptured := row.GrossCapturedAmount.Sub(row.TotalRefundedAmount)
+		if netCaptured.IsNegative() {
+			netCaptured = decimal.Zero
+		}
 		item := domain.OrganizerEventPaymentSummary{
 			EventID:                            row.EventID,
 			EventTitle:                         row.EventTitle,
 			TicketsSold:                        row.TicketsSold,
 			GrossCapturedAmount:                row.GrossCapturedAmount,
+			TotalRefundedAmount:                row.TotalRefundedAmount,
+			NetCapturedAmount:                  netCaptured,
+			NetTicketSales:                     eventAmounts.OrganizerEarnings,
 			PlatformFees:                       eventAmounts.PlatformFees,
 			OrganizerEarnings:                  eventAmounts.OrganizerEarnings,
 			Currency:                           finance.CurrencyINR,

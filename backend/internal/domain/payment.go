@@ -98,6 +98,8 @@ type AdminEventPaymentSummary struct {
 	TotalPaymentsCount                 int64           `json:"total_payments_count"`
 	SuccessfullyCompletedPaymentsCount int64           `json:"successfully_completed_payments_count"`
 	GrossCapturedAmount                decimal.Decimal `json:"gross_captured_amount"`
+	TotalRefundedAmount                decimal.Decimal `json:"total_refunded_amount"`
+	NetCapturedAmount                  decimal.Decimal `json:"net_captured_amount"`
 	Currency                           string          `json:"currency"`
 	PendingPaymentsCount               int64           `json:"pending_payments_count"`
 	FailedPaymentsCount                int64           `json:"failed_payments_count"`
@@ -109,6 +111,8 @@ type AdminEventPaymentSummary struct {
 type AdminOverallPaymentSummary struct {
 	TotalEvents              int64           `json:"total_events"`
 	GrossCapturedAmount      decimal.Decimal `json:"gross_captured_amount"`
+	TotalRefundedAmount      decimal.Decimal `json:"total_refunded_amount"`
+	NetCapturedAmount        decimal.Decimal `json:"net_captured_amount"`
 	Currency                 string          `json:"currency"`
 	RefundRequiredCount      int64           `json:"refund_required_count"`
 	UnallocatedCapturedCount int64           `json:"unallocated_captured_count"`
@@ -237,6 +241,9 @@ type OrganizerEventPaymentSummary struct {
 	EventTitle                         string          `json:"event_title"`
 	TicketsSold                        int64           `json:"tickets_sold"`
 	GrossCapturedAmount                decimal.Decimal `json:"gross_captured_amount"`
+	TotalRefundedAmount                decimal.Decimal `json:"total_refunded_amount"`
+	NetCapturedAmount                  decimal.Decimal `json:"net_captured_amount"`
+	NetTicketSales                     decimal.Decimal `json:"net_ticket_sales"`
 	PlatformFees                       decimal.Decimal `json:"platform_fees"`
 	OrganizerEarnings                  decimal.Decimal `json:"organizer_earnings"`
 	Currency                           string          `json:"currency"`
@@ -251,6 +258,8 @@ type OrganizerEventPaymentSummary struct {
 
 type OrganizerPaymentOverview struct {
 	GrossCapturedAmount                decimal.Decimal `json:"gross_captured_amount"`
+	TotalRefundedAmount                decimal.Decimal `json:"total_refunded_amount"`
+	NetCapturedAmount                  decimal.Decimal `json:"net_captured_amount"`
 	TotalTicketsSold                   int64           `json:"total_tickets_sold"`
 	TotalTicketSalesAmount             decimal.Decimal `json:"total_ticket_sales_amount"`
 	TotalPlatformFees                  decimal.Decimal `json:"total_platform_fees"`

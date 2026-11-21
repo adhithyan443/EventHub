@@ -408,6 +408,7 @@ func (r *paymentRepository) FindAdminPayments(
 type adminOverallPaymentSummaryRow struct {
 	TotalEvents              int64           `gorm:"column:total_events"`
 	GrossCapturedAmount      decimal.Decimal `gorm:"column:gross_captured_amount"`
+	TotalRefundedAmount      decimal.Decimal `gorm:"column:total_refunded_amount"`
 	RefundRequiredCount      int64           `gorm:"column:refund_required_count"`
 	UnallocatedCapturedCount int64           `gorm:"column:unallocated_captured_count"`
 }
@@ -420,6 +421,7 @@ type adminEventPaymentSummaryRow struct {
 	TotalPaymentsCount                 int64           `gorm:"column:total_payments_count"`
 	SuccessfullyCompletedPaymentsCount int64           `gorm:"column:successfully_completed_payments_count"`
 	GrossCapturedAmount                decimal.Decimal `gorm:"column:gross_captured_amount"`
+	TotalRefundedAmount                decimal.Decimal `gorm:"column:total_refunded_amount"`
 	PendingPaymentsCount               int64           `gorm:"column:pending_payments_count"`
 	FailedPaymentsCount                int64           `gorm:"column:failed_payments_count"`
 	RefundRequiredCount                int64           `gorm:"column:refund_required_count"`
@@ -495,6 +497,12 @@ func (r *paymentRepository) GetEventPaymentSummaries(
 	overallSelectClause := fmt.Sprintf(`
 		COUNT(DISTINCT e.id) AS total_events,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
+		COALESCE(SUM((
+			SELECT COALESCE(SUM(r.amount), 0) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id 
+			  AND r.status = 'SUCCESS'
+		)), 0) AS total_refunded_amount,
 		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
 			SELECT SUM(r.amount) 
 			FROM refunds r 
@@ -519,9 +527,16 @@ func (r *paymentRepository) GetEventPaymentSummaries(
 		totalPages = int((totalRecords + int64(limit) - 1) / int64(limit))
 	}
 
+	netCapturedOverall := overallRow.GrossCapturedAmount.Sub(overallRow.TotalRefundedAmount)
+	if netCapturedOverall.IsNegative() {
+		netCapturedOverall = decimal.Zero
+	}
+
 	overallSummary := domain.AdminOverallPaymentSummary{
 		TotalEvents:              overallRow.TotalEvents,
 		GrossCapturedAmount:      overallRow.GrossCapturedAmount,
+		TotalRefundedAmount:      overallRow.TotalRefundedAmount,
+		NetCapturedAmount:        netCapturedOverall,
 		Currency:                 finance.CurrencyINR,
 		RefundRequiredCount:      overallRow.RefundRequiredCount,
 		UnallocatedCapturedCount: overallRow.UnallocatedCapturedCount,
@@ -548,6 +563,12 @@ func (r *paymentRepository) GetEventPaymentSummaries(
 		COUNT(p.id) AS total_payments_count,
 		COUNT(CASE WHEN p.status = 'SUCCESS' AND b.status = 'CONFIRMED' THEN 1 END) AS successfully_completed_payments_count,
 		COALESCE(SUM(CASE WHEN (p.transaction_id IS NOT NULL AND p.paid_at IS NOT NULL) THEN p.amount ELSE 0 END), 0) AS gross_captured_amount,
+		COALESCE(SUM((
+			SELECT COALESCE(SUM(r.amount), 0) 
+			FROM refunds r 
+			WHERE r.payment_id = p.id 
+			  AND r.status = 'SUCCESS'
+		)), 0) AS total_refunded_amount,
 		COUNT(CASE WHEN p.status = 'PENDING' THEN 1 END) AS pending_payments_count,
 		COUNT(CASE WHEN p.status = 'FAILED' THEN 1 END) AS failed_payments_count,
 		COUNT(CASE WHEN p.status = 'REFUND_REQUIRED' AND p.amount > COALESCE((
@@ -583,6 +604,10 @@ func (r *paymentRepository) GetEventPaymentSummaries(
 
 	summaries := make([]domain.AdminEventPaymentSummary, 0, len(eventRows))
 	for _, row := range eventRows {
+		netCaptured := row.GrossCapturedAmount.Sub(row.TotalRefundedAmount)
+		if netCaptured.IsNegative() {
+			netCaptured = decimal.Zero
+		}
 		item := domain.AdminEventPaymentSummary{
 			EventID:                            row.EventID,
 			EventTitle:                         row.EventTitle,
@@ -591,6 +616,8 @@ func (r *paymentRepository) GetEventPaymentSummaries(
 			TotalPaymentsCount:                 row.TotalPaymentsCount,
 			SuccessfullyCompletedPaymentsCount: row.SuccessfullyCompletedPaymentsCount,
 			GrossCapturedAmount:                row.GrossCapturedAmount,
+			TotalRefundedAmount:                row.TotalRefundedAmount,
+			NetCapturedAmount:                  netCaptured,
 			Currency:                           finance.CurrencyINR,
 			PendingPaymentsCount:               row.PendingPaymentsCount,
 			FailedPaymentsCount:                row.FailedPaymentsCount,

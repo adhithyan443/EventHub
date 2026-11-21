@@ -148,8 +148,8 @@ export default function OrganizerPaymentDetailDrawer({ payment, onClose }) {
               <div className="flex items-center justify-between">
                 <div className="text-xs font-medium text-[#6d7a77] uppercase tracking-wide">
                   {payment.refunded_amount && parseFloat(payment.refunded_amount) > 0
-                    ? "Net Customer Payment"
-                    : "Captured Amount"}
+                    ? "Net Amount Retained"
+                    : "Original Captured Amount"}
                 </div>
                 {payment.refund_status && payment.refund_status !== "NONE" && (
                   <span
@@ -175,11 +175,15 @@ export default function OrganizerPaymentDetailDrawer({ payment, onClose }) {
                   payment.currency
                 )}
               </div>
-              {payment.refunded_amount && parseFloat(payment.refunded_amount) > 0 && (
+              {payment.refunded_amount && parseFloat(payment.refunded_amount) > 0 ? (
                 <div className="mt-1 text-xs text-[#6d7a77] flex items-center gap-2">
-                  <span>Captured: <span className="font-semibold line-through">{formatCurrency(payment.amount, payment.currency)}</span></span>
+                  <span>Original Captured: <span className="font-semibold line-through">{formatCurrency(payment.amount, payment.currency)}</span></span>
                   <span>•</span>
-                  <span className="text-[#7e22ce] font-semibold">Refunded: -{formatCurrency(payment.refunded_amount, payment.currency)}</span>
+                  <span className="text-[#7e22ce] font-semibold">Refunded Amount: -{formatCurrency(payment.refunded_amount, payment.currency)}</span>
+                </div>
+              ) : (
+                <div className="mt-1 text-xs text-[#6d7a77]">
+                  Original Captured Amount: <span className="font-semibold text-[#141b2b]">{formatCurrency(payment.amount, payment.currency)}</span>
                 </div>
               )}
               <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-[rgba(188,201,198,0.3)]">
@@ -243,19 +247,19 @@ export default function OrganizerPaymentDetailDrawer({ payment, onClose }) {
                 {/* Financial Metric Row */}
                 <div className="grid grid-cols-3 gap-3 p-4 bg-[#fdfaff] border-b border-[#f3e8ff] text-center">
                   <div className="bg-white p-2.5 rounded-lg border border-[#e9d5ff]/60">
-                    <div className="text-[10px] text-[#6d7a77] uppercase font-medium">Captured</div>
+                    <div className="text-[10px] text-[#6d7a77] uppercase font-medium">Original Captured</div>
                     <div className="text-sm font-bold text-[#141b2b] mt-0.5">
                       {formatCurrency(payment.amount, payment.currency)}
                     </div>
                   </div>
                   <div className="bg-white p-2.5 rounded-lg border border-[#e9d5ff]/60">
-                    <div className="text-[10px] text-[#7e22ce] uppercase font-bold">Total Refunded</div>
+                    <div className="text-[10px] text-[#7e22ce] uppercase font-bold">Refunded Amount</div>
                     <div className="text-sm font-extrabold text-[#7e22ce] mt-0.5">
                       {formatCurrency(payment.refunded_amount, payment.currency)}
                     </div>
                   </div>
                   <div className="bg-white p-2.5 rounded-lg border border-[#e9d5ff]/60">
-                    <div className="text-[10px] text-[#00685f] uppercase font-bold">Net Paid</div>
+                    <div className="text-[10px] text-[#00685f] uppercase font-bold">Net Retained</div>
                     <div className="text-sm font-extrabold text-[#00685f] mt-0.5">
                       {formatCurrency(
                         payment.net_amount !== undefined ? payment.net_amount : payment.amount,

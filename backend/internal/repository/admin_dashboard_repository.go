@@ -194,11 +194,17 @@ func (r *adminDashboardRepository) GetFinancialOverview(
 		}
 	}
 
+	netCaptured := grossCaptured.Sub(totalRefunds)
+	if netCaptured.IsNegative() {
+		netCaptured = decimal.Zero
+	}
+
 	return &domain.AdminFinancialOverview{
 		GrossCapturedAmount:       grossCaptured,
+		TotalRefunds:              totalRefunds,
+		NetCapturedAmount:         netCaptured,
 		PlatformFeeRevenue:        platformFeeRevenue,
 		OrganizerPayableLiability: organizerPayable,
-		TotalRefunds:              totalRefunds,
 		CompletedSettlements:      completedSettlements,
 		PendingSettlements:        pendingSettlements,
 		TaxLiability:              taxLiability,

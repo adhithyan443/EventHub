@@ -81,6 +81,8 @@ export default function AdminPaymentsPage() {
   const [overallSummary, setOverallSummary] = useState({
     total_events: 0,
     gross_captured_amount: "0.00",
+    total_refunded_amount: "0.00",
+    net_captured_amount: "0.00",
     currency: "INR",
     refund_required_count: 0,
     unallocated_captured_count: 0,
@@ -163,6 +165,8 @@ export default function AdminPaymentsPage() {
           setOverallSummary({
             total_events: res.data.overall_summary.total_events ?? 0,
             gross_captured_amount: res.data.overall_summary.gross_captured_amount ?? "0.00",
+            total_refunded_amount: res.data.overall_summary.total_refunded_amount ?? "0.00",
+            net_captured_amount: res.data.overall_summary.net_captured_amount ?? "0.00",
             currency: res.data.overall_summary.currency || "INR",
             refund_required_count: res.data.overall_summary.refund_required_count ?? 0,
             unallocated_captured_count: res.data.overall_summary.unallocated_captured_count ?? 0,
@@ -199,9 +203,12 @@ export default function AdminPaymentsPage() {
   useEffect(() => {
     if (viewMode !== "BY_EVENT") return;
     const cancelledRef = { cancelled: false };
-    fetchEventSummaries(cancelledRef);
+    const timer = setTimeout(() => {
+      fetchEventSummaries(cancelledRef);
+    }, 0);
     return () => {
       cancelledRef.cancelled = true;
+      clearTimeout(timer);
     };
   }, [fetchEventSummaries, eventRefreshKey, viewMode]);
 
@@ -258,9 +265,12 @@ export default function AdminPaymentsPage() {
   useEffect(() => {
     if (viewMode !== "ALL_PAYMENTS") return;
     const cancelledRef = { cancelled: false };
-    fetchPayments(cancelledRef);
+    const timer = setTimeout(() => {
+      fetchPayments(cancelledRef);
+    }, 0);
     return () => {
       cancelledRef.cancelled = true;
+      clearTimeout(timer);
     };
   }, [fetchPayments, paymentsRefreshKey, viewMode]);
 
@@ -450,91 +460,114 @@ export default function AdminPaymentsPage() {
             )}
 
             {/* Overall Financial Summary Cards (Strictly Populated from overall_summary) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              {/* Card 1: Total Events */}
-              <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
-                <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide mb-1">
-                  Total Events
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+              {/* Card 1: Gross Captured */}
+              <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] flex flex-col justify-between">
+                <div>
+                  <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide mb-1">
+                    Gross Captured
+                  </div>
+                  <div className="text-[#141b2b] text-2xl font-bold tracking-tight">
+                    {formatCurrency(overallSummary.gross_captured_amount, overallSummary.currency)}
+                  </div>
                 </div>
-                <div className="text-[#141b2b] text-2xl font-bold tracking-tight">
-                  {overallSummary.total_events?.toLocaleString("en-IN") ?? 0}
-                </div>
-                <div className="text-xs mt-1 font-medium text-[#00685f]">
-                  Events with payment activity
-                </div>
-              </div>
-
-              {/* Card 2: Gross Captured Amount */}
-              <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)]">
-                <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide mb-1">
-                  Gross Captured Amount
-                </div>
-                <div className="text-[#141b2b] text-2xl font-bold tracking-tight">
-                  {formatCurrency(overallSummary.gross_captured_amount, overallSummary.currency)}
-                </div>
-                <div className="text-xs mt-1 font-medium text-[#00685f]">
-                  Across all filtered events
+                <div className="text-xs mt-2 font-medium text-[#6d7a77]">
+                  Captured before refunds ({overallSummary.total_events?.toLocaleString("en-IN") ?? 0} events)
                 </div>
               </div>
 
-              {/* Card 3: Refund Required */}
+              {/* Card 2: Total Refunded */}
+              <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] flex flex-col justify-between">
+                <div>
+                  <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide mb-1">
+                    Total Refunded
+                  </div>
+                  <div className={`text-2xl font-bold tracking-tight ${parseFloat(overallSummary.total_refunded_amount || "0") > 0 ? "text-[#7e22ce]" : "text-[#141b2b]"}`}>
+                    {formatCurrency(overallSummary.total_refunded_amount, overallSummary.currency)}
+                  </div>
+                </div>
+                <div className="text-xs mt-2 font-medium text-[#7e22ce]">
+                  Successfully processed refunds
+                </div>
+              </div>
+
+              {/* Card 3: Net Captured */}
+              <div className="bg-[#e6f4f2]/60 border border-[#00685f]/30 rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] flex flex-col justify-between">
+                <div>
+                  <div className="text-[#00685f] text-xs font-bold uppercase tracking-wide mb-1">
+                    Net Captured
+                  </div>
+                  <div className="text-[#00685f] text-2xl font-extrabold tracking-tight">
+                    {formatCurrency(overallSummary.net_captured_amount, overallSummary.currency)}
+                  </div>
+                </div>
+                <div className="text-xs mt-2 font-medium text-[#00685f]">
+                  Gross captured minus refunds
+                </div>
+              </div>
+
+              {/* Card 4: Refund Required */}
               <div
-                className={`rounded-xl p-4 border shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] ${
+                className={`rounded-xl p-4 border shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] flex flex-col justify-between ${
                   overallSummary.refund_required_count > 0
                     ? "bg-[#fff7ed] border-[#fed7aa]"
                     : "bg-[#f9f9ff] border-[#bcc9c6]"
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide">
-                    Refund Required
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide">
+                      Refund Required
+                    </div>
+                    {overallSummary.refund_required_count > 0 && (
+                      <span className="bg-[#ffedd5] text-[#c2410c] text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-[#fed7aa]">
+                        Action Needed
+                      </span>
+                    )}
                   </div>
-                  {overallSummary.refund_required_count > 0 && (
-                    <span className="bg-[#ffedd5] text-[#c2410c] text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-[#fed7aa]">
-                      Action Needed
-                    </span>
-                  )}
+                  <div
+                    className={`text-2xl font-bold tracking-tight ${
+                      overallSummary.refund_required_count > 0 ? "text-[#c2410c]" : "text-[#141b2b]"
+                    }`}
+                  >
+                    {overallSummary.refund_required_count?.toLocaleString("en-IN") ?? 0}
+                  </div>
                 </div>
-                <div
-                  className={`text-2xl font-bold tracking-tight ${
-                    overallSummary.refund_required_count > 0 ? "text-[#c2410c]" : "text-[#141b2b]"
-                  }`}
-                >
-                  {overallSummary.refund_required_count?.toLocaleString("en-IN") ?? 0}
-                </div>
-                <div className="text-xs mt-1 font-medium text-[#6d7a77]">
+                <div className="text-xs mt-2 font-medium text-[#6d7a77]">
                   Payments awaiting refund
                 </div>
               </div>
 
-              {/* Card 4: Unallocated Captured */}
+              {/* Card 5: Unallocated Captured */}
               <div
-                className={`rounded-xl p-4 border shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] ${
+                className={`rounded-xl p-4 border shadow-[0px_1px_1.5px_rgba(0,0,0,0.1)] flex flex-col justify-between ${
                   overallSummary.unallocated_captured_count > 0
                     ? "bg-[#fffbeb] border-[#fde68a]"
                     : "bg-[#f9f9ff] border-[#bcc9c6]"
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
-                  <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide">
-                    Unallocated Captured
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="text-[#3d4947] text-xs font-medium uppercase tracking-wide">
+                      Unallocated Captured
+                    </div>
+                    {overallSummary.unallocated_captured_count > 0 && (
+                      <span className="bg-[#fef3c7] text-[#b45309] text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-[#fde68a]">
+                        Unreconciled
+                      </span>
+                    )}
                   </div>
-                  {overallSummary.unallocated_captured_count > 0 && (
-                    <span className="bg-[#fef3c7] text-[#b45309] text-[10px] font-bold px-1.5 py-0.5 rounded-full border border-[#fde68a]">
-                      Unreconciled
-                    </span>
-                  )}
+                  <div
+                    className={`text-2xl font-bold tracking-tight ${
+                      overallSummary.unallocated_captured_count > 0
+                        ? "text-[#b45309]"
+                        : "text-[#141b2b]"
+                    }`}
+                  >
+                    {overallSummary.unallocated_captured_count?.toLocaleString("en-IN") ?? 0}
+                  </div>
                 </div>
-                <div
-                  className={`text-2xl font-bold tracking-tight ${
-                    overallSummary.unallocated_captured_count > 0
-                      ? "text-[#b45309]"
-                      : "text-[#141b2b]"
-                  }`}
-                >
-                  {overallSummary.unallocated_captured_count?.toLocaleString("en-IN") ?? 0}
-                </div>
-                <div className="text-xs mt-1 font-medium text-[#6d7a77]">
+                <div className="text-xs mt-2 font-medium text-[#6d7a77]">
                   Captured without active booking
                 </div>
               </div>
@@ -628,7 +661,7 @@ export default function AdminPaymentsPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs min-w-[1100px]">
+                <table className="w-full text-left text-xs min-w-[1250px]">
                   <thead className="bg-[#f9f9ff] text-[#6d7a77] uppercase tracking-wide border-b border-[#bcc9c6]">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Event Name</th>
@@ -636,6 +669,8 @@ export default function AdminPaymentsPage() {
                       <th className="px-4 py-3 font-semibold text-center">Attempts</th>
                       <th className="px-4 py-3 font-semibold text-center">Success</th>
                       <th className="px-4 py-3 font-semibold text-right">Gross Captured</th>
+                      <th className="px-4 py-3 font-semibold text-right">Total Refunded</th>
+                      <th className="px-4 py-3 font-semibold text-right">Net Captured</th>
                       <th className="px-4 py-3 font-semibold text-center">Pending</th>
                       <th className="px-4 py-3 font-semibold text-center">Failed</th>
                       <th className="px-4 py-3 font-semibold text-center">Refund Req.</th>
@@ -647,7 +682,7 @@ export default function AdminPaymentsPage() {
                   <tbody className="divide-y divide-[rgba(188,201,198,0.25)]">
                     {eventLoading ? (
                       <tr>
-                        <td colSpan={11} className="px-4 py-12 text-center text-[#6d7a77] text-sm">
+                        <td colSpan={13} className="px-4 py-12 text-center text-[#6d7a77] text-sm">
                           <div className="flex flex-col items-center justify-center gap-2">
                             <div className="w-6 h-6 border-2 border-[#00685f]/30 border-t-[#00685f] rounded-full animate-spin" />
                             <span className="font-medium text-xs text-[#3d4947]">
@@ -658,7 +693,7 @@ export default function AdminPaymentsPage() {
                       </tr>
                     ) : eventSummaries.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="px-4 py-12 text-center text-[#6d7a77] text-sm">
+                        <td colSpan={13} className="px-4 py-12 text-center text-[#6d7a77] text-sm">
                           <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto">
                             <svg className="w-10 h-10 text-[#bcc9c6]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                               <path
@@ -691,6 +726,7 @@ export default function AdminPaymentsPage() {
                         const isEven = idx % 2 === 0;
                         const hasRefundReq = Number(item.refund_required_count) > 0;
                         const hasUnallocated = Number(item.unallocated_captured_count) > 0;
+                        const hasRefunds = parseFloat(item.total_refunded_amount || "0") > 0;
 
                         return (
                           <tr
@@ -745,8 +781,22 @@ export default function AdminPaymentsPage() {
 
                             {/* Gross Captured Amount */}
                             <td className="px-4 py-3 text-right whitespace-nowrap">
-                              <span className="font-bold text-[#141b2b]">
+                              <span className="font-semibold text-[#141b2b]">
                                 {formatCurrency(item.gross_captured_amount, item.currency)}
+                              </span>
+                            </td>
+
+                            {/* Total Refunded */}
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <span className={`font-semibold ${hasRefunds ? "text-[#7e22ce]" : "text-[#6d7a77]"}`}>
+                                {hasRefunds ? `-${formatCurrency(item.total_refunded_amount, item.currency)}` : formatCurrency("0", item.currency)}
+                              </span>
+                            </td>
+
+                            {/* Net Captured Amount */}
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              <span className="font-bold text-[#00685f]">
+                                {formatCurrency(item.net_captured_amount, item.currency)}
                               </span>
                             </td>
 
@@ -1163,7 +1213,7 @@ export default function AdminPaymentsPage() {
                       <th className="px-4 py-3 font-semibold">Customer</th>
                       <th className="px-4 py-3 font-semibold">Event</th>
                       <th className="px-4 py-3 font-semibold">Organizer</th>
-                      <th className="px-4 py-3 font-semibold">Amount</th>
+                      <th className="px-4 py-3 font-semibold">Amount (Captured / Net)</th>
                       <th className="px-4 py-3 font-semibold">Payment Status</th>
                       <th className="px-4 py-3 font-semibold">Ledger Allocation</th>
                       <th className="px-4 py-3 font-semibold">Method</th>
@@ -1296,33 +1346,38 @@ export default function AdminPaymentsPage() {
                               </div>
                             </td>
 
-                            {/* Amount & Refunded Breakdown */}
+                            {/* Amount & Refund Breakdown */}
                             <td className="px-4 py-3 whitespace-nowrap">
                               <div className="flex flex-col">
                                 {p.refunded_amount && parseFloat(p.refunded_amount) > 0 ? (
                                   <>
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-bold text-[#141b2b] text-xs">
+                                    <div className="text-xs">
+                                      <span className="text-[10px] text-[#6d7a77] font-medium mr-1">Net Retained:</span>
+                                      <span className="font-bold text-[#141b2b]">
                                         {formatCurrency(p.net_amount !== undefined ? p.net_amount : p.amount, p.currency)}
                                       </span>
-                                      <span className="text-[10px] text-[#6d7a77] font-medium">net</span>
                                     </div>
-                                    <div className="text-[10px] text-[#6d7a77] line-through">
-                                      Orig: {formatCurrency(p.amount, p.currency)}
+                                    <div className="text-[10px] text-[#6d7a77]">
+                                      <span>Original Captured: </span>
+                                      <span className="line-through">{formatCurrency(p.amount, p.currency)}</span>
                                     </div>
                                     <div className="text-[10px] text-[#7e22ce] font-semibold">
-                                      Refunded: -{formatCurrency(p.refunded_amount, p.currency)}
+                                      <span>Refunded: </span>
+                                      <span>-{formatCurrency(p.refunded_amount, p.currency)}</span>
                                     </div>
                                   </>
                                 ) : (
                                   <>
-                                    <span className="font-bold text-[#141b2b] text-xs">
-                                      {formatCurrency(p.amount, p.currency)}
-                                    </span>
-                                    {p.pending_refund_amount && parseFloat(p.pending_refund_amount) > 0 && (
-                                      <span className="text-[10px] text-[#854d0e] font-medium">
-                                        Pending ref: {formatCurrency(p.pending_refund_amount, p.currency)}
+                                    <div className="text-xs">
+                                      <span className="text-[10px] text-[#6d7a77] font-medium mr-1">Original Captured:</span>
+                                      <span className="font-bold text-[#141b2b]">
+                                        {formatCurrency(p.amount, p.currency)}
                                       </span>
+                                    </div>
+                                    {p.pending_refund_amount && parseFloat(p.pending_refund_amount) > 0 && (
+                                      <div className="text-[10px] text-[#854d0e] font-medium">
+                                        Pending Refund: {formatCurrency(p.pending_refund_amount, p.currency)}
+                                      </div>
                                     )}
                                   </>
                                 )}

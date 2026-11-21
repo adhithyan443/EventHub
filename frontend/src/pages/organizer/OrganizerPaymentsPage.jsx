@@ -97,6 +97,8 @@ export default function OrganizerPaymentsPage() {
   // Overview metrics state (strictly loaded from backend)
   const [overview, setOverview] = useState({
     gross_captured_amount: "0.00",
+    total_refunded_amount: "0.00",
+    net_captured_amount: "0.00",
     total_ticket_sales_amount: "0.00",
     total_platform_fees: "0.00",
     organizer_earnings: "0.00",
@@ -192,6 +194,14 @@ export default function OrganizerPaymentsPage() {
               res.data.gross_captured_amount != null
                 ? String(res.data.gross_captured_amount)
                 : "0.00",
+            total_refunded_amount:
+              res.data.total_refunded_amount != null
+                ? String(res.data.total_refunded_amount)
+                : "0.00",
+            net_captured_amount:
+              res.data.net_captured_amount != null
+                ? String(res.data.net_captured_amount)
+                : "0.00",
             total_ticket_sales_amount:
               res.data.total_ticket_sales_amount != null
                 ? String(res.data.total_ticket_sales_amount)
@@ -280,6 +290,14 @@ export default function OrganizerPaymentsPage() {
                 res.data.overview.gross_captured_amount != null
                   ? String(res.data.overview.gross_captured_amount)
                   : prev.gross_captured_amount,
+              total_refunded_amount:
+                res.data.overview.total_refunded_amount != null
+                  ? String(res.data.overview.total_refunded_amount)
+                  : prev.total_refunded_amount,
+              net_captured_amount:
+                res.data.overview.net_captured_amount != null
+                  ? String(res.data.overview.net_captured_amount)
+                  : prev.net_captured_amount,
               total_ticket_sales_amount:
                 res.data.overview.total_ticket_sales_amount != null
                   ? String(res.data.overview.total_ticket_sales_amount)
@@ -587,14 +605,31 @@ export default function OrganizerPaymentsPage() {
               </div>
             )}
             <div className="text-[11px] mt-1 text-[#6d7a77] font-medium">
-              Total funds captured
+              Captured before refunds
             </div>
           </div>
 
-          {/* Card 2: Ticket Sales */}
+          {/* Card 2: Total Refunded */}
           <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.06)] flex flex-col justify-between">
             <div className="text-[#3d4947] text-[11px] font-semibold uppercase tracking-wider mb-1">
-              Ticket Sales
+              Total Refunded
+            </div>
+            {overviewLoading ? (
+              <div className="h-7 w-24 bg-gray-200 animate-pulse rounded my-1" />
+            ) : (
+              <div className={`text-xl lg:text-2xl font-bold tracking-tight ${parseFloat(overview.total_refunded_amount || "0") > 0 ? "text-[#7e22ce]" : "text-[#141b2b]"}`}>
+                {formatCurrency(overview.total_refunded_amount, overview.currency)}
+              </div>
+            )}
+            <div className="text-[11px] mt-1 text-[#7e22ce] font-medium">
+              Successfully refunded
+            </div>
+          </div>
+
+          {/* Card 3: Net Ticket Sales */}
+          <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.06)] flex flex-col justify-between">
+            <div className="text-[#3d4947] text-[11px] font-semibold uppercase tracking-wider mb-1">
+              Net Ticket Sales
             </div>
             {overviewLoading ? (
               <div className="h-7 w-24 bg-gray-200 animate-pulse rounded my-1" />
@@ -604,11 +639,11 @@ export default function OrganizerPaymentsPage() {
               </div>
             )}
             <div className="text-[11px] mt-1 text-[#6d7a77] font-medium">
-              Gross ticket volume
+              Ticket sales after refunds
             </div>
           </div>
 
-          {/* Card 3: Platform Fees */}
+          {/* Card 4: Platform Fees */}
           <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.06)] flex flex-col justify-between">
             <div className="text-[#3d4947] text-[11px] font-semibold uppercase tracking-wider mb-1">
               Platform Fees
@@ -621,11 +656,11 @@ export default function OrganizerPaymentsPage() {
               </div>
             )}
             <div className="text-[11px] mt-1 text-[#6d7a77] font-medium">
-              Platform fee deduction
+              Platform fees after refunds
             </div>
           </div>
 
-          {/* Card 4: Organizer Earnings (Highlighted in Teal/Green) */}
+          {/* Card 5: Organizer Earnings (Highlighted in Teal/Green) */}
           <div className="bg-[#e6f4f2]/60 border border-[#00685f]/30 rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.06)] flex flex-col justify-between">
             <div className="text-[#00685f] text-[11px] font-bold uppercase tracking-wider mb-1">
               Organizer Earnings
@@ -642,7 +677,7 @@ export default function OrganizerPaymentsPage() {
             </div>
           </div>
 
-          {/* Card 5: Tickets Sold */}
+          {/* Card 6: Tickets Sold */}
           <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.06)] flex flex-col justify-between">
             <div className="text-[#3d4947] text-[11px] font-semibold uppercase tracking-wider mb-1">
               Tickets Sold
@@ -655,24 +690,7 @@ export default function OrganizerPaymentsPage() {
               </div>
             )}
             <div className="text-[11px] mt-1 text-[#6d7a77] font-medium">
-              Confirmed tickets
-            </div>
-          </div>
-
-          {/* Card 6: Total Transactions */}
-          <div className="bg-[#f9f9ff] border border-[#bcc9c6] rounded-xl p-4 shadow-[0px_1px_1.5px_rgba(0,0,0,0.06)] flex flex-col justify-between">
-            <div className="text-[#3d4947] text-[11px] font-semibold uppercase tracking-wider mb-1">
-              Transactions
-            </div>
-            {overviewLoading ? (
-              <div className="h-7 w-16 bg-gray-200 animate-pulse rounded my-1" />
-            ) : (
-              <div className="text-[#141b2b] text-xl lg:text-2xl font-bold tracking-tight">
-                {overview.total_payments_count?.toLocaleString("en-IN") ?? 0}
-              </div>
-            )}
-            <div className="text-[11px] mt-1 text-[#6d7a77] font-medium">
-              {overview.total_events || 0} active {overview.total_events === 1 ? "event" : "events"}
+              Confirmed tickets sold
             </div>
           </div>
         </div>
@@ -925,12 +943,14 @@ export default function OrganizerPaymentsPage() {
               </div>
 
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs min-w-[1050px]">
+                <table className="w-full text-left text-xs min-w-[1200px]">
                   <thead className="bg-[#f9f9ff] text-[#6d7a77] uppercase tracking-wide border-b border-[#bcc9c6]">
                     <tr>
                       <th className="px-4 py-3 font-semibold">Event Name</th>
                       <th className="px-4 py-3 font-semibold text-center">Tickets Sold</th>
                       <th className="px-4 py-3 font-semibold text-right">Gross Captured</th>
+                      <th className="px-4 py-3 font-semibold text-right">Total Refunded</th>
+                      <th className="px-4 py-3 font-semibold text-right">Net Ticket Sales</th>
                       <th className="px-4 py-3 font-semibold text-right">Platform Fees</th>
                       <th className="px-4 py-3 font-semibold text-right">Organizer Earnings</th>
                       <th className="px-4 py-3 font-semibold text-center">Payment Statuses</th>
@@ -948,6 +968,12 @@ export default function OrganizerPaymentsPage() {
                           </td>
                           <td className="px-4 py-4 text-center">
                             <div className="h-4 bg-gray-200 rounded w-12 mx-auto" />
+                          </td>
+                          <td className="px-4 py-4 text-right">
+                            <div className="h-4 bg-gray-200 rounded w-20 ml-auto" />
+                          </td>
+                          <td className="px-4 py-4 text-right">
+                            <div className="h-4 bg-gray-200 rounded w-20 ml-auto" />
                           </td>
                           <td className="px-4 py-4 text-right">
                             <div className="h-4 bg-gray-200 rounded w-20 ml-auto" />
@@ -971,7 +997,7 @@ export default function OrganizerPaymentsPage() {
                       ))
                     ) : eventSummaries.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="px-4 py-12 text-center text-[#6d7a77]">
+                        <td colSpan={10} className="px-4 py-12 text-center text-[#6d7a77]">
                           <div className="flex flex-col items-center justify-center gap-2">
                             <svg
                               className="w-8 h-8 text-[#bcc9c6]"
@@ -1032,6 +1058,18 @@ export default function OrganizerPaymentsPage() {
                           {/* Gross Captured */}
                           <td className="px-4 py-3.5 text-right font-semibold text-[#141b2b]">
                             {formatCurrency(summary.gross_captured_amount, summary.currency)}
+                          </td>
+
+                          {/* Total Refunded */}
+                          <td className="px-4 py-3.5 text-right whitespace-nowrap">
+                            <span className={`font-semibold ${parseFloat(summary.total_refunded_amount || "0") > 0 ? "text-[#7e22ce]" : "text-[#6d7a77]"}`}>
+                              {parseFloat(summary.total_refunded_amount || "0") > 0 ? `-${formatCurrency(summary.total_refunded_amount, summary.currency)}` : formatCurrency("0", summary.currency)}
+                            </span>
+                          </td>
+
+                          {/* Net Ticket Sales */}
+                          <td className="px-4 py-3.5 text-right font-semibold text-[#141b2b]">
+                            {formatCurrency(summary.net_ticket_sales !== undefined ? summary.net_ticket_sales : summary.organizer_earnings, summary.currency)}
                           </td>
 
                           {/* Platform Fees */}
@@ -1224,7 +1262,7 @@ export default function OrganizerPaymentsPage() {
                       <th className="px-4 py-3 font-semibold">Customer</th>
                       <th className="px-4 py-3 font-semibold">Event</th>
                       <th className="px-4 py-3 font-semibold text-center">Tickets</th>
-                      <th className="px-4 py-3 font-semibold text-right">Amount</th>
+                      <th className="px-4 py-3 font-semibold text-right">Amount (Captured / Net)</th>
                       <th className="px-4 py-3 font-semibold text-center">Status</th>
                       <th className="px-4 py-3 font-semibold text-center">Allocation</th>
                       <th className="px-4 py-3 font-semibold text-center">Method</th>
@@ -1397,28 +1435,33 @@ export default function OrganizerPaymentsPage() {
                               <div className="flex flex-col items-end">
                                 {p.refunded_amount && parseFloat(p.refunded_amount) > 0 ? (
                                   <>
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-bold text-[#141b2b] text-sm">
+                                    <div className="text-sm">
+                                      <span className="text-[10px] text-[#6d7a77] font-medium mr-1">Net Retained:</span>
+                                      <span className="font-bold text-[#141b2b]">
                                         {formatCurrency(p.net_amount !== undefined ? p.net_amount : p.amount, p.currency)}
                                       </span>
-                                      <span className="text-[10px] text-[#6d7a77] font-medium">net</span>
                                     </div>
-                                    <div className="text-[10px] text-[#6d7a77] line-through">
-                                      Orig: {formatCurrency(p.amount, p.currency)}
+                                    <div className="text-[10px] text-[#6d7a77]">
+                                      <span>Original Captured: </span>
+                                      <span className="line-through">{formatCurrency(p.amount, p.currency)}</span>
                                     </div>
                                     <div className="text-[10px] text-[#7e22ce] font-semibold">
-                                      Refunded: -{formatCurrency(p.refunded_amount, p.currency)}
+                                      <span>Refunded: </span>
+                                      <span>-{formatCurrency(p.refunded_amount, p.currency)}</span>
                                     </div>
                                   </>
                                 ) : (
                                   <>
-                                    <span className="font-bold text-[#141b2b] text-sm">
-                                      {formatCurrency(p.amount, p.currency)}
-                                    </span>
-                                    {p.pending_refund_amount && parseFloat(p.pending_refund_amount) > 0 && (
-                                      <span className="text-[10px] text-[#854d0e] font-medium">
-                                        Pending ref: {formatCurrency(p.pending_refund_amount, p.currency)}
+                                    <div className="text-sm">
+                                      <span className="text-[10px] text-[#6d7a77] font-medium mr-1">Original Captured:</span>
+                                      <span className="font-bold text-[#141b2b]">
+                                        {formatCurrency(p.amount, p.currency)}
                                       </span>
+                                    </div>
+                                    {p.pending_refund_amount && parseFloat(p.pending_refund_amount) > 0 && (
+                                      <div className="text-[10px] text-[#854d0e] font-medium">
+                                        Pending Refund: {formatCurrency(p.pending_refund_amount, p.currency)}
+                                      </div>
                                     )}
                                   </>
                                 )}

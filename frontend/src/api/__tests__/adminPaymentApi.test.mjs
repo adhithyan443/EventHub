@@ -270,6 +270,14 @@ test("admin event payment summary response normalization handles overall_summary
         rawOverall?.gross_captured_amount != null
           ? String(rawOverall.gross_captured_amount)
           : "0.00",
+      total_refunded_amount:
+        rawOverall?.total_refunded_amount != null
+          ? String(rawOverall.total_refunded_amount)
+          : "0.00",
+      net_captured_amount:
+        rawOverall?.net_captured_amount != null
+          ? String(rawOverall.net_captured_amount)
+          : "0.00",
       currency: rawOverall?.currency || "INR",
       refund_required_count:
         typeof rawOverall?.refund_required_count === "number"
@@ -302,6 +310,8 @@ test("admin event payment summary response normalization handles overall_summary
           total_payments_count: 10,
           successfully_completed_payments_count: 8,
           gross_captured_amount: "15000.00",
+          total_refunded_amount: "2000.00",
+          net_captured_amount: "13000.00",
           currency: "INR",
           pending_payments_count: 1,
           failed_payments_count: 1,
@@ -313,6 +323,8 @@ test("admin event payment summary response normalization handles overall_summary
       overall_summary: {
         total_events: 1,
         gross_captured_amount: "15000.00",
+        total_refunded_amount: "2000.00",
+        net_captured_amount: "13000.00",
         currency: "INR",
         refund_required_count: 2,
         unallocated_captured_count: 0,
@@ -324,8 +336,12 @@ test("admin event payment summary response normalization handles overall_summary
 
   const norm = normalizeEventSummariesResponse(standardRes);
   assert.strictEqual(norm.summaries.length, 1);
+  assert.strictEqual(norm.summaries[0].total_refunded_amount, "2000.00");
+  assert.strictEqual(norm.summaries[0].net_captured_amount, "13000.00");
   assert.strictEqual(norm.overallSummary.total_events, 1);
   assert.strictEqual(norm.overallSummary.gross_captured_amount, "15000.00");
+  assert.strictEqual(norm.overallSummary.total_refunded_amount, "2000.00");
+  assert.strictEqual(norm.overallSummary.net_captured_amount, "13000.00");
   assert.strictEqual(norm.overallSummary.refund_required_count, 2);
   assert.strictEqual(norm.overallSummary.unallocated_captured_count, 0);
 
@@ -342,6 +358,8 @@ test("admin event payment summary response normalization handles overall_summary
   const normNull = normalizeEventSummariesResponse(nullOverallRes);
   assert.strictEqual(normNull.overallSummary.total_events, 0);
   assert.strictEqual(normNull.overallSummary.gross_captured_amount, "0.00");
+  assert.strictEqual(normNull.overallSummary.total_refunded_amount, "0.00");
+  assert.strictEqual(normNull.overallSummary.net_captured_amount, "0.00");
   assert.strictEqual(normNull.overallSummary.refund_required_count, 0);
   assert.strictEqual(normNull.overallSummary.unallocated_captured_count, 0);
 });

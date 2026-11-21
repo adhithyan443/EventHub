@@ -26,9 +26,10 @@ type AdminPlatformOverview struct {
 // AdminFinancialOverview represents the consolidated financial position derived from the general ledger and payment records.
 type AdminFinancialOverview struct {
 	GrossCapturedAmount       decimal.Decimal `json:"gross_captured_amount"`
+	TotalRefunds              decimal.Decimal `json:"total_refunds"`
+	NetCapturedAmount         decimal.Decimal `json:"net_captured_amount"`
 	PlatformFeeRevenue        decimal.Decimal `json:"platform_fee_revenue"`
 	OrganizerPayableLiability decimal.Decimal `json:"organizer_payable_liability"`
-	TotalRefunds              decimal.Decimal `json:"total_refunds"`
 	CompletedSettlements      decimal.Decimal `json:"completed_settlements"`
 	PendingSettlements        decimal.Decimal `json:"pending_settlements"`
 	TaxLiability              decimal.Decimal `json:"tax_liability"`

@@ -640,6 +640,8 @@ func TestPaymentRepository_OrganizerPaymentVisibility_Postgres(t *testing.T) {
 
 		// Gross captured: 1500 (A1) + 330 (A2) = 1830
 		assert.True(t, decimal.NewFromInt(1830).Equal(ov.GrossCapturedAmount))
+		assert.True(t, ov.TotalRefundedAmount.IsZero())
+		assert.True(t, decimal.NewFromInt(1830).Equal(ov.NetCapturedAmount))
 
 		// Tickets sold: 5 (A1) + 1 (A2) = 6
 		assert.Equal(t, int64(6), ov.TotalTicketsSold)
@@ -1018,12 +1020,19 @@ func TestPaymentRepository_OrganizerEarnings_DeductsSuccessfulRefunds_Postgres(t
 	require.NoError(t, err)
 	assert.True(t, decimal.NewFromInt(630).Equal(postOverview.OrganizerEarnings), "Organizer earnings must deduct successful refunds")
 	assert.True(t, decimal.NewFromInt(630).Equal(postOverview.TotalTicketSalesAmount), "Ticket sales must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(1000).Equal(postOverview.GrossCapturedAmount), "Gross captured must remain original captured before refund")
+	assert.True(t, decimal.NewFromInt(300).Equal(postOverview.TotalRefundedAmount), "Total refunded must reflect successful refund")
+	assert.True(t, decimal.NewFromInt(700).Equal(postOverview.NetCapturedAmount), "Net captured must equal Gross Captured minus Total Refunded")
 
 	// Verify Event-wise Summary
 	eventSummaries, err := repo.GetOrganizerEventPaymentSummaries(ctx, domain.OrganizerPaymentFilter{OrganizerID: orgID})
 	require.NoError(t, err)
 	require.Len(t, eventSummaries.Summaries, 1)
 	assert.True(t, decimal.NewFromInt(630).Equal(eventSummaries.Summaries[0].OrganizerEarnings), "Event summary organizer earnings must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(630).Equal(eventSummaries.Summaries[0].NetTicketSales), "Event summary net ticket sales must deduct successful refunds")
+	assert.True(t, decimal.NewFromInt(1000).Equal(eventSummaries.Summaries[0].GrossCapturedAmount))
+	assert.True(t, decimal.NewFromInt(300).Equal(eventSummaries.Summaries[0].TotalRefundedAmount))
+	assert.True(t, decimal.NewFromInt(700).Equal(eventSummaries.Summaries[0].NetCapturedAmount))
 
 	// -------------------------------------------------------------------------
 	// Verification of No Double Deduction:

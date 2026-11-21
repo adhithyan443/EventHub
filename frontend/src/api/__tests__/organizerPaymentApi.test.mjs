@@ -73,6 +73,8 @@ test("organizer overview response normalization handles valid, zero, and missing
   const normalizeOverview = (data) => {
     return {
       grossCapturedAmount: data?.gross_captured_amount != null ? String(data.gross_captured_amount) : "0.00",
+      totalRefundedAmount: data?.total_refunded_amount != null ? String(data.total_refunded_amount) : "0.00",
+      netCapturedAmount: data?.net_captured_amount != null ? String(data.net_captured_amount) : "0.00",
       totalTicketSalesAmount: data?.total_ticket_sales_amount != null ? String(data.total_ticket_sales_amount) : "0.00",
       totalPlatformFees: data?.total_platform_fees != null ? String(data.total_platform_fees) : "0.00",
       organizerEarnings: data?.organizer_earnings != null ? String(data.organizer_earnings) : "0.00",
@@ -88,9 +90,11 @@ test("organizer overview response normalization handles valid, zero, and missing
   // Standard payload
   const standard = normalizeOverview({
     gross_captured_amount: "45000.00",
-    total_ticket_sales_amount: "45000.00",
-    total_platform_fees: "2250.00",
-    organizer_earnings: "42750.00",
+    total_refunded_amount: "5000.00",
+    net_captured_amount: "40000.00",
+    total_ticket_sales_amount: "40000.00",
+    total_platform_fees: "2000.00",
+    organizer_earnings: "38000.00",
     total_tickets_sold: 90,
     total_payments_count: 50,
     total_events: 3,
@@ -100,9 +104,11 @@ test("organizer overview response normalization handles valid, zero, and missing
   });
 
   assert.strictEqual(standard.grossCapturedAmount, "45000.00");
-  assert.strictEqual(standard.totalTicketSalesAmount, "45000.00");
-  assert.strictEqual(standard.totalPlatformFees, "2250.00");
-  assert.strictEqual(standard.organizerEarnings, "42750.00");
+  assert.strictEqual(standard.totalRefundedAmount, "5000.00");
+  assert.strictEqual(standard.netCapturedAmount, "40000.00");
+  assert.strictEqual(standard.totalTicketSalesAmount, "40000.00");
+  assert.strictEqual(standard.totalPlatformFees, "2000.00");
+  assert.strictEqual(standard.organizerEarnings, "38000.00");
   assert.strictEqual(standard.totalTicketsSold, 90);
   assert.strictEqual(standard.totalPaymentsCount, 50);
   assert.strictEqual(standard.totalEvents, 3);
@@ -112,6 +118,8 @@ test("organizer overview response normalization handles valid, zero, and missing
   // Missing / null payload
   const empty = normalizeOverview(null);
   assert.strictEqual(empty.grossCapturedAmount, "0.00");
+  assert.strictEqual(empty.totalRefundedAmount, "0.00");
+  assert.strictEqual(empty.netCapturedAmount, "0.00");
   assert.strictEqual(empty.totalTicketSalesAmount, "0.00");
   assert.strictEqual(empty.totalPlatformFees, "0.00");
   assert.strictEqual(empty.organizerEarnings, "0.00");
@@ -146,8 +154,11 @@ test("organizer event summary response normalization parses summaries and overvi
           event_title: "Rock Festival 2026",
           tickets_sold: 250,
           gross_captured_amount: "125000.00",
-          platform_fees: "6250.00",
-          organizer_earnings: "118750.00",
+          total_refunded_amount: "10000.00",
+          net_captured_amount: "115000.00",
+          net_ticket_sales: "109250.00",
+          platform_fees: "5750.00",
+          organizer_earnings: "109250.00",
           currency: "INR",
           total_payments_count: 120,
           successfully_completed_payments_count: 110,
@@ -160,10 +171,12 @@ test("organizer event summary response normalization parses summaries and overvi
       ],
       overview: {
         gross_captured_amount: "125000.00",
+        total_refunded_amount: "10000.00",
+        net_captured_amount: "115000.00",
         total_tickets_sold: 250,
-        total_ticket_sales_amount: "125000.00",
-        total_platform_fees: "6250.00",
-        organizer_earnings: "118750.00",
+        total_ticket_sales_amount: "109250.00",
+        total_platform_fees: "5750.00",
+        organizer_earnings: "109250.00",
         currency: "INR",
         total_events: 1,
         total_payments_count: 120,
@@ -182,8 +195,15 @@ test("organizer event summary response normalization parses summaries and overvi
   assert.strictEqual(norm.summaries.length, 1);
   assert.strictEqual(norm.summaries[0].event_title, "Rock Festival 2026");
   assert.strictEqual(norm.summaries[0].tickets_sold, 250);
-  assert.strictEqual(norm.summaries[0].organizer_earnings, "118750.00");
+  assert.strictEqual(norm.summaries[0].gross_captured_amount, "125000.00");
+  assert.strictEqual(norm.summaries[0].total_refunded_amount, "10000.00");
+  assert.strictEqual(norm.summaries[0].net_captured_amount, "115000.00");
+  assert.strictEqual(norm.summaries[0].net_ticket_sales, "109250.00");
+  assert.strictEqual(norm.summaries[0].organizer_earnings, "109250.00");
   assert.strictEqual(norm.overview.total_events, 1);
+  assert.strictEqual(norm.overview.gross_captured_amount, "125000.00");
+  assert.strictEqual(norm.overview.total_refunded_amount, "10000.00");
+  assert.strictEqual(norm.overview.net_captured_amount, "115000.00");
   assert.strictEqual(norm.totalRecords, 1);
   assert.strictEqual(norm.totalPages, 1);
 
