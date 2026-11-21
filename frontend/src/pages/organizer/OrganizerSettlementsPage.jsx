@@ -13,6 +13,9 @@ import {
   getEligibilityReasonMessage,
   getPayoutDisabledReason,
   isPayoutButtonDisabled,
+  isEventSettleDisabled,
+  getEventSettleDisabledReason,
+  shouldDisplayEventInBreakdown,
 } from "../../utils/settlementHelpers";
 
 const STATUS_TABS = [
@@ -183,11 +186,6 @@ export default function OrganizerSettlementsPage() {
     }
   };
 
-  const handleOpenRequestModal = (eventId = "") => {
-    setPreselectedEventId(eventId);
-    setShowRequestModal(true);
-  };
-
   const availBalanceNum = parseFloat(balanceData?.available_balance || 0);
   const pendingBalanceNum = parseFloat(balanceData?.pending_balance || 0);
   const isEligible = balanceData?.eligibility_status === "ELIGIBLE";
@@ -206,9 +204,34 @@ export default function OrganizerSettlementsPage() {
       ? rawReasons
       : (availBalanceNum <= 0 ? ["NO_AVAILABLE_BALANCE"] : []);
 
-  const eventBalances = balanceData?.event_balances || [];
+  const allEventBalances = balanceData?.event_balances || [];
+  const eventBalances = allEventBalances.filter(shouldDisplayEventInBreakdown);
   const isPayoutDisabled = isPayoutButtonDisabled(balanceLoading, balanceData);
   const payoutDisabledTooltip = getPayoutDisabledReason(balanceLoading, balanceData);
+
+  const handleOpenRequestModal = (eventId = "") => {
+    if (eventId) {
+      const targetEvent = allEventBalances.find((e) => e.event_id === eventId);
+      if (!targetEvent) {
+        notify.error("Selected event was not found.");
+        return;
+      }
+      if (isEventSettleDisabled(targetEvent, balanceData, balanceLoading)) {
+        const reason = getEventSettleDisabledReason(targetEvent, balanceData, balanceLoading);
+        notify.error(`Settlement unavailable: ${reason}`);
+        return;
+      }
+    } else {
+      if (isPayoutButtonDisabled(balanceLoading, balanceData)) {
+        const reason = getPayoutDisabledReason(balanceLoading, balanceData);
+        notify.error(`Payout unavailable: ${reason}`);
+        return;
+      }
+    }
+
+    setPreselectedEventId(eventId);
+    setShowRequestModal(true);
+  };
 
   return (
     <div className="flex-1 flex flex-col bg-[#f9f9ff] min-h-screen">
@@ -463,7 +486,7 @@ export default function OrganizerSettlementsPage() {
         {/* ================================================================= */}
         {/* OPTIONAL EVENT BREAKDOWN ACCORDION                                */}
         {/* ================================================================= */}
-        {eventBalances.length > 0 && (
+        {allEventBalances.length > 0 && (
           <div className="bg-white border border-[#bcc9c6]/50 rounded-2xl p-4 sm:p-5 shadow-2xs">
             <div className="flex items-center justify-between">
               <div>
@@ -471,7 +494,7 @@ export default function OrganizerSettlementsPage() {
                   Per-Event Balance Breakdown
                 </h2>
                 <p className="text-xs text-[#64748b] mt-0.5">
-                  Subledger balances partitioned across {eventBalances.length} events.
+                  Subledger balances partitioned across {eventBalances.length} active financial {eventBalances.length === 1 ? "event" : "events"}.
                 </p>
               </div>
               <button
@@ -496,77 +519,78 @@ export default function OrganizerSettlementsPage() {
 
             {showEventBreakdown && (
               <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-[#e2e8f0] bg-[#f8fafc] text-[#64748b] uppercase tracking-wider font-semibold">
-                      <th className="py-2.5 px-3">Event</th>
-                      <th className="py-2.5 px-3">Lifecycle</th>
-                      <th className="py-2.5 px-3 text-right">Gross</th>
-                      <th className="py-2.5 px-3 text-right">Refunds</th>
-                      <th className="py-2.5 px-3 text-right">Net Payable</th>
-                      <th className="py-2.5 px-3 text-right">Settled</th>
-                      <th className="py-2.5 px-3 text-right">Pending Reserve / Hold</th>
-                      <th className="py-2.5 px-3 text-right">Available</th>
-                      <th className="py-2.5 px-3 text-center">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#f1f5f9]">
-                    {eventBalances.map((eb) => {
-                      const avail = parseFloat(eb.available_balance || 0);
-                      const lifecycleKey = eb.lifecycle || eb.financial_lifecycle;
-                      return (
-                        <tr key={eb.event_id} className="hover:bg-[#f8fafc]">
-                          <td className="py-3 px-3">
-                            <div className="font-semibold text-[#1e293b]">{eb.event_title || "Untitled Event"}</div>
-                            <div className="font-mono text-[10px] text-[#64748b]">{eb.event_id}</div>
-                          </td>
-                          <td className="py-3 px-3">
-                            <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${getLifecycleBadgeStyle(lifecycleKey)}`}>
-                              {formatEventLifecycle(lifecycleKey)}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3 text-right font-medium">{formatCurrency(eb.gross_earnings)}</td>
-                          <td className="py-3 px-3 text-right text-[#b91c1c]">{formatCurrency(eb.refunds_deducted)}</td>
-                          <td className="py-3 px-3 text-right font-semibold">
-                            {formatCurrency(eb.net_payable !== undefined ? eb.net_payable : eb.net_earnings)}
-                          </td>
-                          <td className="py-3 px-3 text-right text-[#64748b]">
-                            {eb.settled_amount !== undefined && eb.settled_amount !== null
-                              ? formatCurrency(eb.settled_amount)
-                              : "—"}
-                          </td>
-                          <td className="py-3 px-3 text-right text-[#d97706]">
-                            {eb.pending_balance !== undefined && eb.pending_balance !== null
-                              ? formatCurrency(eb.pending_balance)
-                              : (eb.in_flight_refund_hold !== undefined && eb.in_flight_refund_hold !== null
-                                ? formatCurrency(eb.in_flight_refund_hold)
-                                : "—")}
-                          </td>
-                          <td className="py-3 px-3 text-right font-bold text-[#0f766e]">{formatCurrency(eb.available_balance)}</td>
-                          <td className="py-3 px-3 text-center">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenRequestModal(eb.event_id)}
-                              disabled={avail <= 0 || !eb.is_eligible || balanceLoading || balanceData?.has_active_bank_account === false}
-                              title={
-                                avail <= 0
-                                  ? "Earnings are held in pending reserve until event conclusion"
-                                  : balanceData?.has_active_bank_account === false
-                                  ? "Active bank account required"
-                                  : !eb.is_eligible
-                                  ? "Event not eligible for settlement"
-                                  : `Request payout for ${eb.event_title || "event"}`
-                              }
-                              className="bg-[#00685f] hover:bg-[#005a52] text-white px-2.5 py-1 rounded text-[11px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                            >
-                              Settle
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                {eventBalances.length === 0 ? (
+                  <div className="py-8 text-center text-[#64748b]">
+                    <p className="font-semibold text-xs text-[#1e293b]">No events with active financial records</p>
+                    <p className="text-[11px] mt-0.5">Draft events with no ticket sales or balances are omitted from the breakdown.</p>
+                  </div>
+                ) : (
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-[#e2e8f0] bg-[#f8fafc] text-[#64748b] uppercase tracking-wider font-semibold">
+                        <th className="py-2.5 px-3">Event</th>
+                        <th className="py-2.5 px-3">Lifecycle</th>
+                        <th className="py-2.5 px-3 text-right">Gross</th>
+                        <th className="py-2.5 px-3 text-right">Refunds</th>
+                        <th className="py-2.5 px-3 text-right">Net Payable</th>
+                        <th className="py-2.5 px-3 text-right">Settled</th>
+                        <th className="py-2.5 px-3 text-right">Pending Reserve / Hold</th>
+                        <th className="py-2.5 px-3 text-right">Available</th>
+                        <th className="py-2.5 px-3 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#f1f5f9]">
+                      {eventBalances.map((eb) => {
+                        const lifecycleKey = eb.lifecycle || eb.financial_lifecycle;
+                        const isSettleDisabled = isEventSettleDisabled(eb, balanceData, balanceLoading);
+                        const settleTooltip = getEventSettleDisabledReason(eb, balanceData, balanceLoading);
+
+                        return (
+                          <tr key={eb.event_id} className="hover:bg-[#f8fafc]">
+                            <td className="py-3 px-3">
+                              <div className="font-semibold text-[#1e293b]">{eb.event_title || "Untitled Event"}</div>
+                              <div className="font-mono text-[10px] text-[#64748b]">{eb.event_id}</div>
+                            </td>
+                            <td className="py-3 px-3">
+                              <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${getLifecycleBadgeStyle(lifecycleKey)}`}>
+                                {formatEventLifecycle(lifecycleKey)}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 text-right font-medium">{formatCurrency(eb.gross_earnings)}</td>
+                            <td className="py-3 px-3 text-right text-[#b91c1c]">{formatCurrency(eb.refunds_deducted)}</td>
+                            <td className="py-3 px-3 text-right font-semibold">
+                              {formatCurrency(eb.net_payable !== undefined ? eb.net_payable : eb.net_earnings)}
+                            </td>
+                            <td className="py-3 px-3 text-right text-[#64748b]">
+                              {eb.settled_amount !== undefined && eb.settled_amount !== null
+                                ? formatCurrency(eb.settled_amount)
+                                : "—"}
+                            </td>
+                            <td className="py-3 px-3 text-right text-[#d97706]">
+                              {eb.pending_balance !== undefined && eb.pending_balance !== null
+                                ? formatCurrency(eb.pending_balance)
+                                : (eb.in_flight_refund_hold !== undefined && eb.in_flight_refund_hold !== null
+                                  ? formatCurrency(eb.in_flight_refund_hold)
+                                  : "—")}
+                            </td>
+                            <td className="py-3 px-3 text-right font-bold text-[#0f766e]">{formatCurrency(eb.available_balance)}</td>
+                            <td className="py-3 px-3 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenRequestModal(eb.event_id)}
+                                disabled={isSettleDisabled}
+                                title={settleTooltip}
+                                className="bg-[#00685f] hover:bg-[#005a52] text-white px-2.5 py-1 rounded text-[11px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                Settle
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </div>
             )}
           </div>

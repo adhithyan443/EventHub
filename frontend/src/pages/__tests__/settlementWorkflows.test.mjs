@@ -13,6 +13,11 @@ import {
   getEligibilityReasonMessage,
   isPayoutButtonDisabled,
   getPayoutDisabledReason,
+  hasEventFinancialActivity,
+  isDraftEvent,
+  shouldDisplayEventInBreakdown,
+  isEventSettleDisabled,
+  getEventSettleDisabledReason,
 } from "../../utils/settlementHelpers.js";
 
 describe("Organizer Settlement Workflow & Validation", () => {
@@ -241,5 +246,221 @@ describe("Per-Event Breakdown Safe Field Handling", () => {
         ? eventProjection.net_payable
         : eventProjection.net_earnings;
     assert.equal(netPayable, "420.00");
+  });
+});
+
+describe("Per-Event Breakdown Filtering & Visibility", () => {
+  it("hides draft events with zero financial activity", () => {
+    const draftZero = {
+      event_id: "draft-1",
+      event_title: "Unpublished Draft Workshop",
+      status: "DRAFT",
+      lifecycle: "UPCOMING",
+      gross_earnings: "0.00",
+      refunds_deducted: "0.00",
+      net_payable: "0.00",
+      available_balance: "0.00",
+      pending_balance: "0.00",
+    };
+    assert.equal(isDraftEvent(draftZero), true);
+    assert.equal(hasEventFinancialActivity(draftZero), false);
+    assert.equal(shouldDisplayEventInBreakdown(draftZero), false);
+  });
+
+  it("retains draft events with financial activity when required", () => {
+    const draftWithActivity = {
+      event_id: "draft-2",
+      event_title: "Early Bird Test Booking",
+      status: "DRAFT",
+      lifecycle: "UPCOMING",
+      gross_earnings: "500.00",
+      refunds_deducted: "0.00",
+      net_payable: "420.00",
+      available_balance: "0.00",
+      pending_balance: "420.00",
+    };
+    assert.equal(isDraftEvent(draftWithActivity), true);
+    assert.equal(hasEventFinancialActivity(draftWithActivity), true);
+    assert.equal(shouldDisplayEventInBreakdown(draftWithActivity), true);
+  });
+
+  it("retains published events that have financial activity", () => {
+    const publishedEvent = {
+      event_id: "pub-1",
+      event_title: "Tech Conference 2026",
+      status: "PUBLISHED",
+      lifecycle: "UPCOMING",
+      gross_earnings: "12000.00",
+      refunds_deducted: "0.00",
+      net_payable: "10080.00",
+      available_balance: "0.00",
+      pending_balance: "10080.00",
+    };
+    assert.equal(hasEventFinancialActivity(publishedEvent), true);
+    assert.equal(shouldDisplayEventInBreakdown(publishedEvent), true);
+  });
+
+  it("retains completed events with unsettled balances", () => {
+    const completedUnsettled = {
+      event_id: "comp-1",
+      event_title: "Past Hackathon",
+      status: "PUBLISHED",
+      lifecycle: "COMPLETED",
+      gross_earnings: "5000.00",
+      refunds_deducted: "0.00",
+      net_payable: "4200.00",
+      available_balance: "4200.00",
+      pending_balance: "0.00",
+      is_eligible: true,
+    };
+    assert.equal(hasEventFinancialActivity(completedUnsettled), true);
+    assert.equal(shouldDisplayEventInBreakdown(completedUnsettled), true);
+  });
+
+  it("retains cancelled events when they have relevant financial records requiring settlement or refund tracking", () => {
+    const cancelledWithRefunds = {
+      event_id: "canc-1",
+      event_title: "Rain-Delayed Concert",
+      status: "CANCELLED",
+      lifecycle: "CANCELLED",
+      gross_earnings: "3000.00",
+      refunds_deducted: "1500.00",
+      net_payable: "1260.00",
+      in_flight_refund_hold: "1260.00",
+      available_balance: "0.00",
+      pending_balance: "1260.00",
+    };
+    assert.equal(hasEventFinancialActivity(cancelledWithRefunds), true);
+    assert.equal(shouldDisplayEventInBreakdown(cancelledWithRefunds), true);
+  });
+
+  it("retains events with non-zero financial balances even if status is not published", () => {
+    const archivedWithBalances = {
+      event_id: "arch-1",
+      event_title: "Legacy Event",
+      status: "ARCHIVED",
+      lifecycle: "COMPLETED",
+      gross_earnings: "1000.00",
+      refunds_deducted: "0.00",
+      net_payable: "840.00",
+      available_balance: "840.00",
+      pending_balance: "0.00",
+    };
+    assert.equal(hasEventFinancialActivity(archivedWithBalances), true);
+    assert.equal(shouldDisplayEventInBreakdown(archivedWithBalances), true);
+  });
+});
+
+describe("Event Lifecycle vs Publication Status Separation", () => {
+  it("displays Upcoming for published events scheduled in the future", () => {
+    // Published upcoming event displays "Upcoming", not "Published"
+    assert.equal(formatEventLifecycle("PUBLISHED"), "Upcoming");
+    assert.equal(
+      formatEventLifecycle({ status: "PUBLISHED", lifecycle: "UPCOMING" }),
+      "Upcoming"
+    );
+    assert.equal(
+      formatEventLifecycle({ status: "PUBLISHED" }),
+      "Upcoming"
+    );
+  });
+
+  it("displays Ongoing, Completed, and Cancelled lifecycle states correctly", () => {
+    assert.equal(formatEventLifecycle("ONGOING"), "Ongoing");
+    assert.equal(formatEventLifecycle("COMPLETED"), "Completed");
+    assert.equal(formatEventLifecycle("CANCELLED"), "Cancelled");
+    assert.equal(
+      formatEventLifecycle({ status: "PUBLISHED", lifecycle: "ONGOING" }),
+      "Ongoing"
+    );
+    assert.equal(
+      formatEventLifecycle({ status: "PUBLISHED", lifecycle: "COMPLETED" }),
+      "Completed"
+    );
+    assert.equal(
+      formatEventLifecycle({ status: "CANCELLED", lifecycle: "CANCELLED" }),
+      "Cancelled"
+    );
+  });
+});
+
+describe("Per-Event Settle Button Eligibility & Modal Guard", () => {
+  const activeOrgBalance = {
+    available_balance: "5000.00",
+    has_active_bank_account: true,
+    eligibility_status: "ELIGIBLE",
+  };
+
+  it("disables Settle button when available balance is zero", () => {
+    const event = {
+      event_id: "evt-zero",
+      event_title: "Unconcluded Festival",
+      lifecycle: "UPCOMING",
+      available_balance: "0.00",
+      pending_balance: "420.00",
+      is_eligible: false,
+    };
+    assert.equal(isEventSettleDisabled(event, activeOrgBalance, false), true);
+    const reason = getEventSettleDisabledReason(event, activeOrgBalance, false);
+    assert.ok(reason.includes("pending reserves"));
+  });
+
+  it("disables Settle button for ineligible events", () => {
+    const event = {
+      event_id: "evt-ineligible",
+      event_title: "Hold Event",
+      lifecycle: "COMPLETED",
+      available_balance: "500.00",
+      pending_balance: "0.00",
+      is_eligible: false,
+      ineligibility_reasons: ["IN_FLIGHT_REFUNDS_PENDING"],
+    };
+    assert.equal(isEventSettleDisabled(event, activeOrgBalance, false), true);
+    const reason = getEventSettleDisabledReason(event, activeOrgBalance, false);
+    assert.ok(reason.includes("refund requests are actively processing"));
+  });
+
+  it("disables Settle button when organizer has no active bank account", () => {
+    const noBankOrg = {
+      ...activeOrgBalance,
+      has_active_bank_account: false,
+      eligibility_status: "INELIGIBLE",
+    };
+    const event = {
+      event_id: "evt-valid",
+      event_title: "Completed Hackathon",
+      lifecycle: "COMPLETED",
+      available_balance: "1000.00",
+      is_eligible: true,
+    };
+    assert.equal(isEventSettleDisabled(event, noBankOrg, false), true);
+    const reason = getEventSettleDisabledReason(event, noBankOrg, false);
+    assert.ok(reason.includes("bank account"));
+  });
+
+  it("enables Settle button when event has positive available balance and satisfies all rules", () => {
+    const eligibleEvent = {
+      event_id: "evt-eligible",
+      event_title: "Completed Gala",
+      lifecycle: "COMPLETED",
+      available_balance: "1500.00",
+      is_eligible: true,
+    };
+    assert.equal(isEventSettleDisabled(eligibleEvent, activeOrgBalance, false), false);
+    const reason = getEventSettleDisabledReason(eligibleEvent, activeOrgBalance, false);
+    assert.equal(reason, "Request payout for Completed Gala");
+  });
+
+  it("prevents opening settlement modal for ineligible events via guard check", () => {
+    const ineligibleEvent = {
+      event_id: "evt-blocked",
+      available_balance: "0.00",
+      pending_balance: "500.00",
+      is_eligible: false,
+    };
+
+    // Verify the guard check logic implemented in handleOpenRequestModal
+    const canOpen = !isEventSettleDisabled(ineligibleEvent, activeOrgBalance, false);
+    assert.equal(canOpen, false);
   });
 });
