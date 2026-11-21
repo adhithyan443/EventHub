@@ -171,6 +171,38 @@ func TestAdminSettlementHandler_RejectSettlement(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
+	t.Run("Reject whitespace reason returns 400", func(t *testing.T) {
+		router := setupAdminSettlementTestRouter(&mockSettlementUsecase{}, logger, &adminUserID)
+
+		body := bytes.NewBufferString(`{"reason":"    "}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/settlements/"+settlementID.String()+"/reject", body)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("Reject with rejection_reason alias returns 200", func(t *testing.T) {
+		reason := "Suspected duplicate claim"
+		mockSetUC := &mockSettlementUsecase{
+			singleSettlement: &domain.Settlement{
+				ID:              settlementID,
+				Status:          domain.SettlementStatusRejected,
+				RejectionReason: &reason,
+			},
+		}
+		router := setupAdminSettlementTestRouter(mockSetUC, logger, &adminUserID)
+
+		body := bytes.NewBufferString(`{"rejection_reason":"Suspected duplicate claim"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/settlements/"+settlementID.String()+"/reject", body)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+	})
+
 	t.Run("Reject success returns 200", func(t *testing.T) {
 		reason := "Suspected duplicate claim"
 		mockSetUC := &mockSettlementUsecase{

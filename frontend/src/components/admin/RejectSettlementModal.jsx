@@ -25,15 +25,23 @@ export default function RejectSettlementModal({
 
   const amountStr = formatCurrency(settlement.amount, settlement.currency);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (actionLoading) return;
+
     const trimmed = reason.trim();
     if (!trimmed) {
       setError("A rejection reason is required.");
       return;
     }
     setError("");
-    onConfirm(trimmed);
+
+    try {
+      await onConfirm(trimmed);
+    } catch (err) {
+      const msg = err?.response?.data?.message || err?.message || "Failed to reject settlement.";
+      setError(msg);
+    }
   };
 
   return (

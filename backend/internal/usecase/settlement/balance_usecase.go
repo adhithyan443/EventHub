@@ -380,6 +380,7 @@ func (u *OrganizerBalanceUsecase) GetOrganizerBalanceProjection(
 		OrganizerID:          organizer.ID,
 		Currency:             domainfinance.CurrencyINR,
 		GrossEarnings:        subledger.GrossEarnings,
+		RefundsDeducted:      subledger.RefundsDeducted,
 		NetEarnings:          subledger.NetEarnings,
 		OrganizerPayable:     subledger.NetPayable,
 		SettledAmount:          subledger.SettledAmount,

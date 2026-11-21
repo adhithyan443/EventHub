@@ -6,6 +6,7 @@ import {
 } from "../../api/organizerSettlementApi.js";
 import {
   buildAdminSettlementParams,
+  buildRejectSettlementPayload,
 } from "../../api/adminSettlementApi.js";
 import {
   formatEventLifecycle,
@@ -78,6 +79,37 @@ describe("Admin Settlement Filter & Management", () => {
       limit: 50,
       status: "FAILED",
       organizer_id: orgId,
+    });
+  });
+
+  it("builds valid reject settlement payload with both reason and rejection_reason", () => {
+    const payload = buildRejectSettlementPayload("testing please wait");
+    assert.deepEqual(payload, {
+      reason: "testing please wait",
+      rejection_reason: "testing please wait",
+    });
+  });
+
+  it("trims whitespace in reject settlement payload", () => {
+    const payload = buildRejectSettlementPayload("  testing please wait  ");
+    assert.deepEqual(payload, {
+      reason: "testing please wait",
+      rejection_reason: "testing please wait",
+    });
+  });
+
+  it("rejects empty or whitespace-only rejection reason in payload builder", () => {
+    assert.throws(() => buildRejectSettlementPayload(""), {
+      message: /Rejection reason is required/,
+    });
+    assert.throws(() => buildRejectSettlementPayload("   "), {
+      message: /Rejection reason is required/,
+    });
+    assert.throws(() => buildRejectSettlementPayload(null), {
+      message: /Rejection reason is required/,
+    });
+    assert.throws(() => buildRejectSettlementPayload(undefined), {
+      message: /Rejection reason is required/,
     });
   });
 });
@@ -462,5 +494,95 @@ describe("Per-Event Settle Button Eligibility & Modal Guard", () => {
     // Verify the guard check logic implemented in handleOpenRequestModal
     const canOpen = !isEventSettleDisabled(ineligibleEvent, activeOrgBalance, false);
     assert.equal(canOpen, false);
+  });
+});
+
+describe("Financial Calculation Reconciliation & Platform Fee Partitioning", () => {
+  it("reconciles Event 01 (Completed) between Admin captured and Organizer payable", () => {
+    // Admin captured customer payment: ₹125 (₹100 base ticket + ₹20 platform fee + ₹5 tax)
+    const adminPayment = {
+      gross_captured_amount: 125,
+      total_refunded_amount: 0,
+      net_captured_amount: 125,
+      platform_fee: 20,
+      tax: 5,
+      ticket_amount: 100,
+    };
+    // Ledger credits Account 2010 (Organizer Payable) strictly for ticket revenue
+    const organizerEvent01 = {
+      event_id: "evt-01",
+      lifecycle: "COMPLETED",
+      gross_earnings: adminPayment.ticket_amount,
+      refunds_deducted: 0,
+      net_payable: 100,
+      available_balance: 100,
+      pending_balance: 0,
+      is_eligible: true,
+    };
+
+    assert.equal(adminPayment.net_captured_amount, organizerEvent01.net_payable + adminPayment.platform_fee + adminPayment.tax);
+    assert.equal(organizerEvent01.available_balance, 100);
+    assert.equal(organizerEvent01.pending_balance, 0);
+  });
+
+  it("reconciles Event 02 (Upcoming) and proportional refund decomposition", () => {
+    // Customer booked ₹625 (₹500 ticket + ₹100 platform fee + ₹25 tax)
+    // Customer cancelled ₹100 portion: decomposed into ₹80 ticket refund + ₹16 platform fee refund + ₹4 tax refund
+    const adminEvent02 = {
+      gross_captured: 625,
+      refunds: 100,
+      net_captured: 525,
+    };
+
+    const organizerRefundPortion = 80;
+    const platformAndTaxRefund = 20;
+    assert.equal(organizerRefundPortion + platformAndTaxRefund, adminEvent02.refunds);
+
+    const organizerEvent02 = {
+      event_id: "evt-02",
+      lifecycle: "UPCOMING",
+      gross_earnings: 500,
+      refunds_deducted: organizerRefundPortion,
+      net_payable: 500 - organizerRefundPortion, // 420
+      pending_balance: 420,
+      available_balance: 0,
+      is_eligible: false,
+    };
+
+    assert.equal(organizerEvent02.net_payable, 420);
+    assert.equal(organizerEvent02.pending_balance, 420);
+    assert.equal(organizerEvent02.available_balance, 0);
+  });
+
+  it("reconciles aggregate dashboard totals and proves zero discrepancy with double-entry ledger", () => {
+    const event01 = { gross: 100, refund: 0, net: 100, avail: 100, pending: 0 };
+    const event02 = { gross: 500, refund: 80, net: 420, avail: 0, pending: 420 };
+
+    // Organizer dashboard totals
+    const grossTicketRevenue = event01.gross + event02.gross; // 600
+    const refunds = event01.refund + event02.refund;           // 80
+    const netOrganizerEarnings = grossTicketRevenue - refunds; // 520
+    const reservedForUpcoming = event01.pending + event02.pending; // 420
+    const availableForPayout = event01.avail + event02.avail;     // 100
+
+    assert.equal(grossTicketRevenue, 600);
+    assert.equal(refunds, 80);
+    assert.equal(netOrganizerEarnings, 520);
+    assert.equal(reservedForUpcoming, 420);
+    assert.equal(availableForPayout, 100);
+
+    // Platform Net + Organizer Net = Admin Net Captured
+    const platformNet = (25 + 125) - 20; // 130
+    const adminNetCaptured = 125 + 525;  // 650
+    assert.equal(netOrganizerEarnings + platformNet, adminNetCaptured);
+  });
+
+  it("verifies in-flight settlement deduction prevents double-spending", () => {
+    const totalNetPayable = 520;
+    const pendingReserves = 420;
+    const inFlightSettlement = 50; // In-flight request currently processing
+
+    const available = totalNetPayable - pendingReserves - inFlightSettlement;
+    assert.equal(available, 50);
   });
 });

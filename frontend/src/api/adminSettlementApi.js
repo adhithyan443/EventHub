@@ -105,6 +105,25 @@ export const approveAdminSettlement = async (settlementId) => {
 };
 
 /**
+ * Builds and validates the request payload for rejecting a settlement.
+ * Sends both `reason` and `rejection_reason` for complete contract compatibility.
+ *
+ * @param {string} reason - Rejection explanation
+ * @returns {{ reason: string, rejection_reason: string }}
+ */
+export const buildRejectSettlementPayload = (reason) => {
+  const trimmedReason = (reason || "").trim();
+  if (!trimmedReason) {
+    throw new Error("Rejection reason is required");
+  }
+
+  return {
+    reason: trimmedReason,
+    rejection_reason: trimmedReason,
+  };
+};
+
+/**
  * Reject a PENDING or FAILED settlement with an administrative explanation.
  *
  * @param {string} settlementId - Settlement UUID
@@ -116,14 +135,9 @@ export const rejectAdminSettlement = async (settlementId, reason) => {
     throw new Error("Invalid settlement ID");
   }
 
-  const trimmedReason = (reason || "").trim();
-  if (!trimmedReason) {
-    throw new Error("Rejection reason is required");
-  }
+  const payload = buildRejectSettlementPayload(reason);
 
-  const response = await apiClient.post(`/admin/settlements/${settlementId.trim()}/reject`, {
-    rejection_reason: trimmedReason,
-  });
+  const response = await apiClient.post(`/admin/settlements/${settlementId.trim()}/reject`, payload);
   return response.data;
 };
 

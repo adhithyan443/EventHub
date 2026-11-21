@@ -155,7 +155,7 @@ export default function AdminSettlementsPage() {
 
   // Action: Reject
   const handleConfirmReject = async (reason) => {
-    if (!settlementToReject) return;
+    if (!settlementToReject || actionLoading) return;
     setActionLoading(true);
     try {
       const res = await rejectAdminSettlement(settlementToReject.id, reason);
@@ -173,6 +173,7 @@ export default function AdminSettlementsPage() {
       console.error("Reject failed:", err);
       const msg = err.response?.data?.message || err.message || "Failed to reject settlement.";
       notify.error(msg);
+      throw err;
     } finally {
       setActionLoading(false);
     }

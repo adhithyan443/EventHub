@@ -169,6 +169,7 @@ type OrganizerBalanceProjection struct {
 	OrganizerID          uuid.UUID                   `json:"organizer_id"`
 	Currency             string                      `json:"currency"`
 	GrossEarnings        decimal.Decimal             `json:"gross_earnings"`
+	RefundsDeducted      decimal.Decimal             `json:"refunds_deducted"`
 	NetEarnings          decimal.Decimal             `json:"net_earnings"`
 	OrganizerPayable     decimal.Decimal             `json:"organizer_payable"`
 	SettledAmount        decimal.Decimal             `json:"settled_amount"`
