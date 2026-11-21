@@ -7,6 +7,13 @@ import {
 import RequestSettlementModal from "../../components/organizer/RequestSettlementModal";
 import OrganizerSettlementDetailDrawer from "../../components/organizer/OrganizerSettlementDetailDrawer";
 import notify from "../../utils/toast";
+import {
+  formatEventLifecycle,
+  getLifecycleBadgeStyle,
+  getEligibilityReasonMessage,
+  getPayoutDisabledReason,
+  isPayoutButtonDisabled,
+} from "../../utils/settlementHelpers";
 
 const STATUS_TABS = [
   { value: "ALL", label: "All Settlements" },
@@ -181,11 +188,27 @@ export default function OrganizerSettlementsPage() {
     setShowRequestModal(true);
   };
 
+  const availBalanceNum = parseFloat(balanceData?.available_balance || 0);
+  const pendingBalanceNum = parseFloat(balanceData?.pending_balance || 0);
   const isEligible = balanceData?.eligibility_status === "ELIGIBLE";
   const isPartiallyEligible = balanceData?.eligibility_status === "PARTIALLY_ELIGIBLE";
-  const hasIneligibility = balanceData?.eligibility_status === "INELIGIBLE";
-  const ineligibilityReasons = balanceData?.ineligibility_reasons || [];
+
+  // Backend provides eligibility_reasons (with fallback to ineligibility_reasons)
+  const rawReasons = balanceData?.eligibility_reasons || balanceData?.ineligibility_reasons || [];
+  const hasIneligibility =
+    !balanceLoading &&
+    Boolean(balanceData) &&
+    (balanceData.eligibility_status === "INELIGIBLE" || availBalanceNum <= 0);
+
+  // If no available balance and reasons list is empty, default to NO_AVAILABLE_BALANCE
+  const eligibilityReasons =
+    rawReasons.length > 0
+      ? rawReasons
+      : (availBalanceNum <= 0 ? ["NO_AVAILABLE_BALANCE"] : []);
+
   const eventBalances = balanceData?.event_balances || [];
+  const isPayoutDisabled = isPayoutButtonDisabled(balanceLoading, balanceData);
+  const payoutDisabledTooltip = getPayoutDisabledReason(balanceLoading, balanceData);
 
   return (
     <div className="flex-1 flex flex-col bg-[#f9f9ff] min-h-screen">
@@ -225,7 +248,8 @@ export default function OrganizerSettlementsPage() {
           <button
             type="button"
             onClick={() => handleOpenRequestModal("")}
-            disabled={balanceLoading || (balanceData && parseFloat(balanceData.available_balance || 0) <= 0)}
+            disabled={isPayoutDisabled}
+            title={payoutDisabledTooltip}
             className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg shadow-sm flex items-center gap-2 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -252,8 +276,8 @@ export default function OrganizerSettlementsPage() {
         )}
 
         {/* Ineligibility Warning Alert */}
-        {hasIneligibility && ineligibilityReasons.length > 0 && (
-          <div className="bg-[#fffbeb] border border-[#fef3c7] rounded-xl p-4 text-xs text-[#92400e] space-y-1.5 shadow-xs">
+        {hasIneligibility && (
+          <div className="bg-[#fffbeb] border border-[#fef3c7] rounded-xl p-4 text-xs text-[#92400e] space-y-2 shadow-xs">
             <div className="font-semibold text-[#b45309] flex items-center gap-2 text-sm">
               <svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor">
                 <path
@@ -262,16 +286,20 @@ export default function OrganizerSettlementsPage() {
                   clipRule="evenodd"
                 />
               </svg>
-              Settlement Eligibility Warning
+              Funds currently unavailable
             </div>
-            <p className="text-[#78350f]">
-              You are currently ineligible for immediate payout disbursements due to the following requirements:
-            </p>
-            <ul className="list-disc list-inside space-y-1 text-[#78350f] pl-1 font-medium">
-              {ineligibilityReasons.map((reason, idx) => (
-                <li key={idx}>{reason}</li>
-              ))}
-            </ul>
+            {pendingBalanceNum > 0 && availBalanceNum <= 0 && (
+              <p className="text-[#78350f] font-medium leading-relaxed">
+                Your earnings from upcoming or ongoing events are held in pending reserves. These funds will become eligible for settlement after the respective events conclude, subject to applicable settlement requirements.
+              </p>
+            )}
+            {eligibilityReasons.length > 0 && (
+              <ul className="list-disc list-inside space-y-1 text-[#78350f] pl-1 font-medium">
+                {eligibilityReasons.map((reason, idx) => (
+                  <li key={idx}>{getEligibilityReasonMessage(reason, balanceData)}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
 
@@ -311,16 +339,28 @@ export default function OrganizerSettlementsPage() {
               </p>
             </div>
 
-            <div className="pt-4 mt-4 border-t border-white/15 flex items-center justify-between text-xs text-teal-100">
+            <div className="pt-4 mt-4 border-t border-white/15 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-teal-100">
               <span>Account 2010 (Payable): <strong>{balanceLoading ? "..." : formatCurrency(balanceData?.organizer_payable || 0, "INR")}</strong></span>
-              <button
-                type="button"
-                onClick={() => handleOpenRequestModal("")}
-                disabled={balanceLoading || parseFloat(balanceData?.available_balance || 0) <= 0}
-                className="bg-white text-[#00685f] hover:bg-teal-50 font-bold px-3 py-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Request Payout
-              </button>
+              <div className="flex items-center gap-2">
+                {isPayoutDisabled && !balanceLoading && (
+                  <span className="text-[11px] text-teal-200/90 italic">
+                    {pendingBalanceNum > 0 && availBalanceNum <= 0
+                      ? "Held in reserves until events conclude"
+                      : balanceData?.has_active_bank_account === false
+                      ? "Bank account verification required"
+                      : "Payout currently unavailable"}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleOpenRequestModal("")}
+                  disabled={isPayoutDisabled}
+                  title={payoutDisabledTooltip}
+                  className="bg-white text-[#00685f] hover:bg-teal-50 font-bold px-3 py-1.5 rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Request Payout
+                </button>
+              </div>
             </div>
           </div>
 
@@ -348,7 +388,12 @@ export default function OrganizerSettlementsPage() {
               {balanceLoading ? (
                 <div className="h-7 w-28 bg-gray-200 animate-pulse rounded" />
               ) : (
-                `-${formatCurrency(balanceData?.refunds_deducted || 0, "INR")}`
+                `-${formatCurrency(
+                  balanceData?.refunds_deducted !== undefined
+                    ? balanceData.refunds_deducted
+                    : eventBalances.reduce((sum, eb) => sum + parseFloat(eb.refunds_deducted || 0), 0),
+                  "INR"
+                )}`
               )}
             </div>
             <span className="text-[11px] text-[#64748b]">Customer cancellations & event refunds</span>
@@ -366,7 +411,7 @@ export default function OrganizerSettlementsPage() {
                 formatCurrency(balanceData?.net_earnings || 0, "INR")
               )}
             </div>
-            <span className="text-[11px] text-[#64748b]">Gross earnings less refunds</span>
+            <span className="text-[11px] text-[#64748b]">Net ticket revenue less refunds</span>
           </div>
 
           {/* Card 5: Settled Amount */}
@@ -458,9 +503,9 @@ export default function OrganizerSettlementsPage() {
                       <th className="py-2.5 px-3">Lifecycle</th>
                       <th className="py-2.5 px-3 text-right">Gross</th>
                       <th className="py-2.5 px-3 text-right">Refunds</th>
-                      <th className="py-2.5 px-3 text-right">Net</th>
+                      <th className="py-2.5 px-3 text-right">Net Payable</th>
                       <th className="py-2.5 px-3 text-right">Settled</th>
-                      <th className="py-2.5 px-3 text-right">Hold</th>
+                      <th className="py-2.5 px-3 text-right">Pending Reserve / Hold</th>
                       <th className="py-2.5 px-3 text-right">Available</th>
                       <th className="py-2.5 px-3 text-center">Action</th>
                     </tr>
@@ -468,6 +513,7 @@ export default function OrganizerSettlementsPage() {
                   <tbody className="divide-y divide-[#f1f5f9]">
                     {eventBalances.map((eb) => {
                       const avail = parseFloat(eb.available_balance || 0);
+                      const lifecycleKey = eb.lifecycle || eb.financial_lifecycle;
                       return (
                         <tr key={eb.event_id} className="hover:bg-[#f8fafc]">
                           <td className="py-3 px-3">
@@ -475,21 +521,42 @@ export default function OrganizerSettlementsPage() {
                             <div className="font-mono text-[10px] text-[#64748b]">{eb.event_id}</div>
                           </td>
                           <td className="py-3 px-3">
-                            <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-semibold bg-gray-100 text-gray-700">
-                              {eb.financial_lifecycle || "—"}
+                            <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-semibold ${getLifecycleBadgeStyle(lifecycleKey)}`}>
+                              {formatEventLifecycle(lifecycleKey)}
                             </span>
                           </td>
                           <td className="py-3 px-3 text-right font-medium">{formatCurrency(eb.gross_earnings)}</td>
                           <td className="py-3 px-3 text-right text-[#b91c1c]">{formatCurrency(eb.refunds_deducted)}</td>
-                          <td className="py-3 px-3 text-right font-semibold">{formatCurrency(eb.net_earnings)}</td>
-                          <td className="py-3 px-3 text-right text-[#64748b]">{formatCurrency(eb.settled_amount)}</td>
-                          <td className="py-3 px-3 text-right text-[#d97706]">{formatCurrency(eb.in_flight_settlement_hold)}</td>
+                          <td className="py-3 px-3 text-right font-semibold">
+                            {formatCurrency(eb.net_payable !== undefined ? eb.net_payable : eb.net_earnings)}
+                          </td>
+                          <td className="py-3 px-3 text-right text-[#64748b]">
+                            {eb.settled_amount !== undefined && eb.settled_amount !== null
+                              ? formatCurrency(eb.settled_amount)
+                              : "—"}
+                          </td>
+                          <td className="py-3 px-3 text-right text-[#d97706]">
+                            {eb.pending_balance !== undefined && eb.pending_balance !== null
+                              ? formatCurrency(eb.pending_balance)
+                              : (eb.in_flight_refund_hold !== undefined && eb.in_flight_refund_hold !== null
+                                ? formatCurrency(eb.in_flight_refund_hold)
+                                : "—")}
+                          </td>
                           <td className="py-3 px-3 text-right font-bold text-[#0f766e]">{formatCurrency(eb.available_balance)}</td>
                           <td className="py-3 px-3 text-center">
                             <button
                               type="button"
                               onClick={() => handleOpenRequestModal(eb.event_id)}
-                              disabled={avail <= 0 || !eb.is_eligible}
+                              disabled={avail <= 0 || !eb.is_eligible || balanceLoading || balanceData?.has_active_bank_account === false}
+                              title={
+                                avail <= 0
+                                  ? "Earnings are held in pending reserve until event conclusion"
+                                  : balanceData?.has_active_bank_account === false
+                                  ? "Active bank account required"
+                                  : !eb.is_eligible
+                                  ? "Event not eligible for settlement"
+                                  : `Request payout for ${eb.event_title || "event"}`
+                              }
                               className="bg-[#00685f] hover:bg-[#005a52] text-white px-2.5 py-1 rounded text-[11px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                             >
                               Settle
