@@ -256,6 +256,8 @@ func TestOrganizerBalanceUsecase_GetOrganizerBalanceProjection_FullyEligible(t *
 	assert.Equal(t, organizerID, projection.OrganizerID)
 	assert.Equal(t, domainfinance.CurrencyINR, projection.Currency)
 	assert.True(t, projection.GrossEarnings.Equal(decimal.NewFromInt(10000)))
+	assert.True(t, projection.RefundsDeducted.IsZero())
+	assert.True(t, projection.NetEarnings.Equal(decimal.NewFromInt(10000)))
 	assert.True(t, projection.OrganizerPayable.Equal(decimal.NewFromInt(10000)))
 	assert.True(t, projection.AvailableBalance.Equal(decimal.NewFromInt(10000)))
 	assert.True(t, projection.PendingBalance.IsZero())
@@ -551,6 +553,8 @@ func TestOrganizerBalanceUsecase_InFlightRefundHold_DoesNotDoubleDeductSuccessOr
 	require.NoError(t, err)
 
 	// Available = NetPayable (8000) - InFlightHold (1500) = 6500
+	assert.True(t, projection.RefundsDeducted.Equal(decimal.NewFromInt(2000)))
+	assert.True(t, projection.NetEarnings.Equal(decimal.NewFromInt(8000)))
 	assert.True(t, projection.AvailableBalance.Equal(decimal.NewFromInt(6500)), "Available should be 6500, got %s", projection.AvailableBalance)
 	assert.True(t, projection.PendingBalance.Equal(decimal.NewFromInt(1500)), "Pending should be 1500, got %s", projection.PendingBalance)
 	assert.True(t, projection.InFlightRefundHold.Equal(decimal.NewFromInt(1500)), "InFlightHold should be 1500, got %s", projection.InFlightRefundHold)
@@ -657,4 +661,128 @@ func TestOrganizerBalanceUsecase_UnapprovedOrganizer_Ineligible(t *testing.T) {
 
 	assert.Equal(t, domain.SettlementIneligible, projection.EligibilityStatus)
 	assert.Contains(t, projection.EligibilityReasons, "ORGANIZER_ACCOUNT_NOT_APPROVED")
+}
+
+func TestOrganizerBalanceUsecase_ReconciliationScenario_Event01AndEvent02(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	userID := uuid.New()
+	organizerID := uuid.New()
+	event01ID := uuid.New() // Completed
+	event02ID := uuid.New() // Upcoming
+
+	// Subledger posted entries for Account 2010 (Organizer Payable)
+	// Event 01: Customer paid 125 (Platform fee+tax = 25, Organizer ticket = 100)
+	// Event 02: Customer paid 625 (Platform fee+tax = 125, Organizer ticket = 500)
+	//           Customer refunded 100 (Platform fee+tax refunded = 20, Organizer ticket refund = 80)
+	subledger := &domain.OrganizerSubledgerBalance{
+		OrganizerID:     organizerID,
+		GrossEarnings:   decimal.NewFromInt(600), // 100 + 500
+		RefundsDeducted: decimal.NewFromInt(80),  // 0 + 80
+		NetEarnings:     decimal.NewFromInt(520), // 600 - 80
+		TotalCredits:    decimal.NewFromInt(600),
+		TotalDebits:     decimal.NewFromInt(80),
+		NetPayable:      decimal.NewFromInt(520),
+	}
+
+	eventBalances := []domain.EventSubledgerBalance{
+		{
+			EventID:         event01ID,
+			GrossEarnings:   decimal.NewFromInt(100),
+			RefundsDeducted: decimal.Zero,
+			TotalCredits:    decimal.NewFromInt(100),
+			TotalDebits:     decimal.Zero,
+			NetPayable:      decimal.NewFromInt(100),
+		},
+		{
+			EventID:         event02ID,
+			GrossEarnings:   decimal.NewFromInt(500),
+			RefundsDeducted: decimal.NewFromInt(80),
+			TotalCredits:    decimal.NewFromInt(500),
+			TotalDebits:     decimal.NewFromInt(80),
+			NetPayable:      decimal.NewFromInt(420),
+		},
+	}
+
+	pastDate := time.Now().UTC().Add(-48 * time.Hour)
+	futureDate := time.Now().UTC().Add(48 * time.Hour)
+
+	events := []*domain.OrganizerEvent{
+		{
+			ID:        event01ID,
+			Title:     "Test Event 01 — Completed",
+			EventDate: pastDate,
+			Status:    "PUBLISHED",
+		},
+		{
+			ID:        event02ID,
+			Title:     "Test Event 02 — Upcoming",
+			EventDate: futureDate,
+			Status:    "PUBLISHED",
+		},
+	}
+
+	u, err := settlement.NewOrganizerBalanceUsecase(
+		&mockFinanceJournalRepo{
+			subledgerBalance: subledger,
+			eventBalances:    eventBalances,
+		},
+		&mockOrganizerRepo{
+			organizer: &domain.Organizer{
+				ID:     organizerID,
+				UserID: userID,
+				Status: "ACTIVE",
+			},
+		},
+		&mockEventRepo{
+			events: events,
+			total:  2,
+		},
+		&mockBankAccountRepo{
+			bankAccount: &domain.OrganizerBankAccount{
+				AccountNumberLast4: "5678",
+			},
+		},
+		&mockRefundRepo{
+			refundsByEvent: make(map[uuid.UUID][]domain.Refund),
+		},
+		logger,
+	)
+	require.NoError(t, err)
+
+	projection, err := u.GetOrganizerBalanceProjection(context.Background(), userID)
+	require.NoError(t, err)
+	require.NotNil(t, projection)
+
+	// Verify Organizer-level Totals
+	assert.True(t, projection.GrossEarnings.Equal(decimal.NewFromInt(600)), "Gross should be 600")
+	assert.True(t, projection.RefundsDeducted.Equal(decimal.NewFromInt(80)), "RefundsDeducted should be 80")
+	assert.True(t, projection.NetEarnings.Equal(decimal.NewFromInt(520)), "NetEarnings should be 520")
+	assert.True(t, projection.OrganizerPayable.Equal(decimal.NewFromInt(520)), "OrganizerPayable should be 520")
+	assert.True(t, projection.AvailableBalance.Equal(decimal.NewFromInt(100)), "Available should be 100 (from Event 01)")
+	assert.True(t, projection.PendingBalance.Equal(decimal.NewFromInt(420)), "Pending should be 420 (from Event 02)")
+	assert.Equal(t, domain.SettlementPartiallyEligible, projection.EligibilityStatus)
+
+	// Verify Per-Event Breakdown
+	require.Len(t, projection.EventBalances, 2)
+
+	eb1 := projection.EventBalances[0]
+	assert.Equal(t, event01ID, eb1.EventID)
+	assert.Equal(t, domain.EventFinancialCompleted, eb1.Lifecycle)
+	assert.True(t, eb1.GrossEarnings.Equal(decimal.NewFromInt(100)))
+	assert.True(t, eb1.RefundsDeducted.IsZero())
+	assert.True(t, eb1.NetPayable.Equal(decimal.NewFromInt(100)))
+	assert.True(t, eb1.AvailableBalance.Equal(decimal.NewFromInt(100)))
+	assert.True(t, eb1.PendingBalance.IsZero())
+	assert.True(t, eb1.IsEligible)
+
+	eb2 := projection.EventBalances[1]
+	assert.Equal(t, event02ID, eb2.EventID)
+	assert.Equal(t, domain.EventFinancialUpcoming, eb2.Lifecycle)
+	assert.True(t, eb2.GrossEarnings.Equal(decimal.NewFromInt(500)))
+	assert.True(t, eb2.RefundsDeducted.Equal(decimal.NewFromInt(80)))
+	assert.True(t, eb2.NetPayable.Equal(decimal.NewFromInt(420)))
+	assert.True(t, eb2.AvailableBalance.IsZero())
+	assert.True(t, eb2.PendingBalance.Equal(decimal.NewFromInt(420)))
+	assert.False(t, eb2.IsEligible)
+	assert.Contains(t, eb2.IneligibilityReasons, "EVENT_NOT_COMPLETED")
 }

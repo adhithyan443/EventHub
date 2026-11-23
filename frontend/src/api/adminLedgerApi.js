@@ -12,6 +12,9 @@ import apiClient from "./client.js";
  * @param {string} [options.referenceId=""]
  * @param {string} [options.from=""]
  * @param {string} [options.to=""]
+ * @param {string} [options.eventId=""]
+ * @param {string} [options.organizerId=""]
+ * @param {string} [options.settlementStatus=""]
  * @returns {Promise<Object>} API response data containing journals and pagination metadata
  */
 export const getAdminLedgerJournals = async ({
@@ -23,6 +26,9 @@ export const getAdminLedgerJournals = async ({
   referenceId = "",
   from = "",
   to = "",
+  eventId = "",
+  organizerId = "",
+  settlementStatus = "",
 } = {}) => {
   const params = {
     page,
@@ -35,6 +41,18 @@ export const getAdminLedgerJournals = async ({
 
   if (status && status.trim() !== "" && status.trim().toUpperCase() !== "ALL") {
     params.status = status.trim().toUpperCase();
+  }
+
+  if (settlementStatus && settlementStatus.trim() !== "" && settlementStatus.trim().toUpperCase() !== "ALL") {
+    params.settlement_status = settlementStatus.trim().toUpperCase();
+  }
+
+  if (eventId && eventId.trim() !== "") {
+    params.event_id = eventId.trim();
+  }
+
+  if (organizerId && organizerId.trim() !== "") {
+    params.organizer_id = organizerId.trim();
   }
 
   const querySearch = search || referenceId;
@@ -51,6 +69,48 @@ export const getAdminLedgerJournals = async ({
   }
 
   const response = await apiClient.get("/admin/ledger/journals", {
+    params,
+  });
+
+  return response.data;
+};
+
+/**
+ * Fetch consolidated platform-wide financial overview, 10 authoritative metrics,
+ * and event/organizer breakdowns for the admin accounting module.
+ *
+ * @param {Object} [filter={}]
+ * @param {string} [filter.from=""]
+ * @param {string} [filter.to=""]
+ * @param {string} [filter.eventId=""]
+ * @param {string} [filter.organizerId=""]
+ * @param {string} [filter.transactionType=""]
+ * @param {string} [filter.settlementStatus=""]
+ * @returns {Promise<Object>} API response data containing metrics and breakdowns
+ */
+export const getAdminFinancialOverview = async (filter = {}) => {
+  const params = {};
+
+  if (filter.from && filter.from.trim() !== "") {
+    params.from = filter.from.trim();
+  }
+  if (filter.to && filter.to.trim() !== "") {
+    params.to = filter.to.trim();
+  }
+  if (filter.eventId && filter.eventId.trim() !== "") {
+    params.event_id = filter.eventId.trim();
+  }
+  if (filter.organizerId && filter.organizerId.trim() !== "") {
+    params.organizer_id = filter.organizerId.trim();
+  }
+  if (filter.transactionType && filter.transactionType.trim() !== "" && filter.transactionType.trim().toUpperCase() !== "ALL") {
+    params.transaction_type = filter.transactionType.trim().toUpperCase();
+  }
+  if (filter.settlementStatus && filter.settlementStatus.trim() !== "" && filter.settlementStatus.trim().toUpperCase() !== "ALL") {
+    params.settlement_status = filter.settlementStatus.trim().toUpperCase();
+  }
+
+  const response = await apiClient.get("/admin/ledger/overview", {
     params,
   });
 

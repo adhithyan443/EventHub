@@ -87,3 +87,30 @@ func (u *AdminLedgerUsecase) GetJournal(
 
 	return detail, nil
 }
+
+// GetFinancialOverview retrieves the consolidated platform-wide financial overview and breakdowns.
+func (u *AdminLedgerUsecase) GetFinancialOverview(
+	ctx context.Context,
+	filter domain.AdminFinancialFilter,
+) (*domain.AdminFinancialOverviewResponse, error) {
+	if filter.From != nil && filter.To != nil && filter.From.After(*filter.To) {
+		u.logger.WarnContext(ctx, "invalid financial date range: from after to")
+		return nil, domain.ErrInvalidDateRange
+	}
+
+	overview, err := u.repo.GetFinancialOverview(ctx, filter)
+	if err != nil {
+		u.logger.ErrorContext(ctx, "failed to get admin financial overview", slog.Any("error", err))
+		return nil, err
+	}
+
+	u.logger.InfoContext(ctx, "admin financial overview retrieved successfully",
+		slog.String("gross_collections", overview.Metrics.TotalGrossCollections.String()),
+		slog.String("net_collections", overview.Metrics.NetCollections.String()),
+		slog.String("platform_revenue", overview.Metrics.PlatformRevenue.String()),
+		slog.String("tax_liability", overview.Metrics.TaxLiability.String()),
+		slog.String("organizer_earnings", overview.Metrics.OrganizerEarnings.String()),
+	)
+
+	return overview, nil
+}

@@ -153,7 +153,8 @@ func (h *AdminSettlementHandler) ApproveSettlement(ctx *gin.Context) {
 }
 
 type RejectSettlementRequest struct {
-	Reason string `json:"reason" binding:"required"`
+	Reason          string `json:"reason"`
+	RejectionReason string `json:"rejection_reason"`
 }
 
 // RejectSettlement handles POST /api/v1/admin/settlements/:id/reject
@@ -172,12 +173,27 @@ func (h *AdminSettlementHandler) RejectSettlement(ctx *gin.Context) {
 	}
 
 	var req RejectSettlementRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Reason) == "" {
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.Error(appErrors.NewValidationError("rejection reason is required"))
 		return
 	}
 
-	settlement, err := h.settlementUsecase.RejectSettlement(ctx.Request.Context(), adminUserID, settlementID, req.Reason)
+	cleanReason := strings.TrimSpace(req.Reason)
+	if cleanReason == "" {
+		cleanReason = strings.TrimSpace(req.RejectionReason)
+	}
+
+	if cleanReason == "" {
+		ctx.Error(appErrors.NewValidationError("rejection reason is required"))
+		return
+	}
+
+	h.logger.InfoContext(ctx.Request.Context(), "admin_rejecting_settlement",
+		slog.String("settlement_id", settlementID.String()),
+		slog.String("admin_user_id", adminUserID.String()),
+	)
+
+	settlement, err := h.settlementUsecase.RejectSettlement(ctx.Request.Context(), adminUserID, settlementID, cleanReason)
 	if err != nil {
 		switch {
 		case errors.Is(err, domain.ErrSettlementNotFound):

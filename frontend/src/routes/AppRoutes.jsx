@@ -118,6 +118,7 @@ export default function AppRoutes() {
                     <Route path="payments" element={<AdminPaymentsPage />} />
                     <Route path="settlements" element={<AdminSettlementsPage />} />
                     <Route path="ledger" element={<AdminLedgerPage />} />
+                    <Route path="finance" element={<AdminLedgerPage />} />
                     <Route path="pricing-tax" element={<AdminPricingTaxPage />} />
                     <Route path="categories" element={<AdminPlaceholderPage title="Categories" />} />
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />

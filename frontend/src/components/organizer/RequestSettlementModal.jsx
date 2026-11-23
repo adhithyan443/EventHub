@@ -5,22 +5,39 @@ import notify from "../../utils/toast.js";
 
 export default function RequestSettlementModal({
   balanceProjection,
+  balanceData,
+  preselectedEventId = "",
   onClose,
   onSuccess,
+  onSubmit,
+  isSubmitting: externalSubmitting = false,
 }) {
-  const [targetScope, setTargetScope] = useState("GENERAL");
-  const [selectedEventId, setSelectedEventId] = useState("");
+  const projection = balanceProjection || balanceData;
+
+  const eligibleEvents = useMemo(() => {
+    if (!projection?.event_balances) return [];
+    return projection.event_balances.filter(
+      (eb) => eb.is_eligible && parseFloat(eb.available_balance || 0) > 0
+    );
+  }, [projection]);
+
+  const isPreselectedEligible = useMemo(() => {
+    if (!preselectedEventId) return false;
+    return eligibleEvents.some((eb) => eb.event_id === preselectedEventId);
+  }, [preselectedEventId, eligibleEvents]);
+
+  const [targetScope, setTargetScope] = useState(() => {
+    return isPreselectedEligible ? "EVENT" : "GENERAL";
+  });
+  const [selectedEventId, setSelectedEventId] = useState(() => {
+    return isPreselectedEligible ? preselectedEventId : "";
+  });
   const [amountStr, setAmountStr] = useState("");
   const [isConfirming, setIsConfirming] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const eligibleEvents = useMemo(() => {
-    if (!balanceProjection?.event_balances) return [];
-    return balanceProjection.event_balances.filter(
-      (eb) => eb.is_eligible && parseFloat(eb.available_balance || 0) > 0
-    );
-  }, [balanceProjection]);
+  const submitting = isSubmitting || externalSubmitting;
 
   // Determine current active available balance based on selected scope
   const activeAvailable = useMemo(() => {
@@ -28,8 +45,8 @@ export default function RequestSettlementModal({
       const found = eligibleEvents.find((e) => e.event_id === selectedEventId);
       return found ? parseFloat(found.available_balance || 0) : 0;
     }
-    return parseFloat(balanceProjection?.available_balance || 0);
-  }, [targetScope, selectedEventId, eligibleEvents, balanceProjection]);
+    return parseFloat(projection?.available_balance || 0);
+  }, [targetScope, selectedEventId, eligibleEvents, projection]);
 
   const numAmount = parseFloat(amountStr) || 0;
   const isAmountValid = numAmount > 0 && numAmount <= activeAvailable;
@@ -70,6 +87,11 @@ export default function RequestSettlementModal({
       };
       if (targetScope === "EVENT" && selectedEventId) {
         payload.event_id = selectedEventId;
+      }
+
+      if (onSubmit) {
+        await onSubmit(payload);
+        return;
       }
 
       const res = await requestOrganizerSettlement(payload);
