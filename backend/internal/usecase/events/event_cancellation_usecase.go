@@ -17,6 +17,7 @@ import (
 type EventCancellationUsecase struct {
 	transactionManager domain.TransactionManager
 	refundProcessor    refund.RefundProcessor
+	notifier           domain.EventCancellationNotifier
 	dispatchTracker    domain.DispatchTracker
 	logger             *slog.Logger
 }
@@ -38,6 +39,10 @@ func NewEventCancellationUsecase(
 
 func (u *EventCancellationUsecase) SetRefundProcessor(processor refund.RefundProcessor) {
 	u.refundProcessor = processor
+}
+
+func (u *EventCancellationUsecase) SetNotifier(notifier domain.EventCancellationNotifier) {
+	u.notifier = notifier
 }
 
 func (u *EventCancellationUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
@@ -195,6 +200,8 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 ) (*domain.EventCancellationSummary, error) {
 	var createdRefundIDs []uuid.UUID
 	var summary *domain.EventCancellationSummary
+	var customerNotices []domain.CustomerCancellationNotice
+	var organizerNotice *domain.OrganizerCancellationNotice
 
 	actorRole := "admin"
 	if isOrganizer {
@@ -294,6 +301,7 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 			return domain.ErrEventCannotBeCancelled
 		}
 
+		var eventDateStr string = "TBD"
 		// 2. Event schedule / past conclusion check
 		if tx.EventScheduleRepository() != nil {
 			schedule, sErr := tx.EventScheduleRepository().FindByEventID(eventID)
@@ -306,14 +314,17 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 				)
 				return fmt.Errorf("failed to lookup event schedule: %w", sErr)
 			}
-			if schedule != nil && isEventConcluded(schedule, now) {
-				u.logger.WarnContext(ctx, "event_cancel_concluded_event_rejected",
-					slog.String("actor_id", actorID.String()),
-					slog.String("actor_role", actorRole),
-					slog.String("event_id", eventID.String()),
-					slog.Time("event_date", schedule.EventDate),
-				)
-				return domain.ErrPastEventCannotBeCancelled
+			if schedule != nil {
+				eventDateStr = schedule.EventDate.Format("02 Jan 2006")
+				if isEventConcluded(schedule, now) {
+					u.logger.WarnContext(ctx, "event_cancel_concluded_event_rejected",
+						slog.String("actor_id", actorID.String()),
+						slog.String("actor_role", actorRole),
+						slog.String("event_id", eventID.String()),
+						slog.Time("event_date", schedule.EventDate),
+					)
+					return domain.ErrPastEventCannotBeCancelled
+				}
 			}
 		}
 
@@ -433,6 +444,14 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 			existingRefundsByBooking[r.BookingID] = append(existingRefundsByBooking[r.BookingID], r)
 		}
 
+		type customerAggregate struct {
+			customerID       uuid.UUID
+			bookingRefs      []string
+			ticketsCancelled int
+			totalRefund      decimal.Decimal
+		}
+		customerAggregates := make(map[uuid.UUID]*customerAggregate)
+
 		// Process each booking
 		for _, booking := range bookings {
 			// Find all tickets for this booking
@@ -464,6 +483,17 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 				}
 			}
 
+			// Track customer aggregate for consolidated notification
+			cAgg, exists := customerAggregates[booking.UserID]
+			if !exists {
+				cAgg = &customerAggregate{
+					customerID: booking.UserID,
+				}
+				customerAggregates[booking.UserID] = cAgg
+			}
+			cAgg.bookingRefs = append(cAgg.bookingRefs, booking.BookingNumber)
+			cAgg.ticketsCancelled += len(validTickets)
+
 			// Check if an EVENT_CANCELLATION refund was already created for this booking
 			hasEventRefund := false
 			for _, r := range existingRefundsByBooking[booking.ID] {
@@ -473,6 +503,11 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 				}
 			}
 			if hasEventRefund {
+				for _, r := range existingRefundsByBooking[booking.ID] {
+					if r.Reason == "EVENT_CANCELLATION" {
+						cAgg.totalRefund = cAgg.totalRefund.Add(r.Amount)
+					}
+				}
 				continue
 			}
 
@@ -563,6 +598,7 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 
 			createdRefundIDs = append(createdRefundIDs, pendingRefund.ID)
 			existingRefundsByBooking[booking.ID] = append(existingRefundsByBooking[booking.ID], *pendingRefund)
+			cAgg.totalRefund = cAgg.totalRefund.Add(refundAmount)
 		}
 
 		// 6. Invalidate active temporary reservations and release inventory/seat holds
@@ -594,7 +630,23 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 				// If a booking was created concurrently for this reservation before it was locked, cancel it
 				booking, bErr := tx.BookingRepository().FindByReservationID(ctx, lockedRes.ID)
 				if bErr == nil && booking != nil && booking.Status != domain.BookingStatusCancelled {
-					_ = tx.BookingRepository().UpdateStatus(ctx, booking.ID, domain.BookingStatusCancelled)
+					if err := tx.BookingRepository().UpdateStatus(ctx, booking.ID, domain.BookingStatusCancelled); err != nil {
+						return fmt.Errorf("failed to cancel concurrent booking %s for reservation %s: %w", booking.ID, lockedRes.ID, err)
+					}
+					u.logger.InfoContext(ctx, "event_cancel_concurrent_booking_cancelled",
+						slog.String("actor_id", actorID.String()),
+						slog.String("actor_role", actorRole),
+						slog.String("event_id", eventID.String()),
+						slog.String("booking_id", booking.ID.String()),
+					)
+					cAgg, exists := customerAggregates[booking.UserID]
+					if !exists {
+						cAgg = &customerAggregate{
+							customerID: booking.UserID,
+						}
+						customerAggregates[booking.UserID] = cAgg
+					}
+					cAgg.bookingRefs = append(cAgg.bookingRefs, booking.BookingNumber)
 				}
 
 				// Expire associated active checkout
@@ -646,6 +698,64 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 			return err
 		}
 		summary = s
+
+		// Build customer cancellation notices from aggregated customer data
+		for _, cAgg := range customerAggregates {
+			if tx.UserRepository() != nil {
+				user, uErr := tx.UserRepository().FindByID(cAgg.customerID)
+				if uErr == nil && user != nil && strings.TrimSpace(user.Email) != "" {
+					refundStatus := "PENDING"
+					if cAgg.totalRefund.IsZero() {
+						refundStatus = "NOT_APPLICABLE"
+					}
+					customerNotices = append(customerNotices, domain.CustomerCancellationNotice{
+						CustomerID:         user.ID,
+						CustomerName:       user.FullName,
+						CustomerEmail:      user.Email,
+						EventID:            eventID,
+						EventTitle:         event.Title,
+						EventDate:          eventDateStr,
+						CancellationReason: trimmedReason,
+						BookingReferences:  cAgg.bookingRefs,
+						TicketsCancelled:   cAgg.ticketsCancelled,
+						RefundAmount:       cAgg.totalRefund,
+						RefundStatus:       refundStatus,
+						RefundInformation:  "A refund has been initiated to your original payment method in accordance with standard payment processing procedures.",
+					})
+				}
+			}
+		}
+
+		// Build organizer cancellation notice using summary metrics
+		if tx.OrganizerRepository() != nil && tx.UserRepository() != nil {
+			organizer, oErr := tx.OrganizerRepository().FindByID(event.OrganizerID)
+			if oErr == nil && organizer != nil {
+				orgUser, uErr := tx.UserRepository().FindByID(organizer.UserID)
+				if uErr == nil && orgUser != nil && strings.TrimSpace(orgUser.Email) != "" {
+					cancelledBy := "Event Organizer"
+					if !isOrganizer {
+						cancelledBy = "Platform Administrator"
+					}
+					organizerNotice = &domain.OrganizerCancellationNotice{
+						OrganizerID:           organizer.ID,
+						OrganizerName:         orgUser.FullName,
+						OrganizerEmail:        orgUser.Email,
+						EventID:               eventID,
+						EventTitle:            event.Title,
+						EventDate:             eventDateStr,
+						CancellationReason:    trimmedReason,
+						CancelledBy:           cancelledBy,
+						ActorRole:             actorRole,
+						TotalBookingsAffected: summary.TotalBookingsAffected,
+						TotalTicketsAffected:  summary.TotalTicketsAffected,
+						TotalRefundAmount:     summary.TotalEligibleRefundAmount,
+						SettlementImpact:      "Pending settlement requests for this event have been voided and net earnings have been revoked.",
+						CancelledAt:           now,
+					}
+				}
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -682,6 +792,33 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 		}(createdRefundIDs)
 	}
 
+	// Asynchronous Cancellation Notifications:
+	// Dispatched outside the database transaction so that notification delivery (or failure)
+	// never impacts or rolls back the successfully committed event cancellation.
+	if u.notifier != nil && (len(customerNotices) > 0 || organizerNotice != nil) {
+		if u.dispatchTracker != nil {
+			if !u.dispatchTracker.TryAdd() {
+				u.logger.WarnContext(ctx, "background_notification_dispatch_rejected_shutdown_active",
+					slog.String("event_id", eventID.String()),
+					slog.Int("recipient_count", len(customerNotices)+1),
+				)
+			} else {
+				bgCtx := context.WithoutCancel(context.Background())
+				go func(customers []domain.CustomerCancellationNotice, org *domain.OrganizerCancellationNotice) {
+					if u.dispatchTracker != nil {
+						defer u.dispatchTracker.Done()
+					}
+					u.dispatchNotifications(bgCtx, eventID, customers, org)
+				}(customerNotices, organizerNotice)
+			}
+		} else {
+			bgCtx := context.WithoutCancel(context.Background())
+			go func(customers []domain.CustomerCancellationNotice, org *domain.OrganizerCancellationNotice) {
+				u.dispatchNotifications(bgCtx, eventID, customers, org)
+			}(customerNotices, organizerNotice)
+		}
+	}
+
 	u.logger.InfoContext(ctx, "event_cancellation_completed",
 		slog.String("event_id", eventID.String()),
 		slog.String("status", summary.EventStatus),
@@ -692,6 +829,58 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 	)
 
 	return summary, nil
+}
+
+func (u *EventCancellationUsecase) dispatchNotifications(
+	bgCtx context.Context,
+	eventID uuid.UUID,
+	customers []domain.CustomerCancellationNotice,
+	org *domain.OrganizerCancellationNotice,
+) {
+	batchCtx, cancel := context.WithTimeout(bgCtx, 2*time.Minute)
+	defer cancel()
+
+	u.logger.InfoContext(batchCtx, "cancellation_notifications_dispatch_started",
+		slog.String("event_id", eventID.String()),
+		slog.Int("customer_count", len(customers)),
+		slog.Bool("has_organizer", org != nil),
+	)
+
+	var deliveredCount, failedCount int
+
+	// Send customer notifications independently
+	for _, cust := range customers {
+		if err := u.notifier.NotifyCustomer(batchCtx, cust); err != nil {
+			failedCount++
+			u.logger.ErrorContext(batchCtx, "async_customer_cancellation_notification_failed",
+				slog.String("event_id", eventID.String()),
+				slog.String("customer_id", cust.CustomerID.String()),
+				slog.Any("error", err),
+			)
+		} else {
+			deliveredCount++
+		}
+	}
+
+	// Send organizer notification independently
+	if org != nil {
+		if err := u.notifier.NotifyOrganizer(batchCtx, *org); err != nil {
+			failedCount++
+			u.logger.ErrorContext(batchCtx, "async_organizer_cancellation_notification_failed",
+				slog.String("event_id", eventID.String()),
+				slog.String("organizer_id", org.OrganizerID.String()),
+				slog.Any("error", err),
+			)
+		} else {
+			deliveredCount++
+		}
+	}
+
+	u.logger.InfoContext(batchCtx, "cancellation_notifications_dispatch_completed",
+		slog.String("event_id", eventID.String()),
+		slog.Int("delivered_count", deliveredCount),
+		slog.Int("failed_count", failedCount),
+	)
 }
 
 func (u *EventCancellationUsecase) buildSummaryInTx(

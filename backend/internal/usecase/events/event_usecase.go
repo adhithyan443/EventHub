@@ -73,6 +73,12 @@ func (u *EventUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
 	}
 }
 
+func (u *EventUsecase) SetNotifier(notifier domain.EventCancellationNotifier) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetNotifier(notifier)
+	}
+}
+
 func (u *EventUsecase) CancelEvent(
 	ctx context.Context,
 	userID uuid.UUID,

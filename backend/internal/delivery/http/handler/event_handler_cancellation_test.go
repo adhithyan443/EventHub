@@ -64,6 +64,12 @@ func (m *mockOrgTxRepos) SeatRepository() domain.SeatRepository {
 func (m *mockOrgTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
 	return nil
 }
+func (m *mockOrgTxRepos) UserRepository() domain.UserRepository {
+	return nil
+}
+func (m *mockOrgTxRepos) PaymentRepository() domain.PaymentRepository {
+	return nil
+}
 
 type mockOrgReservationRepo struct {
 	domain.SeatReservationRepository
@@ -149,6 +155,15 @@ type mockOrgOrganizerRepo struct {
 func (m *mockOrgOrganizerRepo) FindByUserID(userID uuid.UUID) (*domain.Organizer, error) {
 	for _, o := range m.organizers {
 		if o.UserID == userID {
+			return o, nil
+		}
+	}
+	return nil, domain.ErrOrganizerNotFound
+}
+
+func (m *mockOrgOrganizerRepo) FindByID(id uuid.UUID) (*domain.Organizer, error) {
+	for _, o := range m.organizers {
+		if o.ID == id {
 			return o, nil
 		}
 	}

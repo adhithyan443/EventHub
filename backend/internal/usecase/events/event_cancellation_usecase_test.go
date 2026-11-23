@@ -53,6 +53,7 @@ type mockTxRepos struct {
 	ticketTypeRepo       *mockTicketTypeRepo
 	settingRepo          *mockSettingRepo
 	pricingTaxRepo       *mockPricingTaxRepo
+	userRepo             *mockUserRepo
 }
 
 func (m *mockTxRepos) EventRepository() domain.EventRepository { return m.eventRepo }
@@ -73,6 +74,76 @@ func (m *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository     { r
 func (m *mockTxRepos) EventSettingRepository() domain.EventSettingRepository { return m.settingRepo }
 func (m *mockTxRepos) PricingTaxConfigurationRepository() domain.PricingTaxConfigurationRepository {
 	return m.pricingTaxRepo
+}
+func (m *mockTxRepos) UserRepository() domain.UserRepository {
+	if m == nil || m.userRepo == nil {
+		return nil
+	}
+	return m.userRepo
+}
+
+type mockUserRepo struct {
+	domain.UserRepository
+	mu      sync.Mutex
+	users   map[uuid.UUID]*domain.User
+	findErr error
+}
+
+func newMockUserRepo() *mockUserRepo {
+	return &mockUserRepo{users: make(map[uuid.UUID]*domain.User)}
+}
+
+func (m *mockUserRepo) FindByID(id uuid.UUID) (*domain.User, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.findErr != nil {
+		return nil, m.findErr
+	}
+	u, ok := m.users[id]
+	if !ok {
+		return nil, domain.ErrUserNotFound
+	}
+	copied := *u
+	return &copied, nil
+}
+
+type mockCancellationNotifier struct {
+	mu               sync.Mutex
+	customerNotices  []domain.CustomerCancellationNotice
+	organizerNotices []domain.OrganizerCancellationNotice
+	customerErr      error
+	organizerErr     error
+	notifyCustCh     chan domain.CustomerCancellationNotice
+	notifyOrgCh      chan domain.OrganizerCancellationNotice
+}
+
+func newMockCancellationNotifier() *mockCancellationNotifier {
+	return &mockCancellationNotifier{
+		notifyCustCh: make(chan domain.CustomerCancellationNotice, 50),
+		notifyOrgCh:  make(chan domain.OrganizerCancellationNotice, 50),
+	}
+}
+
+func (m *mockCancellationNotifier) NotifyCustomer(ctx context.Context, notice domain.CustomerCancellationNotice) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.customerNotices = append(m.customerNotices, notice)
+	select {
+	case m.notifyCustCh <- notice:
+	default:
+	}
+	return m.customerErr
+}
+
+func (m *mockCancellationNotifier) NotifyOrganizer(ctx context.Context, notice domain.OrganizerCancellationNotice) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.organizerNotices = append(m.organizerNotices, notice)
+	select {
+	case m.notifyOrgCh <- notice:
+	default:
+	}
+	return m.organizerErr
 }
 
 type mockSettlementRepo struct {
@@ -232,6 +303,17 @@ func (m *mockOrganizerRepo) FindByUserID(userID uuid.UUID) (*domain.Organizer, e
 		}
 	}
 	return nil, domain.ErrOrganizerNotFound
+}
+
+func (m *mockOrganizerRepo) FindByID(id uuid.UUID) (*domain.Organizer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	org, ok := m.organizers[id]
+	if !ok {
+		return nil, domain.ErrOrganizerNotFound
+	}
+	copied := *org
+	return &copied, nil
 }
 
 type mockBookingRepo struct {
@@ -663,6 +745,8 @@ type cancellationFixture struct {
 	organizerID     uuid.UUID
 	eventID         uuid.UUID
 	event           *domain.Event
+	userRepo        *mockUserRepo
+	notifier        *mockCancellationNotifier
 }
 
 func newCancellationFixture(t *testing.T) *cancellationFixture {
@@ -687,6 +771,7 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 	ticketTypeRepo := newMockTicketTypeRepo()
 	settingRepo := newMockSettingRepo()
 	pricingTaxRepo := &mockPricingTaxRepo{}
+	userRepo := newMockUserRepo()
 
 	txRepos := &mockTxRepos{
 		eventRepo:        eventRepo,
@@ -704,12 +789,23 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 		ticketTypeRepo:   ticketTypeRepo,
 		settingRepo:      settingRepo,
 		pricingTaxRepo:   pricingTaxRepo,
+		userRepo:         userRepo,
 	}
 
 	txMgr := &mockTxManager{repos: txRepos}
 	proc := &mockRefundProcessor{}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	uc := events.NewEventCancellationUsecase(txMgr, proc, logger)
+	notifier := newMockCancellationNotifier()
+	uc.SetNotifier(notifier)
+
+	// Setup active organizer user
+	userRepo.users[orgUserID] = &domain.User{
+		ID:       orgUserID,
+		FullName: "Test Organizer",
+		Email:    "organizer@example.com",
+		Role:     "ORGANIZER",
+	}
 
 	// Setup active organizer
 	organizer := &domain.Organizer{
@@ -759,6 +855,8 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 		organizerID:     orgID,
 		eventID:         evID,
 		event:           event,
+		userRepo:        userRepo,
+		notifier:        notifier,
 	}
 }
 
