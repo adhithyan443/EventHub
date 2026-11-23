@@ -10,6 +10,7 @@ import {
 import StatusBadge from "../../components/organizer/events/StatusBadge";
 import ProgressBar from "../../components/organizer/events/ProgressBar";
 import DeleteEventConfirmationModal from "../../components/organizer/events/DeleteEventConfirmationModal";
+import CancelEventModal from "../../components/organizer/events/CancelEventModal";
 
 import {
   PlusIcon,
@@ -62,6 +63,29 @@ export default function MyEventsPage() {
 
   const [deleteModalEvent, setDeleteModalEvent] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  const [cancelModalEvent, setCancelModalEvent] = useState(null);
+
+  const handleCancellationSuccess = () => {
+    const targetId = cancelModalEvent?.id || cancelModalEvent?.ID;
+    if (targetId) {
+      setEvents((prev) =>
+        prev.map((ev) => {
+          const id = ev.id || ev.ID;
+          if (id === targetId) {
+            return {
+              ...ev,
+              Status: "CANCELLED",
+              status: "CANCELLED",
+            };
+          }
+          return ev;
+        })
+      );
+    }
+    setReloadKey((k) => k + 1);
+    setCancelModalEvent(null);
+  };
 
   const dropdownRef = useRef(null);
 
@@ -1002,6 +1026,23 @@ export default function MyEventsPage() {
                                   </span>
                                 </button>
                               )}
+
+                              {String(event?.Status || "").toUpperCase() === "PUBLISHED" && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    setCancelModalEvent(event);
+                                  }}
+                                  className="w-full px-3.5 py-2 hover:bg-red-50 text-red-600 flex items-center gap-2 transition-colors cursor-pointer border-t border-[#bcc9c6]/30"
+                                >
+                                  <span>🚫</span>
+
+                                  <span>
+                                    Cancel Event
+                                  </span>
+                                </button>
+                              )}
                             </div>
                           )}
                       </td>
@@ -1129,6 +1170,15 @@ export default function MyEventsPage() {
         onConfirm={handleDeleteConfirm}
         eventTitle={deleteModalEvent?.title || deleteModalEvent?.Title}
         loading={isDeleting}
+      />
+
+      {/* Cancel Event Modal with Impact Preview */}
+      <CancelEventModal
+        isOpen={Boolean(cancelModalEvent)}
+        onClose={() => setCancelModalEvent(null)}
+        eventId={cancelModalEvent?.id || cancelModalEvent?.ID}
+        eventTitle={cancelModalEvent?.title || cancelModalEvent?.Title}
+        onSuccess={handleCancellationSuccess}
       />
     </div>
   );

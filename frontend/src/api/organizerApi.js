@@ -121,3 +121,31 @@ export const publishOrganizerEvent = async (eventId) => {
 
     return response.data;
 };
+
+// Get cancellation impact preview for an organizer event.
+export const getOrganizerEventCancellationPreview = async (eventId) => {
+    const response = await apiClient.get(
+        `/organizers/events/${eventId}/cancellation-preview`
+    );
+
+    return response.data;
+};
+
+// Cancel an event for the authenticated organizer.
+export const cancelOrganizerEvent = async (eventId, reason) => {
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/cancel`,
+        { reason }
+    );
+
+    return response.data;
+};
+
+// Get cancellation status and summary for an organizer event.
+export const getOrganizerEventCancellationStatus = async (eventId) => {
+    const response = await apiClient.get(
+        `/organizers/events/${eventId}/cancellation`
+    );
+
+    return response.data;
+};
