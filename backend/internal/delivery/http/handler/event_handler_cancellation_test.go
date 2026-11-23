@@ -46,6 +46,51 @@ func (m *mockOrgTxRepos) OrganizerRepository() domain.OrganizerRepository { retu
 func (m *mockOrgTxRepos) BookingRepository() domain.BookingRepository     { return m.bookingRepo }
 func (m *mockOrgTxRepos) TicketRepository() domain.TicketRepository       { return m.ticketRepo }
 func (m *mockOrgTxRepos) RefundRepository() domain.RefundRepository       { return m.refundRepo }
+func (m *mockOrgTxRepos) SettlementRepository() domain.SettlementRepository {
+	return &mockOrgSettlementRepo{}
+}
+func (m *mockOrgTxRepos) EventScheduleRepository() domain.EventScheduleRepository {
+	return &mockOrgScheduleRepo{}
+}
+func (m *mockOrgTxRepos) SeatReservationRepository() domain.SeatReservationRepository {
+	return &mockOrgReservationRepo{}
+}
+func (m *mockOrgTxRepos) CheckoutRepository() domain.CheckoutRepository {
+	return nil
+}
+func (m *mockOrgTxRepos) SeatRepository() domain.SeatRepository {
+	return nil
+}
+func (m *mockOrgTxRepos) TicketTypeRepository() domain.TicketTypeRepository {
+	return nil
+}
+
+type mockOrgReservationRepo struct {
+	domain.SeatReservationRepository
+}
+
+func (m *mockOrgReservationRepo) FindActiveByEventID(ctx context.Context, id uuid.UUID) ([]domain.SeatReservation, error) {
+	return nil, nil
+}
+
+type mockOrgSettlementRepo struct {
+	domain.SettlementRepository
+}
+
+func (m *mockOrgSettlementRepo) List(ctx context.Context, filter domain.SettlementFilter) (*domain.SettlementListResult, error) {
+	return &domain.SettlementListResult{Settlements: nil, Total: 0}, nil
+}
+func (m *mockOrgSettlementRepo) Update(ctx context.Context, s *domain.Settlement) error {
+	return nil
+}
+
+type mockOrgScheduleRepo struct {
+	domain.EventScheduleRepository
+}
+
+func (m *mockOrgScheduleRepo) FindByEventID(eventID uuid.UUID) (*domain.EventSchedule, error) {
+	return nil, domain.ErrEventNotFound
+}
 
 type mockOrgEventRepo struct {
 	domain.EventRepository
@@ -235,6 +280,35 @@ func TestEventHandler_OrganizerEventCancellation(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("cancellation fails with 400 when reason is missing", func(t *testing.T) {
+		bodyBytes, _ := json.Marshal(map[string]interface{}{"reason": "   "})
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/organizers/events/"+eventID.String()+"/cancel", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.Equal(t, "cancellation reason is required", resp["message"])
+	})
+
+	t.Run("cancellation fails with 409 when event is already cancelled", func(t *testing.T) {
+		// Event was cancelled in the first subtest
+		bodyBytes, _ := json.Marshal(map[string]interface{}{"reason": "Another cancellation attempt"})
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/organizers/events/"+eventID.String()+"/cancel", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusConflict, w.Code)
+		var resp map[string]interface{}
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		assert.Equal(t, "event is already cancelled", resp["message"])
 	})
 
 	t.Run("owner organizer gets cancellation status successfully", func(t *testing.T) {

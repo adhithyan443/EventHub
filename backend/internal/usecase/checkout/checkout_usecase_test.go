@@ -59,6 +59,15 @@ func (m *mockReservationRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUI
 	}
 	return m.reservation, nil
 }
+func (m *mockReservationRepo) FindActiveByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.SeatReservation, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.reservation != nil && m.reservation.EventID == eventID && m.reservation.Status == domain.ReservationStatusActive {
+		return []domain.SeatReservation{*m.reservation}, nil
+	}
+	return nil, nil
+}
 func (m *mockReservationRepo) CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error) {
 	return 0, nil
 }
@@ -134,11 +143,31 @@ func (m *mockPricingTaxRepo) AcquireAdvisoryLock(ctx context.Context) error {
 	return nil
 }
 
+type mockEventRepo struct {
+	domain.EventRepository
+	events map[uuid.UUID]*domain.Event
+}
+
+func (m *mockEventRepo) FindByID(id uuid.UUID) (*domain.Event, error) {
+	if m == nil || m.events == nil {
+		return nil, domain.ErrEventNotFound
+	}
+	if e, ok := m.events[id]; ok {
+		return e, nil
+	}
+	return nil, domain.ErrEventNotFound
+}
+
 type mockTxRepos struct {
 	domain.TransactionRepositories
 	resRepo        *mockReservationRepo
 	checkoutRepo   *mockCheckoutRepo
 	pricingTaxRepo *mockPricingTaxRepo
+	eventRepo      *mockEventRepo
+}
+
+func (r *mockTxRepos) EventRepository() domain.EventRepository {
+	return r.eventRepo
 }
 
 func (r *mockTxRepos) SeatReservationRepository() domain.SeatReservationRepository {
@@ -433,5 +462,50 @@ func TestCheckoutUsecase_CreateCheckout(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "70.00", chk2.PlatformFee.StringFixed(2))
 		assert.Equal(t, "1070.00", chk2.TotalAmount.StringFixed(2))
+	})
+
+	t.Run("fails when event is cancelled", func(t *testing.T) {
+		evID := uuid.New()
+		resID := uuid.New()
+		resRepo := &mockReservationRepo{
+			reservation: &domain.SeatReservation{
+				ID:        resID,
+				UserID:    userID,
+				EventID:   evID,
+				Status:    domain.ReservationStatusActive,
+				ExpiresAt: now.Add(10 * time.Minute),
+			},
+			items: []domain.SeatReservationItem{
+				{Quantity: 1, Price: decimal.NewFromInt(100)},
+			},
+		}
+		checkoutRepo := &mockCheckoutRepo{}
+		pricingRepo := &mockPricingTaxRepo{config: activePricing}
+		eventRepo := &mockEventRepo{
+			events: map[uuid.UUID]*domain.Event{
+				evID: {
+					ID:     evID,
+					Status: domain.EventStatusCancelled,
+				},
+			},
+		}
+
+		repos := &mockTxRepos{
+			resRepo:        resRepo,
+			checkoutRepo:   checkoutRepo,
+			pricingTaxRepo: pricingRepo,
+			eventRepo:      eventRepo,
+		}
+		txManager := &mockTxManager{repos: repos}
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		uc := NewCheckoutUsecase(txManager, logger)
+
+		chk, err := uc.CreateCheckout(ctx, CreateCheckoutRequest{
+			UserID:        userID,
+			ReservationID: resID,
+		})
+
+		assert.ErrorIs(t, err, domain.ErrEventNotPublic)
+		assert.Nil(t, chk)
 	})
 }

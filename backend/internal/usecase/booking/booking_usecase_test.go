@@ -789,6 +789,63 @@ func TestBookingUsecase_CreateBooking_Success(t *testing.T) {
 	assert.Len(t, repos.bookingRepo.createdItems[0], 1)
 }
 
+func TestBookingUsecase_CreateBooking_CancelledEvent_ReturnsError(t *testing.T) {
+	uc, repos := setupBookingUsecase()
+	ctx := context.Background()
+
+	userID := uuid.New()
+	eventID := uuid.New()
+	reservationID := uuid.New()
+	seatID := uuid.New()
+	checkoutID := uuid.New()
+	now := time.Now()
+
+	// Seed cancelled event
+	repos.eventRepo.events[eventID] = &domain.Event{
+		ID:     eventID,
+		Status: domain.EventStatusCancelled,
+	}
+
+	repos.seatReservationRepo.reservations[reservationID] = &domain.SeatReservation{
+		ID:        reservationID,
+		UserID:    userID,
+		EventID:   eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	repos.seatReservationRepo.items[reservationID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: reservationID,
+			SeatID:        &seatID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(500),
+		},
+	}
+
+	repos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:             checkoutID,
+		ReservationID:  reservationID,
+		UserID:         userID,
+		Subtotal:       decimal.NewFromInt(500),
+		PlatformFee:    decimal.NewFromInt(25),
+		TaxAmount:      decimal.NewFromInt(90),
+		DiscountAmount: decimal.Zero,
+		TotalAmount:    decimal.NewFromInt(615),
+		Status:         domain.CheckoutStatusActive,
+		ExpiresAt:      now.Add(15 * time.Minute),
+	}
+
+	req := bookinguc.CreateBookingRequest{
+		CheckoutID: checkoutID,
+		UserID:     userID,
+	}
+
+	booking, err := uc.CreateBooking(ctx, req)
+	assert.ErrorIs(t, err, domain.ErrEventNotPublic)
+	assert.Nil(t, booking)
+}
+
 func TestBookingUsecase_CreateBooking_Idempotency_ReturnsExisting(t *testing.T) {
 	uc, repos := setupBookingUsecase()
 	ctx := context.Background()

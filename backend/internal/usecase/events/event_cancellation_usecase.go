@@ -58,13 +58,22 @@ func (u *EventCancellationUsecase) CancelEventByOrganizer(
 		return nil, errors.New("event ID cannot be nil")
 	}
 
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		return nil, domain.ErrCancellationReasonRequired
+	}
+	if len(trimmedReason) > 1000 {
+		return nil, domain.ErrCancellationReasonTooLong
+	}
+
 	u.logger.InfoContext(ctx, "organizer_event_cancellation_initiated",
-		slog.String("user_id", userID.String()),
+		slog.String("actor_id", userID.String()),
+		slog.String("actor_role", "organizer"),
 		slog.String("event_id", eventID.String()),
-		slog.String("reason", reason),
+		slog.String("reason", trimmedReason),
 	)
 
-	return u.cancelEventAndGenerateRefunds(ctx, eventID, reason, true, userID)
+	return u.cancelEventAndGenerateRefunds(ctx, eventID, trimmedReason, true, userID)
 }
 
 // CancelEventByAdmin allows platform administrators to cancel an event and generate bulk refunds.
@@ -81,13 +90,22 @@ func (u *EventCancellationUsecase) CancelEventByAdmin(
 		return nil, errors.New("event ID cannot be nil")
 	}
 
+	trimmedReason := strings.TrimSpace(reason)
+	if trimmedReason == "" {
+		return nil, domain.ErrCancellationReasonRequired
+	}
+	if len(trimmedReason) > 1000 {
+		return nil, domain.ErrCancellationReasonTooLong
+	}
+
 	u.logger.InfoContext(ctx, "admin_event_cancellation_initiated",
-		slog.String("admin_id", adminID.String()),
+		slog.String("actor_id", adminID.String()),
+		slog.String("actor_role", "admin"),
 		slog.String("event_id", eventID.String()),
-		slog.String("reason", reason),
+		slog.String("reason", trimmedReason),
 	)
 
-	return u.cancelEventAndGenerateRefunds(ctx, eventID, reason, false, uuid.Nil)
+	return u.cancelEventAndGenerateRefunds(ctx, eventID, trimmedReason, false, adminID)
 }
 
 // GetEventCancellationStatus retrieves real-time event cancellation and refund progress.
@@ -171,31 +189,46 @@ func (u *EventCancellationUsecase) GetEventCancellationStatusForOrganizer(
 func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 	ctx context.Context,
 	eventID uuid.UUID,
-	reason string,
+	trimmedReason string,
 	isOrganizer bool,
-	organizerUserID uuid.UUID,
+	actorID uuid.UUID,
 ) (*domain.EventCancellationSummary, error) {
 	var createdRefundIDs []uuid.UUID
 	var summary *domain.EventCancellationSummary
 
+	actorRole := "admin"
+	if isOrganizer {
+		actorRole = "organizer"
+	}
+
 	err := u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
-		now := time.Now()
+		now := time.Now().UTC()
 
 		var event *domain.Event
 		if isOrganizer {
-			organizer, err := tx.OrganizerRepository().FindByUserID(organizerUserID)
+			organizer, err := tx.OrganizerRepository().FindByUserID(actorID)
 			if err != nil {
 				if errors.Is(err, domain.ErrOrganizerNotFound) {
-					u.logger.WarnContext(ctx, "event_cancel_organizer_not_found", "user_id", organizerUserID)
+					u.logger.WarnContext(ctx, "event_cancel_organizer_not_found",
+						slog.String("actor_id", actorID.String()),
+						slog.String("actor_role", actorRole),
+						slog.String("event_id", eventID.String()),
+					)
 					return ErrUnauthorizedOrganizer
 				}
-				u.logger.ErrorContext(ctx, "event_cancel_organizer_lookup_failed", "user_id", organizerUserID, "error", err)
+				u.logger.ErrorContext(ctx, "event_cancel_organizer_lookup_failed",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.Any("error", err),
+				)
 				return err
 			}
 
 			if organizer.Status != "ACTIVE" {
 				u.logger.WarnContext(ctx, "event_cancel_organizer_inactive",
-					slog.String("user_id", organizerUserID.String()),
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
 					slog.String("organizer_id", organizer.ID.String()),
 					slog.String("status", organizer.Status),
 				)
@@ -212,6 +245,8 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 
 			if lockedEvent.OrganizerID != organizer.ID {
 				u.logger.WarnContext(ctx, "event_cancel_forbidden",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
 					slog.String("event_id", eventID.String()),
 					slog.String("organizer_id", organizer.ID.String()),
 					slog.String("event_organizer_id", lockedEvent.OrganizerID.String()),
@@ -230,49 +265,158 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 			event = lockedEvent
 		}
 
-		trimmedReason := strings.TrimSpace(reason)
-		if trimmedReason == "" {
-			if isOrganizer {
-				trimmedReason = "Event cancelled by organizer"
-			} else {
-				trimmedReason = "Event cancelled by administrator"
+		// 1. Lifecycle state validation
+		if event.Status == domain.EventStatusCancelled {
+			u.logger.WarnContext(ctx, "event_cancel_already_cancelled",
+				slog.String("actor_id", actorID.String()),
+				slog.String("actor_role", actorRole),
+				slog.String("event_id", eventID.String()),
+			)
+			return domain.ErrEventAlreadyCancelled
+		}
+
+		if event.Status == domain.EventStatusDraft {
+			u.logger.WarnContext(ctx, "event_cancel_draft_rejected",
+				slog.String("actor_id", actorID.String()),
+				slog.String("actor_role", actorRole),
+				slog.String("event_id", eventID.String()),
+			)
+			return domain.ErrDraftEventCannotBeCancelled
+		}
+
+		if event.Status != domain.EventStatusPublished {
+			u.logger.WarnContext(ctx, "event_cancel_invalid_status",
+				slog.String("actor_id", actorID.String()),
+				slog.String("actor_role", actorRole),
+				slog.String("event_id", eventID.String()),
+				slog.String("status", event.Status),
+			)
+			return domain.ErrEventCannotBeCancelled
+		}
+
+		// 2. Event schedule / past conclusion check
+		if tx.EventScheduleRepository() != nil {
+			schedule, sErr := tx.EventScheduleRepository().FindByEventID(eventID)
+			if sErr != nil && !errors.Is(sErr, domain.ErrEventNotFound) {
+				u.logger.ErrorContext(ctx, "event_cancel_schedule_lookup_failed",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.Any("error", sErr),
+				)
+				return fmt.Errorf("failed to lookup event schedule: %w", sErr)
+			}
+			if schedule != nil && isEventConcluded(schedule, now) {
+				u.logger.WarnContext(ctx, "event_cancel_concluded_event_rejected",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.Time("event_date", schedule.EventDate),
+				)
+				return domain.ErrPastEventCannotBeCancelled
 			}
 		}
 
-		// Idempotency: If already cancelled, do not alter status or timestamps, but allow
-		// completing any un-generated refunds from interrupted previous attempts.
-		if event.Status != domain.EventStatusCancelled {
-			event.Status = domain.EventStatusCancelled
-			event.UpdatedAt = now
-			if err := tx.EventRepository().Update(event); err != nil {
-				u.logger.ErrorContext(ctx, "event_cancel_update_failed", "event_id", eventID, "error", err)
+		// 3. Settlement Safety checks
+		if tx.SettlementRepository() != nil {
+			settlementResult, sErr := tx.SettlementRepository().List(ctx, domain.SettlementFilter{
+				EventID: &eventID,
+				Limit:   100,
+			})
+			if sErr != nil {
+				u.logger.ErrorContext(ctx, "event_cancel_settlement_lookup_failed",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.Any("error", sErr),
+				)
+				return fmt.Errorf("failed to verify settlement records: %w", sErr)
+			}
+
+			if settlementResult != nil && len(settlementResult.Settlements) > 0 {
+				for _, s := range settlementResult.Settlements {
+					switch s.Status {
+					case domain.SettlementStatusCompleted:
+						u.logger.WarnContext(ctx, "event_cancel_blocked_settlement_completed",
+							slog.String("actor_id", actorID.String()),
+							slog.String("actor_role", actorRole),
+							slog.String("event_id", eventID.String()),
+							slog.String("settlement_id", s.ID.String()),
+							slog.String("amount", s.Amount.String()),
+						)
+						return domain.ErrEventCannotBeCancelledWithCompletedSettlement
+
+					case domain.SettlementStatusApproved, domain.SettlementStatusProcessing:
+						u.logger.WarnContext(ctx, "event_cancel_blocked_settlement_in_flight",
+							slog.String("actor_id", actorID.String()),
+							slog.String("actor_role", actorRole),
+							slog.String("event_id", eventID.String()),
+							slog.String("settlement_id", s.ID.String()),
+							slog.String("status", string(s.Status)),
+							slog.String("amount", s.Amount.String()),
+						)
+						return domain.ErrEventCannotBeCancelledWithActiveSettlement
+
+					case domain.SettlementStatusPending:
+						// Automatically reject pending settlement to safeguard funds
+						s.Status = domain.SettlementStatusRejected
+						s.RejectedAt = &now
+						rejectionMsg := fmt.Sprintf("Automatically rejected due to event cancellation: %s", trimmedReason)
+						s.RejectionReason = &rejectionMsg
+						s.UpdatedAt = now
+						if err := tx.SettlementRepository().Update(ctx, s); err != nil {
+							u.logger.ErrorContext(ctx, "event_cancel_reject_settlement_failed",
+								slog.String("actor_id", actorID.String()),
+								slog.String("actor_role", actorRole),
+								slog.String("event_id", eventID.String()),
+								slog.String("settlement_id", s.ID.String()),
+								slog.Any("error", err),
+							)
+							return fmt.Errorf("failed to reject pending settlement %s: %w", s.ID, err)
+						}
+						u.logger.InfoContext(ctx, "event_cancel_rejected_pending_settlement",
+							slog.String("actor_id", actorID.String()),
+							slog.String("actor_role", actorRole),
+							slog.String("event_id", eventID.String()),
+							slog.String("settlement_id", s.ID.String()),
+						)
+					}
+				}
+			}
+		}
+
+		// 4. Update Event state
+		event.Status = domain.EventStatusCancelled
+		event.UpdatedAt = now
+		if err := tx.EventRepository().Update(event); err != nil {
+			u.logger.ErrorContext(ctx, "event_cancel_update_failed", "event_id", eventID, "error", err)
+			return err
+		}
+
+		cancellation, cErr := tx.EventCancellationRepository().FindByEventID(eventID)
+		if cErr == nil && cancellation != nil {
+			cancellation.CancelledAt = &now
+			cancellation.CancellationReason = &trimmedReason
+			cancellation.UpdatedAt = now
+			if err := tx.EventCancellationRepository().Update(cancellation); err != nil {
+				u.logger.ErrorContext(ctx, "event_cancel_cancellation_record_update_failed", "event_id", eventID, "error", err)
 				return err
 			}
-
-			cancellation, cErr := tx.EventCancellationRepository().FindByEventID(eventID)
-			if cErr == nil && cancellation != nil {
-				cancellation.CancelledAt = &now
-				cancellation.CancellationReason = &trimmedReason
-				cancellation.UpdatedAt = now
-				if err := tx.EventCancellationRepository().Update(cancellation); err != nil {
-					u.logger.ErrorContext(ctx, "event_cancel_cancellation_record_update_failed", "event_id", eventID, "error", err)
-					return err
-				}
-			} else {
-				newCancellation := &domain.EventCancellation{
-					ID:                 uuid.New(),
-					EventID:            eventID,
-					CancelledAt:        &now,
-					CancellationReason: &trimmedReason,
-					RefundPolicy:       domain.RefundPolicyFull,
-					CreatedAt:          now,
-					UpdatedAt:          now,
-				}
-				_ = tx.EventCancellationRepository().Create(newCancellation)
+		} else {
+			newCancellation := &domain.EventCancellation{
+				ID:                 uuid.New(),
+				EventID:            eventID,
+				CancelledAt:        &now,
+				CancellationReason: &trimmedReason,
+				RefundPolicy:       domain.RefundPolicyFull,
+				CreatedAt:          now,
+				UpdatedAt:          now,
 			}
+			_ = tx.EventCancellationRepository().Create(newCancellation)
 		}
 
-		// Retrieve all bookings for this event
+		// 5. Invalidate bookings, cancel tickets, and generate refunds.
+		// Lock order strictly follows Event -> Booking -> SeatReservation to prevent AB-BA deadlocks with payment operations.
 		bookings, err := tx.BookingRepository().FindByEventID(ctx, eventID)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve bookings for cancelled event: %w", err)
@@ -421,6 +565,82 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 			existingRefundsByBooking[booking.ID] = append(existingRefundsByBooking[booking.ID], *pendingRefund)
 		}
 
+		// 6. Invalidate active temporary reservations and release inventory/seat holds
+		var releasedSeatsCount int
+		var releasedTicketsQuantity int
+		var invalidatedReservationsCount int
+
+		if tx.SeatReservationRepository() != nil {
+			activeReservations, rErr := tx.SeatReservationRepository().FindActiveByEventID(ctx, eventID)
+			if rErr != nil {
+				u.logger.ErrorContext(ctx, "event_cancel_active_reservations_lookup_failed",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.Any("error", rErr),
+				)
+				return fmt.Errorf("failed to lookup active reservations for cancelled event: %w", rErr)
+			}
+
+			for _, ar := range activeReservations {
+				lockedRes, lErr := tx.SeatReservationRepository().FindByIDForUpdate(ctx, ar.ID)
+				if lErr != nil {
+					return fmt.Errorf("failed to lock active reservation %s: %w", ar.ID, lErr)
+				}
+				if lockedRes.Status != domain.ReservationStatusActive {
+					continue
+				}
+
+				// If a booking was created concurrently for this reservation before it was locked, cancel it
+				booking, bErr := tx.BookingRepository().FindByReservationID(ctx, lockedRes.ID)
+				if bErr == nil && booking != nil && booking.Status != domain.BookingStatusCancelled {
+					_ = tx.BookingRepository().UpdateStatus(ctx, booking.ID, domain.BookingStatusCancelled)
+				}
+
+				// Expire associated active checkout
+				if tx.CheckoutRepository() != nil {
+					if _, err := tx.CheckoutRepository().ExpireActiveByReservationID(ctx, lockedRes.ID); err != nil {
+						return fmt.Errorf("failed to expire active checkout for reservation %s: %w", lockedRes.ID, err)
+					}
+				}
+
+				// Find reservation items to release seat / GA inventory holds
+				items, iErr := tx.SeatReservationRepository().FindItemsByReservationID(ctx, lockedRes.ID)
+				if iErr != nil {
+					return fmt.Errorf("failed to find items for reservation %s: %w", lockedRes.ID, iErr)
+				}
+
+				for _, item := range items {
+					if item.SeatID != nil && tx.SeatRepository() != nil {
+						if err := tx.SeatRepository().ReleaseReservedSeat(ctx, *item.SeatID); err != nil {
+							return fmt.Errorf("failed to release reserved seat %s: %w", item.SeatID.String(), err)
+						}
+						releasedSeatsCount++
+					} else if item.TicketTypeID != nil && tx.TicketTypeRepository() != nil {
+						if err := tx.TicketTypeRepository().ReleaseReservedQuantity(ctx, *item.TicketTypeID, item.Quantity); err != nil {
+							return fmt.Errorf("failed to release reserved ticket quantity for ticket type %s: %w", item.TicketTypeID.String(), err)
+						}
+						releasedTicketsQuantity += item.Quantity
+					}
+				}
+
+				// Transition reservation status to CANCELLED
+				if err := tx.SeatReservationRepository().UpdateStatus(ctx, lockedRes.ID, domain.ReservationStatusCancelled); err != nil {
+					return fmt.Errorf("failed to cancel reservation %s: %w", lockedRes.ID, err)
+				}
+				invalidatedReservationsCount++
+			}
+
+			u.logger.InfoContext(ctx, "event_cancel_inventory_cleanup_completed",
+				slog.String("actor_id", actorID.String()),
+				slog.String("actor_role", actorRole),
+				slog.String("event_id", eventID.String()),
+				slog.Int("invalidated_reservations", invalidatedReservationsCount),
+				slog.Int("released_seats", releasedSeatsCount),
+				slog.Int("released_ticket_quantity", releasedTicketsQuantity),
+			)
+		}
+
 		s, err := u.buildSummaryInTx(ctx, tx, eventID, event.Title, event.Status)
 		if err != nil {
 			return err
@@ -561,4 +781,34 @@ func (u *EventCancellationUsecase) buildSummaryInTx(
 		SuccessfulRefundCount:     successCount,
 		CompletionStatus:          completionStatus,
 	}, nil
+}
+
+func isEventConcluded(schedule *domain.EventSchedule, now time.Time) bool {
+	if schedule == nil {
+		return false
+	}
+	loc := time.UTC
+	if schedule.EventDate.Location() != nil {
+		loc = schedule.EventDate.Location()
+	}
+
+	var conclusion time.Time
+	if schedule.IsAllDay || schedule.EndTime.IsZero() {
+		conclusion = time.Date(
+			schedule.EventDate.Year(), schedule.EventDate.Month(), schedule.EventDate.Day(),
+			23, 59, 59, 999999999, loc,
+		).UTC()
+	} else {
+		conclusion = time.Date(
+			schedule.EventDate.Year(), schedule.EventDate.Month(), schedule.EventDate.Day(),
+			schedule.EndTime.Hour(), schedule.EndTime.Minute(), schedule.EndTime.Second(),
+			0, loc,
+		).UTC()
+
+		if !schedule.StartTime.IsZero() && schedule.EndTime.Before(schedule.StartTime) {
+			conclusion = conclusion.AddDate(0, 0, 1)
+		}
+	}
+
+	return now.After(conclusion)
 }

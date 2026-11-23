@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,10 +10,20 @@ import (
 )
 
 var (
-	ErrEventNotFound         = errors.New("event not found")
-	ErrEventNotPublic        = errors.New("event is not publicly available")
-	ErrEventAlreadyCancelled = errors.New("event is already cancelled")
+	ErrEventNotFound          = errors.New("event not found")
+	ErrEventNotPublic         = errors.New("event is not publicly available")
+	ErrEventAlreadyCancelled  = errors.New("event is already cancelled")
 	ErrEventCannotBeCancelled = errors.New("event cannot be cancelled")
+
+	// Specific cancellation lifecycle errors
+	ErrDraftEventCannotBeCancelled = fmt.Errorf("%w: draft events cannot be cancelled; delete the draft instead", ErrEventCannotBeCancelled)
+	ErrPastEventCannotBeCancelled  = fmt.Errorf("%w: event has already concluded", ErrEventCannotBeCancelled)
+	ErrCancellationReasonRequired  = errors.New("cancellation reason is required")
+	ErrCancellationReasonTooLong   = errors.New("cancellation reason exceeds maximum length of 1000 characters")
+
+	// Specific cancellation settlement errors
+	ErrEventCannotBeCancelledWithCompletedSettlement = fmt.Errorf("%w: event has completed settlements with disbursed organizer funds", ErrEventCannotBeCancelled)
+	ErrEventCannotBeCancelledWithActiveSettlement    = fmt.Errorf("%w: event has approved or in-flight settlement payouts currently processing", ErrEventCannotBeCancelled)
 )
 
 const (

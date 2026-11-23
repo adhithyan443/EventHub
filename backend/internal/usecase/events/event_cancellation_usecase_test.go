@@ -3,14 +3,19 @@ package events_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	bookinguc "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
+	checkoutuc "github.com/adhithyan443/EventHub/backend/internal/usecase/checkout"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/events"
+	reservationuc "github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -21,10 +26,13 @@ import (
 // --- Test Mocks ---
 
 type mockTxManager struct {
+	mu    sync.Mutex
 	repos *mockTxRepos
 }
 
 func (m *mockTxManager) WithinTransaction(fn func(tx domain.TransactionRepositories) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return fn(m.repos)
 }
 
@@ -37,17 +45,97 @@ type mockTxRepos struct {
 	ticketRepo           *mockTicketRepo
 	paymentRepo          *mockPaymentRepo
 	refundRepo           *mockRefundRepo
+	settlementRepo       *mockSettlementRepo
+	scheduleRepo         *mockScheduleRepo
+	reservationRepo      *mockReservationRepo
+	checkoutRepo         *mockCheckoutRepo
+	seatRepo             *mockSeatRepo
+	ticketTypeRepo       *mockTicketTypeRepo
+	settingRepo          *mockSettingRepo
+	pricingTaxRepo       *mockPricingTaxRepo
 }
 
 func (m *mockTxRepos) EventRepository() domain.EventRepository { return m.eventRepo }
 func (m *mockTxRepos) EventCancellationRepository() domain.EventCancellationRepository {
 	return m.cancellationRepo
 }
-func (m *mockTxRepos) OrganizerRepository() domain.OrganizerRepository { return m.organizerRepo }
-func (m *mockTxRepos) BookingRepository() domain.BookingRepository     { return m.bookingRepo }
-func (m *mockTxRepos) TicketRepository() domain.TicketRepository       { return m.ticketRepo }
-func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository     { return m.paymentRepo }
-func (m *mockTxRepos) RefundRepository() domain.RefundRepository       { return m.refundRepo }
+func (m *mockTxRepos) OrganizerRepository() domain.OrganizerRepository       { return m.organizerRepo }
+func (m *mockTxRepos) BookingRepository() domain.BookingRepository           { return m.bookingRepo }
+func (m *mockTxRepos) TicketRepository() domain.TicketRepository             { return m.ticketRepo }
+func (m *mockTxRepos) PaymentRepository() domain.PaymentRepository           { return m.paymentRepo }
+func (m *mockTxRepos) RefundRepository() domain.RefundRepository             { return m.refundRepo }
+func (m *mockTxRepos) SettlementRepository() domain.SettlementRepository     { return m.settlementRepo }
+func (m *mockTxRepos) EventScheduleRepository() domain.EventScheduleRepository { return m.scheduleRepo }
+func (m *mockTxRepos) SeatReservationRepository() domain.SeatReservationRepository { return m.reservationRepo }
+func (m *mockTxRepos) CheckoutRepository() domain.CheckoutRepository         { return m.checkoutRepo }
+func (m *mockTxRepos) SeatRepository() domain.SeatRepository                 { return m.seatRepo }
+func (m *mockTxRepos) TicketTypeRepository() domain.TicketTypeRepository     { return m.ticketTypeRepo }
+func (m *mockTxRepos) EventSettingRepository() domain.EventSettingRepository { return m.settingRepo }
+func (m *mockTxRepos) PricingTaxConfigurationRepository() domain.PricingTaxConfigurationRepository {
+	return m.pricingTaxRepo
+}
+
+type mockSettlementRepo struct {
+	domain.SettlementRepository
+	mu          sync.Mutex
+	settlements map[uuid.UUID]*domain.Settlement
+	updateErr   error
+}
+
+func newMockSettlementRepo() *mockSettlementRepo {
+	return &mockSettlementRepo{settlements: make(map[uuid.UUID]*domain.Settlement)}
+}
+
+func (m *mockSettlementRepo) List(ctx context.Context, filter domain.SettlementFilter) (*domain.SettlementListResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var matched []*domain.Settlement
+	for _, s := range m.settlements {
+		if filter.EventID != nil && (s.EventID == nil || *s.EventID != *filter.EventID) {
+			continue
+		}
+		if filter.Status != nil && s.Status != *filter.Status {
+			continue
+		}
+		copied := *s
+		matched = append(matched, &copied)
+	}
+	return &domain.SettlementListResult{
+		Settlements: matched,
+		Total:       int64(len(matched)),
+	}, nil
+}
+
+func (m *mockSettlementRepo) Update(ctx context.Context, s *domain.Settlement) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.updateErr != nil {
+		return m.updateErr
+	}
+	copied := *s
+	m.settlements[s.ID] = &copied
+	return nil
+}
+
+type mockScheduleRepo struct {
+	domain.EventScheduleRepository
+	mu        sync.Mutex
+	schedules map[uuid.UUID]*domain.EventSchedule
+}
+
+func newMockScheduleRepo() *mockScheduleRepo {
+	return &mockScheduleRepo{schedules: make(map[uuid.UUID]*domain.EventSchedule)}
+}
+
+func (m *mockScheduleRepo) FindByEventID(eventID uuid.UUID) (*domain.EventSchedule, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.schedules[eventID]; ok {
+		copied := *s
+		return &copied, nil
+	}
+	return nil, domain.ErrEventNotFound
+}
 
 type mockEventRepo struct {
 	domain.EventRepository
@@ -179,6 +267,44 @@ func (m *mockBookingRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status
 	return nil
 }
 
+func (m *mockBookingRepo) Create(ctx context.Context, b *domain.Booking, items []domain.BookingItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *b
+	m.bookings[b.ID] = &copied
+	return nil
+}
+
+func (m *mockBookingRepo) CreateItem(ctx context.Context, item *domain.BookingItem) error {
+	return nil
+}
+
+func (m *mockBookingRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if b, ok := m.bookings[id]; ok {
+		copied := *b
+		return &copied, nil
+	}
+	return nil, domain.ErrBookingNotFound
+}
+
+func (m *mockBookingRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+	return m.FindByID(ctx, id)
+}
+
+func (m *mockBookingRepo) FindByReservationID(ctx context.Context, resID uuid.UUID) (*domain.Booking, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, b := range m.bookings {
+		if b.ReservationID != nil && *b.ReservationID == resID {
+			copied := *b
+			return &copied, nil
+		}
+	}
+	return nil, domain.ErrBookingNotFound
+}
+
 type mockTicketRepo struct {
 	domain.TicketRepository
 	mu      sync.Mutex
@@ -299,6 +425,233 @@ func (m *mockRefundProcessor) GetRefundsByBookingID(ctx context.Context, booking
 	return nil, nil
 }
 
+type mockReservationRepo struct {
+	domain.SeatReservationRepository
+	mu           sync.Mutex
+	reservations map[uuid.UUID]*domain.SeatReservation
+	items        map[uuid.UUID][]domain.SeatReservationItem
+}
+
+func newMockReservationRepo() *mockReservationRepo {
+	return &mockReservationRepo{
+		reservations: make(map[uuid.UUID]*domain.SeatReservation),
+		items:        make(map[uuid.UUID][]domain.SeatReservationItem),
+	}
+}
+
+func (m *mockReservationRepo) FindActiveByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.SeatReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []domain.SeatReservation
+	for _, r := range m.reservations {
+		if r.EventID == eventID && r.Status == domain.ReservationStatusActive {
+			result = append(result, *r)
+		}
+	}
+	return result, nil
+}
+
+func (m *mockReservationRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.SeatReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.reservations[id]; ok {
+		copied := *r
+		return &copied, nil
+	}
+	return nil, domain.ErrSeatReservationNotFound
+}
+
+func (m *mockReservationRepo) FindItemsByReservationID(ctx context.Context, id uuid.UUID) ([]domain.SeatReservationItem, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.items[id], nil
+}
+
+func (m *mockReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if r, ok := m.reservations[id]; ok {
+		r.Status = status
+		return nil
+	}
+	return domain.ErrSeatReservationNotFound
+}
+
+func (m *mockReservationRepo) Create(ctx context.Context, r *domain.SeatReservation) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *r
+	m.reservations[r.ID] = &copied
+	return nil
+}
+
+func (m *mockReservationRepo) CreateItem(ctx context.Context, item *domain.SeatReservationItem) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[item.ReservationID] = append(m.items[item.ReservationID], *item)
+	return nil
+}
+
+type mockCheckoutRepo struct {
+	domain.CheckoutRepository
+	mu        sync.Mutex
+	checkouts map[uuid.UUID]*domain.Checkout
+}
+
+func newMockCheckoutRepo() *mockCheckoutRepo {
+	return &mockCheckoutRepo{
+		checkouts: make(map[uuid.UUID]*domain.Checkout),
+	}
+}
+
+func (m *mockCheckoutRepo) Create(ctx context.Context, c *domain.Checkout) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := *c
+	m.checkouts[c.ID] = &copied
+	return nil
+}
+
+func (m *mockCheckoutRepo) FindByID(ctx context.Context, id uuid.UUID) (*domain.Checkout, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if c, ok := m.checkouts[id]; ok {
+		copied := *c
+		return &copied, nil
+	}
+	return nil, domain.ErrCheckoutNotFound
+}
+
+func (m *mockCheckoutRepo) FindByReservationID(ctx context.Context, resID uuid.UUID) (*domain.Checkout, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.checkouts {
+		if c.ReservationID == resID {
+			copied := *c
+			return &copied, nil
+		}
+	}
+	return nil, domain.ErrCheckoutNotFound
+}
+
+func (m *mockCheckoutRepo) ExpireActiveByReservationID(ctx context.Context, resID uuid.UUID) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	updated := false
+	for _, c := range m.checkouts {
+		if c.ReservationID == resID && c.Status == domain.CheckoutStatusActive {
+			c.Status = domain.CheckoutStatusExpired
+			updated = true
+		}
+	}
+	return updated, nil
+}
+
+type mockSeatRepo struct {
+	domain.SeatRepository
+	mu            sync.Mutex
+	seats         map[uuid.UUID]*domain.Seat
+	releasedSeats []uuid.UUID
+}
+
+func newMockSeatRepo() *mockSeatRepo {
+	return &mockSeatRepo{
+		seats: make(map[uuid.UUID]*domain.Seat),
+	}
+}
+
+func (m *mockSeatRepo) ReleaseReservedSeat(ctx context.Context, seatID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.releasedSeats = append(m.releasedSeats, seatID)
+	if s, ok := m.seats[seatID]; ok {
+		s.Status = domain.SeatStatusAvailable
+	}
+	return nil
+}
+
+type mockTicketTypeRepo struct {
+	domain.TicketTypeRepository
+	mu          sync.Mutex
+	ticketTypes map[uuid.UUID]*domain.TicketType
+	released    map[uuid.UUID]int
+}
+
+func newMockTicketTypeRepo() *mockTicketTypeRepo {
+	return &mockTicketTypeRepo{
+		ticketTypes: make(map[uuid.UUID]*domain.TicketType),
+		released:    make(map[uuid.UUID]int),
+	}
+}
+
+func (m *mockTicketTypeRepo) ReleaseReservedQuantity(ctx context.Context, ttID uuid.UUID, qty int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.released[ttID] += qty
+	if tt, ok := m.ticketTypes[ttID]; ok {
+		tt.AvailableQuantity += qty
+	}
+	return nil
+}
+
+func (m *mockTicketTypeRepo) ReserveQuantityIfAvailable(ctx context.Context, ttID uuid.UUID, qty int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	tt, ok := m.ticketTypes[ttID]
+	if !ok {
+		return domain.ErrTicketTypeNotFound
+	}
+	if tt.AvailableQuantity < qty {
+		return domain.ErrInsufficientTicketQuantity
+	}
+	tt.AvailableQuantity -= qty
+	return nil
+}
+
+func (m *mockTicketTypeRepo) FindByEventID(ctx context.Context, eventID uuid.UUID) ([]*domain.TicketType, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result []*domain.TicketType
+	for _, tt := range m.ticketTypes {
+		if tt.EventID == eventID {
+			copied := *tt
+			result = append(result, &copied)
+		}
+	}
+	return result, nil
+}
+
+type mockSettingRepo struct {
+	domain.EventSettingRepository
+	mu       sync.Mutex
+	settings map[uuid.UUID]*domain.EventSetting
+}
+
+func newMockSettingRepo() *mockSettingRepo {
+	return &mockSettingRepo{settings: make(map[uuid.UUID]*domain.EventSetting)}
+}
+
+func (m *mockSettingRepo) FindByEventID(eventID uuid.UUID) (*domain.EventSetting, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.settings[eventID]; ok {
+		copied := *s
+		return &copied, nil
+	}
+	return nil, domain.ErrEventNotFound
+}
+
+type mockPricingTaxRepo struct {
+	domain.PricingTaxConfigurationRepository
+}
+
+func (m *mockPricingTaxRepo) FindActiveAt(ctx context.Context, t time.Time) (*domain.PricingTaxConfiguration, error) {
+	return &domain.PricingTaxConfiguration{
+		PlatformFeeEnabled: false,
+		TaxEnabled:         false,
+	}, nil
+}
+
 // --- Test Fixture ---
 
 type cancellationFixture struct {
@@ -326,6 +679,14 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 	ticketRepo := newMockTicketRepo()
 	paymentRepo := newMockPaymentRepo()
 	refundRepo := newMockRefundRepo()
+	settlementRepo := newMockSettlementRepo()
+	scheduleRepo := newMockScheduleRepo()
+	reservationRepo := newMockReservationRepo()
+	checkoutRepo := newMockCheckoutRepo()
+	seatRepo := newMockSeatRepo()
+	ticketTypeRepo := newMockTicketTypeRepo()
+	settingRepo := newMockSettingRepo()
+	pricingTaxRepo := &mockPricingTaxRepo{}
 
 	txRepos := &mockTxRepos{
 		eventRepo:        eventRepo,
@@ -335,6 +696,14 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 		ticketRepo:       ticketRepo,
 		paymentRepo:      paymentRepo,
 		refundRepo:       refundRepo,
+		settlementRepo:   settlementRepo,
+		scheduleRepo:     scheduleRepo,
+		reservationRepo:  reservationRepo,
+		checkoutRepo:     checkoutRepo,
+		seatRepo:         seatRepo,
+		ticketTypeRepo:   ticketTypeRepo,
+		settingRepo:      settingRepo,
+		pricingTaxRepo:   pricingTaxRepo,
 	}
 
 	txMgr := &mockTxManager{repos: txRepos}
@@ -350,8 +719,8 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 	}
 	organizerRepo.organizers[orgID] = organizer
 
-	// Setup published event
-	now := time.Now()
+	// Setup published event with future schedule
+	now := time.Now().UTC()
 	event := &domain.Event{
 		ID:          evID,
 		OrganizerID: orgID,
@@ -361,6 +730,16 @@ func newCancellationFixture(t *testing.T) *cancellationFixture {
 		UpdatedAt:   now.Add(-24 * time.Hour),
 	}
 	eventRepo.events[evID] = event
+
+	schedule := &domain.EventSchedule{
+		ID:        uuid.New(),
+		EventID:   evID,
+		EventDate: now.Add(48 * time.Hour),
+		StartTime: now.Add(48 * time.Hour),
+		EndTime:   now.Add(52 * time.Hour),
+		IsAllDay:  false,
+	}
+	scheduleRepo.schedules[evID] = schedule
 
 	cancellationSetting := &domain.EventCancellation{
 		ID:                  uuid.New(),
@@ -518,21 +897,266 @@ func TestEventCancellationUsecase_CancelEventByOrganizer_InactiveOrganizer_Rejec
 	assert.Nil(t, summary)
 }
 
-func TestEventCancellationUsecase_CancelEvent_Idempotency(t *testing.T) {
+func TestEventCancellationUsecase_CancelEvent_AlreadyCancelled_ReturnsError(t *testing.T) {
 	f := newCancellationFixture(t)
 	ctx := context.Background()
 
-	// 1st cancel call
+	// 1st cancel call succeeds
 	sum1, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Initial cancellation")
 	require.NoError(t, err)
 	assert.Equal(t, domain.EventStatusCancelled, sum1.EventStatus)
 
-	// 2nd cancel call (idempotent)
+	// 2nd cancel call returns ErrEventAlreadyCancelled
 	sum2, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Repeated cancel call")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrEventAlreadyCancelled))
+	assert.Nil(t, sum2)
+}
+
+func TestEventCancellationUsecase_CancelEvent_DraftEvent_Rejected(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Set event status to DRAFT
+	f.event.Status = domain.EventStatusDraft
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Try to cancel draft")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrDraftEventCannotBeCancelled))
+	assert.True(t, errors.Is(err, domain.ErrEventCannotBeCancelled))
+	assert.Nil(t, summary)
+	assert.Equal(t, domain.EventStatusDraft, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_PastConcludedEvent_Rejected(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Set schedule in the past
+	now := time.Now().UTC()
+	f.txRepos.scheduleRepo.schedules[f.eventID] = &domain.EventSchedule{
+		ID:        uuid.New(),
+		EventID:   f.eventID,
+		EventDate: now.Add(-72 * time.Hour),
+		StartTime: now.Add(-72 * time.Hour),
+		EndTime:   now.Add(-68 * time.Hour),
+		IsAllDay:  false,
+	}
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Try to cancel past event")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrPastEventCannotBeCancelled))
+	assert.True(t, errors.Is(err, domain.ErrEventCannotBeCancelled))
+	assert.Nil(t, summary)
+	assert.Equal(t, domain.EventStatusPublished, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_MissingReason_Rejected(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Empty reason
+	sum1, err1 := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "")
+	require.Error(t, err1)
+	assert.True(t, errors.Is(err1, domain.ErrCancellationReasonRequired))
+	assert.Nil(t, sum1)
+
+	// Whitespace-only reason
+	sum2, err2 := f.usecase.CancelEventByAdmin(ctx, uuid.New(), f.eventID, "    ")
+	require.Error(t, err2)
+	assert.True(t, errors.Is(err2, domain.ErrCancellationReasonRequired))
+	assert.Nil(t, sum2)
+
+	assert.Equal(t, domain.EventStatusPublished, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_ReasonTooLong_Rejected(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	tooLong := strings.Repeat("a", 1001)
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, tooLong)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrCancellationReasonTooLong))
+	assert.Nil(t, summary)
+	assert.Equal(t, domain.EventStatusPublished, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_CompletedSettlement_BlocksCancellation(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Add completed settlement for this event
+	settlementID := uuid.New()
+	completedSettlement := &domain.Settlement{
+		ID:          settlementID,
+		OrganizerID: f.organizerID,
+		EventID:     &f.eventID,
+		Amount:      decimal.NewFromInt(5000),
+		Currency:    "INR",
+		Status:      domain.SettlementStatusCompleted,
+		CreatedAt:   time.Now().UTC().Add(-24 * time.Hour),
+		UpdatedAt:   time.Now().UTC().Add(-24 * time.Hour),
+	}
+	f.txRepos.settlementRepo.settlements[settlementID] = completedSettlement
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Venue issue")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrEventCannotBeCancelledWithCompletedSettlement))
+	assert.True(t, errors.Is(err, domain.ErrEventCannotBeCancelled))
+	assert.Nil(t, summary)
+	assert.Equal(t, domain.EventStatusPublished, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_ApprovedSettlement_BlocksCancellation(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Add approved settlement
+	settlementID := uuid.New()
+	approvedSettlement := &domain.Settlement{
+		ID:          settlementID,
+		OrganizerID: f.organizerID,
+		EventID:     &f.eventID,
+		Amount:      decimal.NewFromInt(3000),
+		Currency:    "INR",
+		Status:      domain.SettlementStatusApproved,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	f.txRepos.settlementRepo.settlements[settlementID] = approvedSettlement
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Venue issue")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrEventCannotBeCancelledWithActiveSettlement))
+	assert.Nil(t, summary)
+	assert.Equal(t, domain.EventStatusPublished, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_ProcessingSettlement_BlocksCancellation(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Add processing settlement
+	settlementID := uuid.New()
+	procSettlement := &domain.Settlement{
+		ID:          settlementID,
+		OrganizerID: f.organizerID,
+		EventID:     &f.eventID,
+		Amount:      decimal.NewFromInt(3000),
+		Currency:    "INR",
+		Status:      domain.SettlementStatusProcessing,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	f.txRepos.settlementRepo.settlements[settlementID] = procSettlement
+
+	summary, err := f.usecase.CancelEventByAdmin(ctx, uuid.New(), f.eventID, "Admin cancellation")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, domain.ErrEventCannotBeCancelledWithActiveSettlement))
+	assert.Nil(t, summary)
+	assert.Equal(t, domain.EventStatusPublished, f.event.Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_PendingSettlement_SafelyRejected(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Add pending settlement for this event
+	settlementID := uuid.New()
+	pendingSettlement := &domain.Settlement{
+		ID:          settlementID,
+		OrganizerID: f.organizerID,
+		EventID:     &f.eventID,
+		Amount:      decimal.NewFromInt(2500),
+		Currency:    "INR",
+		Status:      domain.SettlementStatusPending,
+		CreatedAt:   time.Now().UTC().Add(-2 * time.Hour),
+		UpdatedAt:   time.Now().UTC().Add(-2 * time.Hour),
+	}
+	f.txRepos.settlementRepo.settlements[settlementID] = pendingSettlement
+
+	reason := "Emergency government curfew imposed"
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, reason)
 	require.NoError(t, err)
-	assert.Equal(t, domain.EventStatusCancelled, sum2.EventStatus)
-	assert.Equal(t, sum1.CancelledAt, sum2.CancelledAt)
-	assert.Equal(t, 0, len(f.txRepos.refundRepo.refunds)) // No tickets existed, 0 refunds created
+	require.NotNil(t, summary)
+	assert.Equal(t, domain.EventStatusCancelled, summary.EventStatus)
+
+	// Verify pending settlement was safely rejected with audit history
+	updatedSettlement := f.txRepos.settlementRepo.settlements[settlementID]
+	require.NotNil(t, updatedSettlement)
+	assert.Equal(t, domain.SettlementStatusRejected, updatedSettlement.Status)
+	require.NotNil(t, updatedSettlement.RejectedAt)
+	require.NotNil(t, updatedSettlement.RejectionReason)
+	assert.Contains(t, *updatedSettlement.RejectionReason, "Automatically rejected due to event cancellation")
+	assert.Contains(t, *updatedSettlement.RejectionReason, reason)
+}
+
+func TestEventCancellationUsecase_CancelEvent_ConcurrentRequests_PreventDuplicates(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	results := make(chan error, 5)
+
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			_, err := f.usecase.CancelEventByOrganizer(
+				ctx,
+				f.organizerUserID,
+				f.eventID,
+				fmt.Sprintf("Concurrent cancellation attempt %d", idx),
+			)
+			results <- err
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	successCount := 0
+	alreadyCancelledCount := 0
+	for err := range results {
+		if err == nil {
+			successCount++
+		} else if errors.Is(err, domain.ErrEventAlreadyCancelled) {
+			alreadyCancelledCount++
+		}
+	}
+
+	// Exactly one request must succeed, all other serialized concurrent attempts must be rejected with ErrEventAlreadyCancelled
+	assert.Equal(t, 1, successCount)
+	assert.Equal(t, 4, alreadyCancelledCount)
+	assert.Equal(t, domain.EventStatusCancelled, f.txRepos.eventRepo.events[f.eventID].Status)
+}
+
+func TestEventCancellationUsecase_CancelEvent_TransactionRollback_OnFailure(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	// Inject settlement repository error
+	f.txRepos.settlementRepo.updateErr = errors.New("simulated database failure during settlement rejection")
+
+	// Add pending settlement that triggers update
+	settlementID := uuid.New()
+	pendingSettlement := &domain.Settlement{
+		ID:          settlementID,
+		OrganizerID: f.organizerID,
+		EventID:     &f.eventID,
+		Amount:      decimal.NewFromInt(1500),
+		Currency:    "INR",
+		Status:      domain.SettlementStatusPending,
+		CreatedAt:   time.Now().UTC(),
+		UpdatedAt:   time.Now().UTC(),
+	}
+	f.txRepos.settlementRepo.settlements[settlementID] = pendingSettlement
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Curfew declared")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "simulated database failure")
+	assert.Nil(t, summary)
 }
 
 func TestEventCancellationUsecase_CancelEvent_PartialCustomerCancellation_RemainingTicketsRefunded(t *testing.T) {
@@ -819,4 +1443,471 @@ func TestEventCancellationUsecase_ShutdownActive_DispatchRejected_RefundRemainsP
 		}
 	}
 	assert.True(t, pendingRefundFound, "Refund must remain in PENDING status in DB awaiting reconciliation worker")
+}
+
+func TestEventCancellationUsecase_ActiveReservationsAndInventoryCleanedUp(t *testing.T) {
+	ctx := context.Background()
+	f := newCancellationFixture(t)
+
+	// 1. Setup active seat reservation
+	seatID := uuid.New()
+	f.txRepos.seatRepo.seats[seatID] = &domain.Seat{
+		ID:     seatID,
+		Status: domain.SeatStatusReserved,
+	}
+
+	seatResID := uuid.New()
+	seatUserID := uuid.New()
+	f.txRepos.reservationRepo.reservations[seatResID] = &domain.SeatReservation{
+		ID:        seatResID,
+		UserID:    seatUserID,
+		EventID:   f.eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: time.Now().Add(15 * time.Minute),
+	}
+	f.txRepos.reservationRepo.items[seatResID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: seatResID,
+			SeatID:        &seatID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(150),
+		},
+	}
+
+	seatCheckoutID := uuid.New()
+	f.txRepos.checkoutRepo.checkouts[seatCheckoutID] = &domain.Checkout{
+		ID:            seatCheckoutID,
+		ReservationID: seatResID,
+		UserID:        seatUserID,
+		Status:        domain.CheckoutStatusActive,
+		ExpiresAt:     time.Now().Add(15 * time.Minute),
+	}
+
+	// 2. Setup active GA reservation
+	ttID := uuid.New()
+	f.txRepos.ticketTypeRepo.ticketTypes[ttID] = &domain.TicketType{
+		ID:                ttID,
+		EventID:           f.eventID,
+		TotalQuantity:     50,
+		AvailableQuantity: 10,
+	}
+
+	gaResID := uuid.New()
+	gaUserID := uuid.New()
+	f.txRepos.reservationRepo.reservations[gaResID] = &domain.SeatReservation{
+		ID:        gaResID,
+		UserID:    gaUserID,
+		EventID:   f.eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+	f.txRepos.reservationRepo.items[gaResID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: gaResID,
+			TicketTypeID:  &ttID,
+			Quantity:      3,
+			Price:         decimal.NewFromInt(50),
+		},
+	}
+
+	gaCheckoutID := uuid.New()
+	f.txRepos.checkoutRepo.checkouts[gaCheckoutID] = &domain.Checkout{
+		ID:            gaCheckoutID,
+		ReservationID: gaResID,
+		UserID:        gaUserID,
+		Status:        domain.CheckoutStatusActive,
+		ExpiresAt:     time.Now().Add(10 * time.Minute),
+	}
+
+	// 3. Setup an already cancelled reservation to ensure it is not touched
+	alreadyCancelledResID := uuid.New()
+	f.txRepos.reservationRepo.reservations[alreadyCancelledResID] = &domain.SeatReservation{
+		ID:        alreadyCancelledResID,
+		UserID:    uuid.New(),
+		EventID:   f.eventID,
+		Status:    domain.ReservationStatusCancelled,
+		ExpiresAt: time.Now().Add(-5 * time.Minute),
+	}
+
+	// Execute event cancellation
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Venue double-booked")
+	require.NoError(t, err)
+	assert.NotNil(t, summary)
+
+	// Verify event status
+	f.txRepos.eventRepo.mu.Lock()
+	assert.Equal(t, domain.EventStatusCancelled, f.txRepos.eventRepo.events[f.eventID].Status)
+	f.txRepos.eventRepo.mu.Unlock()
+
+	// Verify reservations transitioned to CANCELLED
+	f.txRepos.reservationRepo.mu.Lock()
+	assert.Equal(t, domain.ReservationStatusCancelled, f.txRepos.reservationRepo.reservations[seatResID].Status)
+	assert.Equal(t, domain.ReservationStatusCancelled, f.txRepos.reservationRepo.reservations[gaResID].Status)
+	assert.Equal(t, domain.ReservationStatusCancelled, f.txRepos.reservationRepo.reservations[alreadyCancelledResID].Status)
+	f.txRepos.reservationRepo.mu.Unlock()
+
+	// Verify active checkouts transitioned to EXPIRED
+	f.txRepos.checkoutRepo.mu.Lock()
+	assert.Equal(t, domain.CheckoutStatusExpired, f.txRepos.checkoutRepo.checkouts[seatCheckoutID].Status)
+	assert.Equal(t, domain.CheckoutStatusExpired, f.txRepos.checkoutRepo.checkouts[gaCheckoutID].Status)
+	f.txRepos.checkoutRepo.mu.Unlock()
+
+	// Verify reserved seat was released to AVAILABLE
+	f.txRepos.seatRepo.mu.Lock()
+	assert.Equal(t, domain.SeatStatusAvailable, f.txRepos.seatRepo.seats[seatID].Status)
+	assert.Contains(t, f.txRepos.seatRepo.releasedSeats, seatID)
+	f.txRepos.seatRepo.mu.Unlock()
+
+	// Verify GA ticket quantity was released (10 + 3 = 13)
+	f.txRepos.ticketTypeRepo.mu.Lock()
+	assert.Equal(t, 13, f.txRepos.ticketTypeRepo.ticketTypes[ttID].AvailableQuantity)
+	assert.Equal(t, 3, f.txRepos.ticketTypeRepo.released[ttID])
+	f.txRepos.ticketTypeRepo.mu.Unlock()
+}
+
+func TestEventCancellationUsecase_BookedSeatsAndConfirmedInventoryPreserved(t *testing.T) {
+	ctx := context.Background()
+	f := newCancellationFixture(t)
+
+	// Booked seat
+	seatID := uuid.New()
+	f.txRepos.seatRepo.seats[seatID] = &domain.Seat{
+		ID:     seatID,
+		Status: domain.SeatStatusBooked,
+	}
+
+	// Ticket type with sold/booked tickets (total 50, available 40 -> 10 sold)
+	ttID := uuid.New()
+	f.txRepos.ticketTypeRepo.ticketTypes[ttID] = &domain.TicketType{
+		ID:                ttID,
+		EventID:           f.eventID,
+		TotalQuantity:     50,
+		AvailableQuantity: 40,
+	}
+
+	// Confirmed booking with 1 valid ticket and booked seat
+	bID := uuid.New()
+	tID := uuid.New()
+	pID := uuid.New()
+
+	f.txRepos.bookingRepo.bookings[bID] = &domain.Booking{
+		ID:          bID,
+		EventID:     f.eventID,
+		Status:      domain.BookingStatusConfirmed,
+		Total:       decimal.NewFromInt(100),
+		Subtotal:    decimal.NewFromInt(100),
+		PlatformFee: decimal.Zero,
+		Tax:         decimal.Zero,
+	}
+	f.txRepos.ticketRepo.tickets[tID] = &domain.Ticket{
+		ID:        tID,
+		BookingID: bID,
+		EventID:   f.eventID,
+		Price:     decimal.NewFromInt(100),
+		Status:    domain.TicketStatusValid,
+	}
+
+	gatewayTxID := "pay_confirmed_preserve_111"
+	f.txRepos.paymentRepo.payments[pID.String()] = &domain.Payment{
+		ID:            pID.String(),
+		BookingID:     bID.String(),
+		Amount:        decimal.NewFromInt(100),
+		Status:        domain.PaymentStatusSuccess,
+		TransactionID: &gatewayTxID,
+	}
+
+	// Execute event cancellation
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Extreme weather forecast")
+	require.NoError(t, err)
+	assert.NotNil(t, summary)
+
+	// Booking and ticket must be cancelled
+	f.txRepos.bookingRepo.mu.Lock()
+	assert.Equal(t, domain.BookingStatusCancelled, f.txRepos.bookingRepo.bookings[bID].Status)
+	f.txRepos.bookingRepo.mu.Unlock()
+
+	f.txRepos.ticketRepo.mu.Lock()
+	assert.Equal(t, domain.TicketStatusCancelled, f.txRepos.ticketRepo.tickets[tID].Status)
+	f.txRepos.ticketRepo.mu.Unlock()
+
+	// CRITICAL: Booked seat must NOT be released back to AVAILABLE. It must remain BOOKED to preserve audit history!
+	f.txRepos.seatRepo.mu.Lock()
+	assert.Equal(t, domain.SeatStatusBooked, f.txRepos.seatRepo.seats[seatID].Status)
+	assert.NotContains(t, f.txRepos.seatRepo.releasedSeats, seatID)
+	f.txRepos.seatRepo.mu.Unlock()
+
+	// CRITICAL: Ticket type available quantity must NOT be incremented for confirmed bookings (retaining tickets_sold analytics)
+	f.txRepos.ticketTypeRepo.mu.Lock()
+	assert.Equal(t, 40, f.txRepos.ticketTypeRepo.ticketTypes[ttID].AvailableQuantity)
+	assert.Equal(t, 0, f.txRepos.ticketTypeRepo.released[ttID])
+	f.txRepos.ticketTypeRepo.mu.Unlock()
+}
+
+func TestEventCancellation_Concurrency_RacingWithReservationCreation(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	resLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	resUC := reservationuc.NewReservationUsecase(f.txManager, resLogger)
+
+	ttID := uuid.New()
+	f.txRepos.ticketTypeRepo.ticketTypes[ttID] = &domain.TicketType{
+		ID:                ttID,
+		EventID:           f.eventID,
+		TotalQuantity:     100,
+		AvailableQuantity: 100,
+	}
+
+	setting := &domain.EventSetting{
+		EventID:             f.eventID,
+		BookingLimitPerUser: 10,
+	}
+	f.txRepos.settingRepo.settings[f.eventID] = setting
+
+	const concurrentWorkers = 8
+	var wg sync.WaitGroup
+	resErrors := make([]error, concurrentWorkers)
+	resResults := make([]*domain.SeatReservation, concurrentWorkers)
+
+	startBarrier := make(chan struct{})
+
+	for i := 0; i < concurrentWorkers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-startBarrier
+			req := reservationuc.CreateReservationRequest{
+				UserID:  uuid.New(),
+				EventID: f.eventID,
+				Tickets: []reservationuc.TicketSelection{
+					{TicketTypeID: ttID, Quantity: 2},
+				},
+			}
+			res, err := resUC.CreateReservation(ctx, req)
+			resResults[idx] = res
+			resErrors[idx] = err
+		}(i)
+	}
+
+	var cancelErr error
+	var cancelSummary *domain.EventCancellationSummary
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		cancelSummary, cancelErr = f.usecase.CancelEventByOrganizer(
+			ctx,
+			f.organizerUserID,
+			f.eventID,
+			"Concurrent cancellation with reservation",
+		)
+	}()
+
+	close(startBarrier)
+	wg.Wait()
+
+	require.NoError(t, cancelErr)
+	assert.NotNil(t, cancelSummary)
+
+	// Invariants:
+	// 1. Any reservation serialized after cancellation must return ErrEventNotPublic
+	// 2. Any reservation committed before cancellation must be transitioned to CANCELLED
+	// 3. Exactly zero active reservations must remain for this event
+	activeCount := 0
+	f.txRepos.reservationRepo.mu.Lock()
+	for _, r := range f.txRepos.reservationRepo.reservations {
+		if r.EventID == f.eventID && r.Status == domain.ReservationStatusActive {
+			activeCount++
+		}
+	}
+	f.txRepos.reservationRepo.mu.Unlock()
+	assert.Equal(t, 0, activeCount, "No active reservation can remain after event cancellation")
+
+	// 4. Ticket inventory must be completely restored to 100
+	f.txRepos.ticketTypeRepo.mu.Lock()
+	assert.Equal(t, 100, f.txRepos.ticketTypeRepo.ticketTypes[ttID].AvailableQuantity, "Ticket quantity must be completely restored")
+	f.txRepos.ticketTypeRepo.mu.Unlock()
+}
+
+func TestEventCancellation_Concurrency_RacingWithCheckoutCreation(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	checkoutLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checkoutUC := checkoutuc.NewCheckoutUsecase(f.txManager, checkoutLogger)
+
+	// Setup active reservation
+	resID := uuid.New()
+	userID := uuid.New()
+	f.txRepos.reservationRepo.reservations[resID] = &domain.SeatReservation{
+		ID:        resID,
+		UserID:    userID,
+		EventID:   f.eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: time.Now().Add(15 * time.Minute),
+	}
+	f.txRepos.reservationRepo.items[resID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: resID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(100),
+		},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	startBarrier := make(chan struct{})
+
+	var checkoutErr error
+	var chk *domain.Checkout
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		chk, checkoutErr = checkoutUC.CreateCheckout(ctx, checkoutuc.CreateCheckoutRequest{
+			ReservationID: resID,
+			UserID:        userID,
+		})
+	}()
+
+	var cancelErr error
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		_, cancelErr = f.usecase.CancelEventByOrganizer(
+			ctx,
+			f.organizerUserID,
+			f.eventID,
+			"Cancellation racing with checkout",
+		)
+	}()
+
+	close(startBarrier)
+	wg.Wait()
+
+	require.NoError(t, cancelErr)
+
+	// Invariants:
+	// 1. Reservation must be CANCELLED
+	f.txRepos.reservationRepo.mu.Lock()
+	assert.Equal(t, domain.ReservationStatusCancelled, f.txRepos.reservationRepo.reservations[resID].Status)
+	f.txRepos.reservationRepo.mu.Unlock()
+
+	// 2. In NO case can any checkout remain in ACTIVE status
+	f.txRepos.checkoutRepo.mu.Lock()
+	for _, c := range f.txRepos.checkoutRepo.checkouts {
+		if c.ReservationID == resID {
+			assert.Equal(t, domain.CheckoutStatusExpired, c.Status, "Checkout must be expired after cancellation")
+		}
+	}
+	f.txRepos.checkoutRepo.mu.Unlock()
+
+	if checkoutErr != nil {
+		assert.True(t, errors.Is(checkoutErr, domain.ErrEventNotPublic) || errors.Is(checkoutErr, domain.ErrInvalidReservationRequest))
+	} else {
+		require.NotNil(t, chk)
+		f.txRepos.checkoutRepo.mu.Lock()
+		dbChk := f.txRepos.checkoutRepo.checkouts[chk.ID]
+		f.txRepos.checkoutRepo.mu.Unlock()
+		assert.Equal(t, domain.CheckoutStatusExpired, dbChk.Status)
+	}
+}
+
+func TestEventCancellation_Concurrency_RacingWithBookingCreation(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	bookingLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	bookingUC := bookinguc.NewBookingUsecase(f.txManager, nil, bookingLogger)
+
+	// Setup active reservation and active checkout
+	resID := uuid.New()
+	userID := uuid.New()
+	checkoutID := uuid.New()
+	now := time.Now()
+
+	f.txRepos.reservationRepo.reservations[resID] = &domain.SeatReservation{
+		ID:        resID,
+		UserID:    userID,
+		EventID:   f.eventID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: now.Add(15 * time.Minute),
+	}
+	f.txRepos.reservationRepo.items[resID] = []domain.SeatReservationItem{
+		{
+			ID:            uuid.New(),
+			ReservationID: resID,
+			Quantity:      1,
+			Price:         decimal.NewFromInt(100),
+		},
+	}
+
+	f.txRepos.checkoutRepo.checkouts[checkoutID] = &domain.Checkout{
+		ID:             checkoutID,
+		ReservationID:  resID,
+		UserID:         userID,
+		Subtotal:       decimal.NewFromInt(100),
+		PlatformFee:    decimal.Zero,
+		TaxAmount:      decimal.Zero,
+		DiscountAmount: decimal.Zero,
+		TotalAmount:    decimal.NewFromInt(100),
+		Status:         domain.CheckoutStatusActive,
+		ExpiresAt:      now.Add(15 * time.Minute),
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	startBarrier := make(chan struct{})
+
+	var bookingErr error
+	var bkg *domain.Booking
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		bkg, bookingErr = bookingUC.CreateBooking(ctx, bookinguc.CreateBookingRequest{
+			CheckoutID: checkoutID,
+			UserID:     userID,
+		})
+	}()
+
+	var cancelErr error
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		_, cancelErr = f.usecase.CancelEventByOrganizer(
+			ctx,
+			f.organizerUserID,
+			f.eventID,
+			"Cancellation racing with booking",
+		)
+	}()
+
+	close(startBarrier)
+	wg.Wait()
+
+	require.NoError(t, cancelErr)
+
+	// Invariants:
+	// 1. Any booking created before cancellation must be CANCELLED by event cancellation
+	// 2. If cancellation committed first, CreateBooking must return ErrEventNotPublic or ErrInvalidReservationRequest
+	// 3. ZERO bookings in PENDING or CONFIRMED status can remain
+	f.txRepos.bookingRepo.mu.Lock()
+	for _, b := range f.txRepos.bookingRepo.bookings {
+		if b.EventID == f.eventID {
+			assert.Equal(t, domain.BookingStatusCancelled, b.Status, "All bookings for cancelled event must be CANCELLED")
+		}
+	}
+	f.txRepos.bookingRepo.mu.Unlock()
+
+	if bookingErr != nil {
+		assert.True(t, errors.Is(bookingErr, domain.ErrEventNotPublic) || errors.Is(bookingErr, domain.ErrInvalidReservationRequest))
+	} else {
+		require.NotNil(t, bkg)
+		f.txRepos.bookingRepo.mu.Lock()
+		dbBkg := f.txRepos.bookingRepo.bookings[bkg.ID]
+		f.txRepos.bookingRepo.mu.Unlock()
+		assert.Equal(t, domain.BookingStatusCancelled, dbBkg.Status)
+	}
 }

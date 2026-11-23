@@ -17,8 +17,12 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/database"
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
+	domainfinance "github.com/adhithyan443/EventHub/backend/internal/domain/finance"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
+	bookinguc "github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
+	eventsuc "github.com/adhithyan443/EventHub/backend/internal/usecase/events"
+	paymentuc "github.com/adhithyan443/EventHub/backend/internal/usecase/payment"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
@@ -242,7 +246,7 @@ func getUniqueCounter() int64 {
 	counterMu.Lock()
 	defer counterMu.Unlock()
 	userCounter++
-	return userCounter
+	return (time.Now().UnixNano()/1000 + userCounter)%9000000000 + 1000000000
 }
 
 // createTestUser creates an active user with the specified role.
@@ -254,7 +258,7 @@ func createTestUser(t *testing.T, db *gorm.DB, role string) *models.UserModel {
 		ID:           uid,
 		FullName:     fmt.Sprintf("User %s", uid.String()[:8]),
 		Email:        fmt.Sprintf("test_%s@example.com", uid.String()),
-		Phone:        fmt.Sprintf("+91%010d", c+1000000000),
+		Phone:        fmt.Sprintf("+91%010d", c),
 		PasswordHash: "hashed_secret",
 		Role:         role,
 		Status:       "ACTIVE",
@@ -799,4 +803,255 @@ func TestConcurrentCancellation_IdempotentRelease(t *testing.T) {
 	t.Cleanup(func() {
 		_ = db.Where("id = ?", res.ID).Delete(&models.SeatReservationModel{}).Error
 	})
+}
+
+type mockPostgresPaymentProvider struct{}
+
+func (m *mockPostgresPaymentProvider) Initiate(ctx context.Context, amount decimal.Decimal, currency string, idempotencyKey string) (string, error) {
+	return "order_" + uuid.New().String()[:8], nil
+}
+
+func (m *mockPostgresPaymentProvider) Verify(ctx context.Context, providerOrderID, paymentID, signature string, expectedAmount decimal.Decimal, currency string) (bool, error) {
+	return true, nil
+}
+
+func (m *mockPostgresPaymentProvider) VerifyWebhookSignature(body []byte, signature string) bool {
+	return true
+}
+
+func (m *mockPostgresPaymentProvider) FindOrderByReceipt(ctx context.Context, receipt string, expectedAmount decimal.Decimal, currency string) (*paymentuc.ProviderOrder, error) {
+	return nil, domain.ErrPaymentNotFound
+}
+
+func (m *mockPostgresPaymentProvider) CheckOrderStatus(ctx context.Context, providerOrderID string, expectedAmount decimal.Decimal, currency string) (*paymentuc.ProviderOrder, error) {
+	return &paymentuc.ProviderOrder{
+		ID:       providerOrderID,
+		Status:   paymentuc.OrderStatusPaid,
+		Amount:   expectedAmount,
+		Currency: currency,
+	}, nil
+}
+
+func (m *mockPostgresPaymentProvider) Refund(ctx context.Context, gatewayPaymentID string, amount decimal.Decimal, currency string, idempotencyKey string) (*domain.RefundResult, error) {
+	return &domain.RefundResult{
+		RefundID: "rfnd_" + uuid.New().String()[:8],
+		Amount:   amount,
+		Status:   "processed",
+	}, nil
+}
+
+type mockPostgresFinanceUsecase struct {
+	domain.FinanceUsecase
+}
+
+func (m *mockPostgresFinanceUsecase) RecordEscrowCaptureWithinTx(ctx context.Context, tx domain.TransactionRepositories, in domain.RecordEscrowCaptureInput) (*domainfinance.JournalTransaction, error) {
+	return nil, nil
+}
+
+func TestEventCancellation_DeadlockRegression_WithCreatePayment_Postgres(t *testing.T) {
+	db := getIsolatedTestDB(t)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	txManager := repository.NewTransactionManager(db, logger)
+
+	// Create active organizer user and organizer record
+	organizerUser := createTestUser(t, db, "ORGANIZER")
+	orgModel := &models.OrganizerModel{
+		ID:        uuid.New(),
+		UserID:    organizerUser.ID,
+		Status:    "ACTIVE",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, db.Create(orgModel).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(orgModel).Error
+	})
+
+	category := createTestCategory(t, db)
+
+	// Create customer user
+	customerUser := createTestUser(t, db, "ATTENDEE")
+
+	// Create published event
+	eventID := uuid.New()
+	event := &models.EventModel{
+		ID:             eventID,
+		OrganizerID:    orgModel.ID,
+		CategoryID:     category.ID,
+		EventType:      domain.EventTypePhysical,
+		Title:          "Postgres Deadlock Regression Event " + eventID.String()[:8],
+		Description:    "Deadlock audit verification event",
+		AgeRestriction: 0,
+		Visibility:     "PUBLIC",
+		Status:         domain.EventStatusPublished,
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, db.Create(event).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(event).Error
+	})
+
+	// Future schedule
+	schedule := &models.EventScheduleModel{
+		ID:        uuid.New(),
+		EventID:   event.ID,
+		EventDate: time.Now().Add(24 * time.Hour),
+		StartTime: nil,
+		EndTime:   nil,
+		IsAllDay:  true,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, db.Create(schedule).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(schedule).Error
+	})
+
+	// Event setting
+	setting := &models.EventSettingModel{
+		ID:                  uuid.New(),
+		EventID:             event.ID,
+		SeatLayoutType:      "GENERAL",
+		BookingLimitPerUser: 10,
+		CreatedAt:           time.Now(),
+		UpdatedAt:           time.Now(),
+	}
+	require.NoError(t, db.Create(setting).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(setting).Error
+	})
+
+	// Ticket type (TotalQuantity = 10, AvailableQuantity = 9 because 1 ticket is reserved by active res below)
+	ttID := uuid.New()
+	tt := &models.TicketTypeModel{
+		ID:                ttID,
+		EventID:           event.ID,
+		Name:              "General Pass",
+		Price:             decimal.NewFromInt(100),
+		TotalQuantity:     10,
+		AvailableQuantity: 9,
+		CreatedAt:         time.Now(),
+		UpdatedAt:         time.Now(),
+	}
+	require.NoError(t, db.Create(tt).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(tt).Error
+	})
+
+	// Active reservation
+	resID := uuid.New()
+	res := &models.SeatReservationModel{
+		ID:        resID,
+		UserID:    customerUser.ID,
+		EventID:   event.ID,
+		Status:    domain.ReservationStatusActive,
+		ExpiresAt: time.Now().Add(15 * time.Minute),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, db.Create(res).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(res).Error
+	})
+
+	resItem := &models.SeatReservationItemModel{
+		ID:            uuid.New(),
+		ReservationID: res.ID,
+		TicketTypeID:  &tt.ID,
+		Quantity:      1,
+		Price:         decimal.NewFromInt(100),
+		CreatedAt:     time.Now(),
+	}
+	require.NoError(t, db.Create(resItem).Error)
+	t.Cleanup(func() {
+		_ = db.Delete(resItem).Error
+	})
+
+	// Active checkout
+	chkID := uuid.New()
+	chk := &models.CheckoutModel{
+		ID:             chkID,
+		ReservationID:  res.ID,
+		UserID:         customerUser.ID,
+		Subtotal:       decimal.NewFromInt(100),
+		PlatformFee:    decimal.Zero,
+		TaxAmount:      decimal.Zero,
+		DiscountAmount: decimal.Zero,
+		TotalAmount:    decimal.NewFromInt(100),
+		Status:         domain.CheckoutStatusActive,
+		ExpiresAt:      time.Now().Add(15 * time.Minute),
+		CreatedAt:      time.Now(),
+		UpdatedAt:      time.Now(),
+	}
+	require.NoError(t, db.Create(chk).Error)
+	t.Cleanup(func() {
+		_ = db.Exec("DELETE FROM payments WHERE booking_id IN (SELECT id FROM bookings WHERE event_id = ?)", event.ID).Error
+		_ = db.Exec("DELETE FROM booking_items WHERE ticket_type_id = ?", tt.ID).Error
+		_ = db.Exec("DELETE FROM bookings WHERE event_id = ?", event.ID).Error
+		_ = db.Delete(chk).Error
+	})
+
+	// Initialize usecases
+	provider := &mockPostgresPaymentProvider{}
+	financeUC := &mockPostgresFinanceUsecase{}
+	bookingUC := bookinguc.NewBookingUsecase(txManager, nil, logger)
+	paymentUC, err := paymentuc.NewPaymentUsecase(txManager, bookingUC, financeUC, provider, logger)
+	require.NoError(t, err)
+	eventsUC := eventsuc.NewEventCancellationUsecase(txManager, nil, logger)
+
+	// Execute concurrent CreatePayment and CancelEventByOrganizer against the real PostgreSQL DB
+	var wg sync.WaitGroup
+	wg.Add(2)
+	startBarrier := make(chan struct{})
+
+	var paymentErr error
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		_, paymentErr = paymentUC.CreatePayment(context.Background(), paymentuc.CreatePaymentRequest{
+			CheckoutID: chk.ID,
+			UserID:     customerUser.ID,
+			Method:     domain.PaymentMethodCard,
+		})
+	}()
+
+	var cancelErr error
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		_, cancelErr = eventsUC.CancelEventByOrganizer(
+			context.Background(),
+			organizerUser.ID,
+			event.ID,
+			"PostgreSQL Concurrency Deadlock Audit",
+		)
+	}()
+
+	close(startBarrier)
+	wg.Wait()
+
+	// CRITICAL ASSERTION: PostgreSQL must NOT report a deadlock error (SQLSTATE 40P01)
+	if paymentErr != nil {
+		assert.NotContains(t, paymentErr.Error(), "deadlock detected", "CreatePayment must never deadlock with EventCancellation")
+		assert.NotContains(t, paymentErr.Error(), "40P01", "CreatePayment must never encounter SQLSTATE 40P01")
+	}
+	if cancelErr != nil {
+		assert.NotContains(t, cancelErr.Error(), "deadlock detected", "EventCancellation must never deadlock with CreatePayment")
+		assert.NotContains(t, cancelErr.Error(), "40P01", "EventCancellation must never encounter SQLSTATE 40P01")
+	}
+	require.NoError(t, cancelErr, "Event cancellation must succeed cleanly")
+
+	// Verify database final state
+	var finalEvent models.EventModel
+	require.NoError(t, db.First(&finalEvent, "id = ?", event.ID).Error)
+	assert.Equal(t, domain.EventStatusCancelled, finalEvent.Status)
+
+	var finalRes models.SeatReservationModel
+	require.NoError(t, db.First(&finalRes, "id = ?", res.ID).Error)
+	assert.Equal(t, domain.ReservationStatusCancelled, finalRes.Status)
+
+	var finalChk models.CheckoutModel
+	require.NoError(t, db.First(&finalChk, "id = ?", chk.ID).Error)
+	assert.Equal(t, domain.CheckoutStatusExpired, finalChk.Status)
 }

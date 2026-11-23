@@ -1381,6 +1381,37 @@ func (h *EventHandler) CancelEvent(c *gin.Context) {
 				"message": "event not found",
 			})
 
+		case errors.Is(err, domain.ErrCancellationReasonRequired):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "cancellation reason is required",
+			})
+
+		case errors.Is(err, domain.ErrCancellationReasonTooLong):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+
+		case errors.Is(err, domain.ErrEventAlreadyCancelled):
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"message": "event is already cancelled",
+			})
+
+		case errors.Is(err, domain.ErrEventCannotBeCancelledWithCompletedSettlement),
+			errors.Is(err, domain.ErrEventCannotBeCancelledWithActiveSettlement):
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+
+		case errors.Is(err, domain.ErrEventCannotBeCancelled):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+
 		default:
 			h.logger.Error(
 				"event_cancel_handler_failed",

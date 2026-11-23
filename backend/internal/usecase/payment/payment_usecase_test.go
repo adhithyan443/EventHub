@@ -542,6 +542,18 @@ func (m *mockSeatReservationRepo) UpdateStatus(ctx context.Context, id uuid.UUID
 	return domain.ErrSeatReservationNotFound
 }
 
+func (m *mockSeatReservationRepo) FindActiveByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.SeatReservation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var res []domain.SeatReservation
+	for _, r := range m.reservations {
+		if r.EventID == eventID && r.Status == domain.ReservationStatusActive {
+			res = append(res, *r)
+		}
+	}
+	return res, nil
+}
+
 func (m *mockSeatReservationRepo) CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1644,6 +1656,24 @@ func TestCreatePayment_ConcurrentCalls_SingleOrderCreated(t *testing.T) {
 
 	assert.Positive(t, successCount)
 	assert.Equal(t, 1, f.provider.initiateCalls, "Only 1 external order must be initiated despite 10 concurrent requests")
+}
+
+func TestCreatePayment_CancelledEvent_Rejected(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	// Mark event as CANCELLED before creating payment
+	f.txRepos.eventRepo.status = domain.EventStatusCancelled
+
+	p, err := f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+		CheckoutID: f.checkoutID,
+		UserID:     f.userID,
+		Method:     domain.PaymentMethodCard,
+	})
+
+	assert.Error(t, err)
+	assert.Nil(t, p)
+	assert.True(t, errors.Is(err, domain.ErrEventNotPublic) || errors.Is(err, domain.ErrCheckoutNotPayable))
 }
 
 // --- Duplicate Capture & Booking Integrity Tests ---
@@ -2898,6 +2928,53 @@ func TestConcurrent_VerifyPayment_And_Webhook_OnCancelledBooking(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, domain.PaymentStatusRefundRequired, paymentInDB.Status)
 	assert.Empty(t, f.ticketRepo.tickets)
+}
+
+func TestConcurrent_EventCancellation_And_CreatePayment(t *testing.T) {
+	f := setupFixture(t)
+	ctx := context.Background()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	startBarrier := make(chan struct{})
+
+	var paymentErr error
+	var createdPayment *domain.Payment
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		createdPayment, paymentErr = f.usecase.CreatePayment(ctx, payment.CreatePaymentRequest{
+			CheckoutID: f.checkoutID,
+			UserID:     f.userID,
+			Method:     domain.PaymentMethodCard,
+		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startBarrier
+		// Concurrently flip event status to CANCELLED
+		f.txRepos.eventRepo.status = domain.EventStatusCancelled
+	}()
+
+	close(startBarrier)
+	wg.Wait()
+
+	if paymentErr != nil {
+		assert.True(t, errors.Is(paymentErr, domain.ErrEventNotPublic) || errors.Is(paymentErr, domain.ErrCheckoutNotPayable))
+		assert.Nil(t, createdPayment)
+	} else {
+		require.NotNil(t, createdPayment)
+		f.txRepos.eventRepo.status = domain.EventStatusCancelled
+		_, verifyErr := f.usecase.VerifyPayment(ctx, payment.VerifyPaymentRequest{
+			UserID:            f.userID,
+			ProviderOrderID:   *createdPayment.ProviderOrderID,
+			RazorpayPaymentID: "pay_conc_late_333",
+			RazorpaySignature: "sig_dummy",
+		})
+		require.Error(t, verifyErr)
+		assert.True(t, errors.Is(verifyErr, domain.ErrPaymentRefundRequired))
+	}
 }
 
 func TestGracefulShutdown_TracksBackgroundRefundDispatch(t *testing.T) {

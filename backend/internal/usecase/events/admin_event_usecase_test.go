@@ -251,6 +251,9 @@ func (m *mockAdminReservationRepo) CancelIfActive(ctx context.Context, id, userI
 func (m *mockAdminReservationRepo) FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*domain.SeatReservation, error) {
 	return nil, nil
 }
+func (m *mockAdminReservationRepo) FindActiveByEventID(ctx context.Context, eventID uuid.UUID) ([]domain.SeatReservation, error) {
+	return nil, nil
+}
 func (m *mockAdminReservationRepo) CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error) {
 	return m.activeCount, nil
 }

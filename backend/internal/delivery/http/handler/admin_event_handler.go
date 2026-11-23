@@ -364,6 +364,24 @@ func mapAdminEventError(ctx *gin.Context, err error) {
 		ctx.Error(appErrors.NewNotFoundError("event not found"))
 		return
 	}
+	if errors.Is(err, domain.ErrEventAlreadyCancelled) {
+		ctx.Error(appErrors.NewConflictError("event is already cancelled"))
+		return
+	}
+	if errors.Is(err, domain.ErrEventCannotBeCancelledWithCompletedSettlement) ||
+		errors.Is(err, domain.ErrEventCannotBeCancelledWithActiveSettlement) {
+		ctx.Error(appErrors.NewConflictError(err.Error()))
+		return
+	}
+	if errors.Is(err, domain.ErrCancellationReasonRequired) ||
+		errors.Is(err, domain.ErrCancellationReasonTooLong) {
+		ctx.Error(appErrors.NewValidationError(err.Error()))
+		return
+	}
+	if errors.Is(err, domain.ErrEventCannotBeCancelled) {
+		ctx.Error(appErrors.NewValidationError(err.Error()))
+		return
+	}
 	if errors.Is(err, events.ErrEventCannotBeDeletedWithBookings) {
 		ctx.Error(appErrors.NewConflictError("event cannot be deleted because it has existing bookings, tickets, or active reservations"))
 		return

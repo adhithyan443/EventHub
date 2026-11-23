@@ -507,3 +507,43 @@ func TestReservationUsecase_CancelReservation_RestoresAllTiersAndExpiresCheckout
 	assert.Equal(t, 4, repos.ticketTypeRepo.releasedQty[tier2ID])
 	assert.Contains(t, repos.checkoutRepo.expiredByResID, resID)
 }
+
+func TestReservationUsecase_CreateReservation_CancelledEvent_ReturnsError(t *testing.T) {
+	ctx := context.Background()
+	eventID := uuid.New()
+	userID := uuid.New()
+	tierID := uuid.New()
+
+	repos := &testTxRepos{
+		eventRepo: &mockEventRepo{
+			event: &domain.Event{
+				ID:        eventID,
+				EventType: domain.EventTypeOnline,
+				Status:    domain.EventStatusCancelled,
+			},
+		},
+		eventSettingRepo: &mockEventSettingRepo{
+			setting: &domain.EventSetting{
+				EventID:             eventID,
+				BookingLimitPerUser: 10,
+			},
+		},
+		seatResRepo:    &mockSeatReservationRepo{},
+		ticketTypeRepo: &mockTicketTypeRepo{},
+		checkoutRepo:   &mockCheckoutRepo{},
+	}
+
+	uc := setupReservationUsecase(repos)
+
+	req := CreateReservationRequest{
+		UserID:  userID,
+		EventID: eventID,
+		Tickets: []TicketSelection{
+			{TicketTypeID: tierID, Quantity: 2},
+		},
+	}
+
+	res, err := uc.CreateReservation(ctx, req)
+	assert.ErrorIs(t, err, domain.ErrEventNotPublic)
+	assert.Nil(t, res)
+}

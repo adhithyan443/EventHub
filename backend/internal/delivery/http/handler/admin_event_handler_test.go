@@ -92,6 +92,14 @@ type mockAdminTxReposForHandler struct {
 	seatLayoutRepo   domain.SeatLayoutRepository
 	seatColumnRepo   domain.SeatColumnRepository
 	seatSectionRepo  domain.SeatSectionRepository
+	settlementRepo   domain.SettlementRepository
+}
+
+func (m *mockAdminTxReposForHandler) SettlementRepository() domain.SettlementRepository {
+	if m.settlementRepo == nil {
+		return &mockAdminSettlementRepoForHandler{}
+	}
+	return m.settlementRepo
 }
 
 func (m *mockAdminTxReposForHandler) EventRepository() domain.EventRepository { return m.eventRepo }
@@ -192,6 +200,10 @@ type mockAdminResRepoForHandler struct {
 	activeCount int64
 }
 
+func (m *mockAdminResRepoForHandler) FindActiveByEventID(ctx context.Context, id uuid.UUID) ([]domain.SeatReservation, error) {
+	return nil, nil
+}
+
 func (m *mockAdminResRepoForHandler) CountActiveByEventID(ctx context.Context, id uuid.UUID, now time.Time) (int64, error) {
 	return m.activeCount, nil
 }
@@ -288,6 +300,17 @@ func (m *mockAdminSeatLayoutRepoForHandler) FindByEventID(id uuid.UUID) (*domain
 	return nil, domain.ErrSeatLayoutNotFound
 }
 func (m *mockAdminSeatLayoutRepoForHandler) DeleteByEventID(id uuid.UUID) error {
+	return nil
+}
+
+type mockAdminSettlementRepoForHandler struct {
+	domain.SettlementRepository
+}
+
+func (m *mockAdminSettlementRepoForHandler) List(ctx context.Context, filter domain.SettlementFilter) (*domain.SettlementListResult, error) {
+	return &domain.SettlementListResult{Settlements: nil, Total: 0}, nil
+}
+func (m *mockAdminSettlementRepoForHandler) Update(ctx context.Context, s *domain.Settlement) error {
 	return nil
 }
 
@@ -607,6 +630,28 @@ func TestAdminEventHandler_CancelEventAndStatus(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, resp["success"].(bool))
 		assert.Equal(t, "event cancelled successfully", resp["message"])
+	})
+
+	t.Run("cancellation fails with 400 when reason is missing", func(t *testing.T) {
+		bodyBytes, _ := json.Marshal(map[string]interface{}{"reason": ""})
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/admin/events/"+eventID.String()+"/cancel", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("cancellation fails with 409 when event is already cancelled", func(t *testing.T) {
+		bodyBytes, _ := json.Marshal(map[string]interface{}{"reason": "Duplicate cancel attempt"})
+		req, _ := http.NewRequest(http.MethodPost, "/api/v1/admin/events/"+eventID.String()+"/cancel", bytes.NewBuffer(bodyBytes))
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusConflict, w.Code)
 	})
 
 	t.Run("authorized admin gets cancellation status successfully", func(t *testing.T) {

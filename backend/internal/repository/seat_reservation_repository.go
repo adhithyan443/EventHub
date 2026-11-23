@@ -329,6 +329,46 @@ func (r *seatReservationRepository) FindExpiredActive(
 	return reservations, nil
 }
 
+func (r *seatReservationRepository) FindActiveByEventID(
+	ctx context.Context,
+	eventID uuid.UUID,
+) ([]domain.SeatReservation, error) {
+	var reservationModels []models.SeatReservationModel
+
+	err := r.db.WithContext(ctx).
+		Where(
+			"event_id = ? AND status = ?",
+			eventID,
+			domain.ReservationStatusActive,
+		).
+		Find(&reservationModels).Error
+
+	if err != nil {
+		r.logger.ErrorContext(
+			ctx,
+			"failed to find active reservations by event id",
+			slog.String("event_id", eventID.String()),
+			slog.String("error", err.Error()),
+		)
+		return nil, err
+	}
+
+	reservations := make(
+		[]domain.SeatReservation,
+		0,
+		len(reservationModels),
+	)
+
+	for _, model := range reservationModels {
+		domainRes := model.ToDomain()
+		if domainRes != nil {
+			reservations = append(reservations, *domainRes)
+		}
+	}
+
+	return reservations, nil
+}
+
 func (r *seatReservationRepository) CountActiveByEventID(
 	ctx context.Context,
 	eventID uuid.UUID,

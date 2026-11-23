@@ -58,6 +58,8 @@ type SeatReservationRepository interface {
 
 	FindByIDForUpdate(ctx context.Context, id uuid.UUID) (*SeatReservation, error)
 
+	FindActiveByEventID(ctx context.Context, eventID uuid.UUID) ([]SeatReservation, error)
+
 	CountActiveByEventID(ctx context.Context, eventID uuid.UUID, now time.Time) (int64, error)
 }
 
