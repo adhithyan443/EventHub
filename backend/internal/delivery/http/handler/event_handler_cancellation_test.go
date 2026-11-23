@@ -232,6 +232,7 @@ func setupOrganizerEventTestRouter(
 	api.POST("/events/:id/cancel", h.CancelEvent)
 	api.PATCH("/events/:id/cancel", h.CancelEvent)
 	api.GET("/events/:id/cancellation", h.GetEventCancellationStatus)
+	api.GET("/events/:id/cancellation-preview", h.GetCancellationPreview)
 
 	return router, uc
 }
@@ -346,5 +347,101 @@ func TestEventHandler_OrganizerEventCancellation(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("owner organizer gets cancellation preview successfully", func(t *testing.T) {
+		previewEventID := uuid.New()
+		eventRepo.events[previewEventID] = &domain.Event{
+			ID:          previewEventID,
+			OrganizerID: ownerOrgID,
+			Title:       "Live Tech Showcase",
+			Status:      domain.EventStatusPublished,
+		}
+
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/organizers/events/"+previewEventID.String()+"/cancellation-preview", nil)
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		data := resp["data"].(map[string]interface{})
+		eligibility := data["eligibility"].(map[string]interface{})
+		assert.True(t, eligibility["is_cancellable"].(bool))
+	})
+
+	t.Run("already cancelled event preview returns 200 OK with is_cancellable false", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/organizers/events/"+eventID.String()+"/cancellation-preview", nil)
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		data := resp["data"].(map[string]interface{})
+		eligibility := data["eligibility"].(map[string]interface{})
+		assert.False(t, eligibility["is_cancellable"].(bool))
+		reasons := eligibility["blocking_reasons"].([]interface{})
+		assert.Contains(t, reasons, "event is already cancelled")
+	})
+
+	t.Run("draft event returns 200 OK with is_cancellable false in preview", func(t *testing.T) {
+		draftEventID := uuid.New()
+		eventRepo.events[draftEventID] = &domain.Event{
+			ID:          draftEventID,
+			OrganizerID: ownerOrgID,
+			Title:       "Draft Summit",
+			Status:      domain.EventStatusDraft,
+		}
+
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/organizers/events/"+draftEventID.String()+"/cancellation-preview", nil)
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		data := resp["data"].(map[string]interface{})
+		eligibility := data["eligibility"].(map[string]interface{})
+		assert.False(t, eligibility["is_cancellable"].(bool))
+		reasons := eligibility["blocking_reasons"].([]interface{})
+		assert.NotEmpty(t, reasons)
+	})
+
+	t.Run("different organizer is forbidden from viewing preview", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/organizers/events/"+eventID.String()+"/cancellation-preview", nil)
+		req.Header.Set("X-User-ID", otherUserID.String())
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("invalid UUID in preview returns 400", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/organizers/events/not-a-uuid/cancellation-preview", nil)
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("nonexistent event in preview returns 404", func(t *testing.T) {
+		missingID := uuid.New()
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/organizers/events/"+missingID.String()+"/cancellation-preview", nil)
+		req.Header.Set("X-User-ID", ownerUserID.String())
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
 	})
 }

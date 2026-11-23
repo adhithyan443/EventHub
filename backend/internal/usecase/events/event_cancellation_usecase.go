@@ -191,6 +191,93 @@ func (u *EventCancellationUsecase) GetEventCancellationStatusForOrganizer(
 	return summary, nil
 }
 
+// GetCancellationPreview retrieves a comprehensive read-only cancellation impact preview for administrators.
+func (u *EventCancellationUsecase) GetCancellationPreview(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (*domain.EventCancellationPreview, error) {
+	if eventID == uuid.Nil {
+		return nil, errors.New("event ID cannot be nil")
+	}
+
+	var preview *domain.EventCancellationPreview
+	err := u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+		event, err := tx.EventRepository().FindByID(eventID)
+		if err != nil {
+			return err
+		}
+
+		p, err := u.calculateCancellationPreviewInTx(ctx, tx, event, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		preview = p
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	u.logger.InfoContext(ctx, "cancellation_preview_generated_admin",
+		slog.String("event_id", eventID.String()),
+		slog.Bool("is_cancellable", preview.Eligibility.IsCancellable),
+	)
+	return preview, nil
+}
+
+// GetCancellationPreviewForOrganizer retrieves a comprehensive read-only cancellation impact preview for the event owner.
+func (u *EventCancellationUsecase) GetCancellationPreviewForOrganizer(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) (*domain.EventCancellationPreview, error) {
+	if userID == uuid.Nil {
+		return nil, errors.New("user ID cannot be nil")
+	}
+	if eventID == uuid.Nil {
+		return nil, errors.New("event ID cannot be nil")
+	}
+
+	var preview *domain.EventCancellationPreview
+	err := u.transactionManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+		organizer, err := tx.OrganizerRepository().FindByUserID(userID)
+		if err != nil {
+			if errors.Is(err, domain.ErrOrganizerNotFound) {
+				return ErrUnauthorizedOrganizer
+			}
+			return err
+		}
+		if organizer.Status != "ACTIVE" {
+			return ErrUnauthorizedOrganizer
+		}
+
+		event, err := tx.EventRepository().FindByID(eventID)
+		if err != nil {
+			return err
+		}
+		if event.OrganizerID != organizer.ID {
+			return ErrUnauthorizedOrganizer
+		}
+
+		p, err := u.calculateCancellationPreviewInTx(ctx, tx, event, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		preview = p
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	u.logger.InfoContext(ctx, "cancellation_preview_generated_organizer",
+		slog.String("user_id", userID.String()),
+		slog.String("event_id", eventID.String()),
+		slog.Bool("is_cancellable", preview.Eligibility.IsCancellable),
+	)
+	return preview, nil
+}
+
 func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 	ctx context.Context,
 	eventID uuid.UUID,
@@ -272,39 +359,10 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 			event = lockedEvent
 		}
 
-		// 1. Lifecycle state validation
-		if event.Status == domain.EventStatusCancelled {
-			u.logger.WarnContext(ctx, "event_cancel_already_cancelled",
-				slog.String("actor_id", actorID.String()),
-				slog.String("actor_role", actorRole),
-				slog.String("event_id", eventID.String()),
-			)
-			return domain.ErrEventAlreadyCancelled
-		}
-
-		if event.Status == domain.EventStatusDraft {
-			u.logger.WarnContext(ctx, "event_cancel_draft_rejected",
-				slog.String("actor_id", actorID.String()),
-				slog.String("actor_role", actorRole),
-				slog.String("event_id", eventID.String()),
-			)
-			return domain.ErrDraftEventCannotBeCancelled
-		}
-
-		if event.Status != domain.EventStatusPublished {
-			u.logger.WarnContext(ctx, "event_cancel_invalid_status",
-				slog.String("actor_id", actorID.String()),
-				slog.String("actor_role", actorRole),
-				slog.String("event_id", eventID.String()),
-				slog.String("status", event.Status),
-			)
-			return domain.ErrEventCannotBeCancelled
-		}
-
+		var schedule *domain.EventSchedule
 		var eventDateStr string = "TBD"
-		// 2. Event schedule / past conclusion check
 		if tx.EventScheduleRepository() != nil {
-			schedule, sErr := tx.EventScheduleRepository().FindByEventID(eventID)
+			s, sErr := tx.EventScheduleRepository().FindByEventID(eventID)
 			if sErr != nil && !errors.Is(sErr, domain.ErrEventNotFound) {
 				u.logger.ErrorContext(ctx, "event_cancel_schedule_lookup_failed",
 					slog.String("actor_id", actorID.String()),
@@ -314,21 +372,13 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 				)
 				return fmt.Errorf("failed to lookup event schedule: %w", sErr)
 			}
-			if schedule != nil {
-				eventDateStr = schedule.EventDate.Format("02 Jan 2006")
-				if isEventConcluded(schedule, now) {
-					u.logger.WarnContext(ctx, "event_cancel_concluded_event_rejected",
-						slog.String("actor_id", actorID.String()),
-						slog.String("actor_role", actorRole),
-						slog.String("event_id", eventID.String()),
-						slog.Time("event_date", schedule.EventDate),
-					)
-					return domain.ErrPastEventCannotBeCancelled
-				}
+			if s != nil {
+				schedule = s
+				eventDateStr = s.EventDate.Format("02 Jan 2006")
 			}
 		}
 
-		// 3. Settlement Safety checks
+		var settlements []*domain.Settlement
 		if tx.SettlementRepository() != nil {
 			settlementResult, sErr := tx.SettlementRepository().List(ctx, domain.SettlementFilter{
 				EventID: &eventID,
@@ -343,55 +393,84 @@ func (u *EventCancellationUsecase) cancelEventAndGenerateRefunds(
 				)
 				return fmt.Errorf("failed to verify settlement records: %w", sErr)
 			}
+			if settlementResult != nil {
+				settlements = settlementResult.Settlements
+			}
+		}
 
-			if settlementResult != nil && len(settlementResult.Settlements) > 0 {
-				for _, s := range settlementResult.Settlements {
-					switch s.Status {
-					case domain.SettlementStatusCompleted:
-						u.logger.WarnContext(ctx, "event_cancel_blocked_settlement_completed",
+		assessment := evaluateCancellationEligibility(event, schedule, settlements, now)
+		if !assessment.IsCancellable {
+			switch {
+			case errors.Is(assessment.FirstBlockingError, domain.ErrEventAlreadyCancelled):
+				u.logger.WarnContext(ctx, "event_cancel_already_cancelled",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+				)
+			case errors.Is(assessment.FirstBlockingError, domain.ErrDraftEventCannotBeCancelled):
+				u.logger.WarnContext(ctx, "event_cancel_draft_rejected",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+				)
+			case errors.Is(assessment.FirstBlockingError, domain.ErrPastEventCannotBeCancelled):
+				var evDate time.Time
+				if schedule != nil {
+					evDate = schedule.EventDate
+				}
+				u.logger.WarnContext(ctx, "event_cancel_concluded_event_rejected",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.Time("event_date", evDate),
+				)
+			case errors.Is(assessment.FirstBlockingError, domain.ErrEventCannotBeCancelledWithCompletedSettlement):
+				u.logger.WarnContext(ctx, "event_cancel_blocked_settlement_completed",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+				)
+			case errors.Is(assessment.FirstBlockingError, domain.ErrEventCannotBeCancelledWithActiveSettlement):
+				u.logger.WarnContext(ctx, "event_cancel_blocked_settlement_in_flight",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+				)
+			default:
+				u.logger.WarnContext(ctx, "event_cancel_invalid_status",
+					slog.String("actor_id", actorID.String()),
+					slog.String("actor_role", actorRole),
+					slog.String("event_id", eventID.String()),
+					slog.String("status", event.Status),
+				)
+			}
+			return assessment.FirstBlockingError
+		}
+
+		if tx.SettlementRepository() != nil {
+			for _, s := range settlements {
+				if s.Status == domain.SettlementStatusPending {
+					s.Status = domain.SettlementStatusRejected
+					s.RejectedAt = &now
+					rejectionMsg := fmt.Sprintf("Automatically rejected due to event cancellation: %s", trimmedReason)
+					s.RejectionReason = &rejectionMsg
+					s.UpdatedAt = now
+					if err := tx.SettlementRepository().Update(ctx, s); err != nil {
+						u.logger.ErrorContext(ctx, "event_cancel_reject_settlement_failed",
 							slog.String("actor_id", actorID.String()),
 							slog.String("actor_role", actorRole),
 							slog.String("event_id", eventID.String()),
 							slog.String("settlement_id", s.ID.String()),
-							slog.String("amount", s.Amount.String()),
+							slog.Any("error", err),
 						)
-						return domain.ErrEventCannotBeCancelledWithCompletedSettlement
-
-					case domain.SettlementStatusApproved, domain.SettlementStatusProcessing:
-						u.logger.WarnContext(ctx, "event_cancel_blocked_settlement_in_flight",
-							slog.String("actor_id", actorID.String()),
-							slog.String("actor_role", actorRole),
-							slog.String("event_id", eventID.String()),
-							slog.String("settlement_id", s.ID.String()),
-							slog.String("status", string(s.Status)),
-							slog.String("amount", s.Amount.String()),
-						)
-						return domain.ErrEventCannotBeCancelledWithActiveSettlement
-
-					case domain.SettlementStatusPending:
-						// Automatically reject pending settlement to safeguard funds
-						s.Status = domain.SettlementStatusRejected
-						s.RejectedAt = &now
-						rejectionMsg := fmt.Sprintf("Automatically rejected due to event cancellation: %s", trimmedReason)
-						s.RejectionReason = &rejectionMsg
-						s.UpdatedAt = now
-						if err := tx.SettlementRepository().Update(ctx, s); err != nil {
-							u.logger.ErrorContext(ctx, "event_cancel_reject_settlement_failed",
-								slog.String("actor_id", actorID.String()),
-								slog.String("actor_role", actorRole),
-								slog.String("event_id", eventID.String()),
-								slog.String("settlement_id", s.ID.String()),
-								slog.Any("error", err),
-							)
-							return fmt.Errorf("failed to reject pending settlement %s: %w", s.ID, err)
-						}
-						u.logger.InfoContext(ctx, "event_cancel_rejected_pending_settlement",
-							slog.String("actor_id", actorID.String()),
-							slog.String("actor_role", actorRole),
-							slog.String("event_id", eventID.String()),
-							slog.String("settlement_id", s.ID.String()),
-						)
+						return fmt.Errorf("failed to reject pending settlement %s: %w", s.ID, err)
 					}
+					u.logger.InfoContext(ctx, "event_cancel_rejected_pending_settlement",
+						slog.String("actor_id", actorID.String()),
+						slog.String("actor_role", actorRole),
+						slog.String("event_id", eventID.String()),
+						slog.String("settlement_id", s.ID.String()),
+					)
 				}
 			}
 		}
@@ -1000,4 +1079,384 @@ func isEventConcluded(schedule *domain.EventSchedule, now time.Time) bool {
 	}
 
 	return now.After(conclusion)
+}
+
+type CancellationEligibilityAssessment struct {
+	IsCancellable           bool
+	BlockingReasons         []string
+	FirstBlockingError      error
+	HasCompletedSettlement  bool
+	HasInFlightSettlement   bool
+	PendingSettlementsCount int
+	PendingSettlementsTotal decimal.Decimal
+	SettlementWarning       string
+}
+
+func evaluateCancellationEligibility(
+	event *domain.Event,
+	schedule *domain.EventSchedule,
+	settlements []*domain.Settlement,
+	now time.Time,
+) CancellationEligibilityAssessment {
+	var assessment CancellationEligibilityAssessment
+	assessment.PendingSettlementsTotal = decimal.Zero
+
+	// 1. Lifecycle state validation
+	if event.Status == domain.EventStatusCancelled {
+		assessment.BlockingReasons = append(assessment.BlockingReasons, "event is already cancelled")
+		if assessment.FirstBlockingError == nil {
+			assessment.FirstBlockingError = domain.ErrEventAlreadyCancelled
+		}
+	} else if event.Status == domain.EventStatusDraft {
+		assessment.BlockingReasons = append(assessment.BlockingReasons, "draft events cannot be cancelled; delete the draft instead")
+		if assessment.FirstBlockingError == nil {
+			assessment.FirstBlockingError = domain.ErrDraftEventCannotBeCancelled
+		}
+	} else if event.Status != domain.EventStatusPublished {
+		assessment.BlockingReasons = append(assessment.BlockingReasons, "event cannot be cancelled")
+		if assessment.FirstBlockingError == nil {
+			assessment.FirstBlockingError = domain.ErrEventCannotBeCancelled
+		}
+	}
+
+	// 2. Event schedule / past conclusion check
+	if schedule != nil && isEventConcluded(schedule, now) {
+		assessment.BlockingReasons = append(assessment.BlockingReasons, "event has already concluded")
+		if assessment.FirstBlockingError == nil {
+			assessment.FirstBlockingError = domain.ErrPastEventCannotBeCancelled
+		}
+	}
+
+	// 3. Settlement safety checks
+	for _, s := range settlements {
+		switch s.Status {
+		case domain.SettlementStatusCompleted:
+			assessment.HasCompletedSettlement = true
+			assessment.BlockingReasons = append(assessment.BlockingReasons, "event has completed settlements with disbursed organizer funds")
+			if assessment.FirstBlockingError == nil {
+				assessment.FirstBlockingError = domain.ErrEventCannotBeCancelledWithCompletedSettlement
+			}
+		case domain.SettlementStatusApproved, domain.SettlementStatusProcessing:
+			assessment.HasInFlightSettlement = true
+			assessment.BlockingReasons = append(assessment.BlockingReasons, "event has approved or in-flight settlement payouts currently processing")
+			if assessment.FirstBlockingError == nil {
+				assessment.FirstBlockingError = domain.ErrEventCannotBeCancelledWithActiveSettlement
+			}
+		case domain.SettlementStatusPending:
+			assessment.PendingSettlementsCount++
+			assessment.PendingSettlementsTotal = assessment.PendingSettlementsTotal.Add(s.Amount)
+		}
+	}
+
+	if assessment.PendingSettlementsCount > 0 {
+		assessment.SettlementWarning = fmt.Sprintf(
+			"%d pending settlement request(s) totaling %s will be automatically rejected upon cancellation",
+			assessment.PendingSettlementsCount,
+			assessment.PendingSettlementsTotal.StringFixed(2),
+		)
+	}
+
+	assessment.IsCancellable = len(assessment.BlockingReasons) == 0
+	return assessment
+}
+
+func (u *EventCancellationUsecase) calculateCancellationPreviewInTx(
+	ctx context.Context,
+	tx domain.TransactionRepositories,
+	event *domain.Event,
+	now time.Time,
+) (*domain.EventCancellationPreview, error) {
+	var schedule *domain.EventSchedule
+	eventDateStr := "TBD"
+	if tx.EventScheduleRepository() != nil {
+		s, sErr := tx.EventScheduleRepository().FindByEventID(event.ID)
+		if sErr != nil && !errors.Is(sErr, domain.ErrEventNotFound) {
+			return nil, fmt.Errorf("failed to lookup event schedule: %w", sErr)
+		}
+		if s != nil {
+			schedule = s
+			eventDateStr = s.EventDate.Format("02 Jan 2006")
+		}
+	}
+
+	var settlements []*domain.Settlement
+	if tx.SettlementRepository() != nil {
+		settlementResult, sErr := tx.SettlementRepository().List(ctx, domain.SettlementFilter{
+			EventID: &event.ID,
+			Limit:   100,
+		})
+		if sErr != nil {
+			return nil, fmt.Errorf("failed to verify settlement records: %w", sErr)
+		}
+		if settlementResult != nil {
+			settlements = settlementResult.Settlements
+		}
+	}
+
+	assessment := evaluateCancellationEligibility(event, schedule, settlements, now)
+	blockingReasons := assessment.BlockingReasons
+	if blockingReasons == nil {
+		blockingReasons = []string{}
+	}
+
+	var bookings []domain.Booking
+	if tx.BookingRepository() != nil {
+		b, err := tx.BookingRepository().FindByEventID(ctx, event.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve bookings: %w", err)
+		}
+		bookings = b
+	}
+
+	var tickets []domain.Ticket
+	if tx.TicketRepository() != nil {
+		t, err := tx.TicketRepository().FindByEventID(ctx, event.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve tickets: %w", err)
+		}
+		tickets = t
+	}
+
+	ticketsByBooking := make(map[uuid.UUID][]domain.Ticket, len(bookings))
+	totalTicketsSold := 0
+	affectedTickets := 0
+	for _, t := range tickets {
+		ticketsByBooking[t.BookingID] = append(ticketsByBooking[t.BookingID], t)
+		if t.Status == domain.TicketStatusValid || t.Status == domain.TicketStatusUsed {
+			totalTicketsSold++
+		}
+		if t.Status == domain.TicketStatusValid {
+			affectedTickets++
+		}
+	}
+
+	var activeReservationsReleased, reservedSeatsReleased, gaQuantityReleased, activeCheckoutsExpired int
+	if tx.SeatReservationRepository() != nil {
+		activeRes, rErr := tx.SeatReservationRepository().FindActiveByEventID(ctx, event.ID)
+		if rErr != nil {
+			return nil, fmt.Errorf("failed to retrieve active reservations: %w", rErr)
+		}
+		activeReservationsReleased = len(activeRes)
+		for _, ar := range activeRes {
+			items, iErr := tx.SeatReservationRepository().FindItemsByReservationID(ctx, ar.ID)
+			if iErr != nil {
+				return nil, fmt.Errorf("failed to retrieve reservation items: %w", iErr)
+			}
+			for _, item := range items {
+				if item.SeatID != nil {
+					reservedSeatsReleased++
+				} else if item.TicketTypeID != nil {
+					gaQuantityReleased += item.Quantity
+				}
+			}
+			if tx.CheckoutRepository() != nil {
+				checkout, cErr := tx.CheckoutRepository().FindByReservationID(ctx, ar.ID)
+				if cErr == nil && checkout != nil && checkout.Status == domain.CheckoutStatusActive {
+					activeCheckoutsExpired++
+				}
+			}
+		}
+	}
+
+	var existingRefunds []domain.Refund
+	if tx.RefundRepository() != nil {
+		r, err := tx.RefundRepository().FindByEventID(ctx, event.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to retrieve refunds: %w", err)
+		}
+		existingRefunds = r
+	}
+
+	existingRefundsByBooking := make(map[uuid.UUID][]domain.Refund, len(bookings))
+	alreadyRefundedAmount := decimal.Zero
+	for _, r := range existingRefunds {
+		existingRefundsByBooking[r.BookingID] = append(existingRefundsByBooking[r.BookingID], r)
+		if r.Status == domain.RefundStatusSuccess {
+			alreadyRefundedAmount = alreadyRefundedAmount.Add(r.Amount)
+		}
+	}
+
+	totalBookings := len(bookings)
+	affectedBookings := 0
+	grossCollectedAmount := decimal.Zero
+	expectedRefundAmount := decimal.Zero
+	totalPlatformFeeRefund := decimal.Zero
+	totalTaxRefund := decimal.Zero
+
+	for _, booking := range bookings {
+		if booking.Status == domain.BookingStatusConfirmed {
+			affectedBookings++
+		}
+
+		var payments []domain.Payment
+		if tx.PaymentRepository() != nil {
+			p, pErr := tx.PaymentRepository().FindByBookingID(ctx, booking.ID.String())
+			if pErr != nil {
+				return nil, fmt.Errorf("failed to find payments for booking %s: %w", booking.ID, pErr)
+			}
+			payments = p
+		}
+
+		var successfulPayment *domain.Payment
+		for i := range payments {
+			if payments[i].Status == domain.PaymentStatusSuccess {
+				grossCollectedAmount = grossCollectedAmount.Add(payments[i].Amount)
+				if successfulPayment == nil && payments[i].TransactionID != nil && strings.TrimSpace(*payments[i].TransactionID) != "" {
+					successfulPayment = &payments[i]
+				}
+			}
+		}
+
+		// Free bookings or bookings without successful payment cannot generate refunds
+		if successfulPayment == nil || booking.Total.IsZero() || !booking.Total.IsPositive() {
+			continue
+		}
+
+		// Check if an EVENT_CANCELLATION refund was already created
+		hasEventRefund := false
+		for _, r := range existingRefundsByBooking[booking.ID] {
+			if r.Reason == "EVENT_CANCELLATION" {
+				hasEventRefund = true
+				break
+			}
+		}
+		if hasEventRefund {
+			continue
+		}
+
+		// Valid tickets check
+		bookingTickets := ticketsByBooking[booking.ID]
+		validCount := 0
+		for _, bt := range bookingTickets {
+			if bt.Status == domain.TicketStatusValid {
+				validCount++
+			}
+		}
+		if validCount == 0 {
+			continue
+		}
+
+		// Calculate total already refunded for this booking across prior customer cancellations
+		totalAlreadyRefundedForBooking := decimal.Zero
+		priorPlatformFeeRefunded := decimal.Zero
+		priorTaxRefunded := decimal.Zero
+
+		for _, r := range existingRefundsByBooking[booking.ID] {
+			if r.Status == domain.RefundStatusSuccess || r.Status == domain.RefundStatusProcessing || r.Status == domain.RefundStatusPending {
+				totalAlreadyRefundedForBooking = totalAlreadyRefundedForBooking.Add(r.Amount)
+			}
+			if r.Status == domain.RefundStatusSuccess && booking.Total.IsPositive() {
+				fee := r.Amount.Mul(booking.PlatformFee).Div(booking.Total).RoundBank(2)
+				tax := r.Amount.Mul(booking.Tax).Div(booking.Total).RoundBank(2)
+				priorPlatformFeeRefunded = priorPlatformFeeRefunded.Add(fee)
+				priorTaxRefunded = priorTaxRefunded.Add(tax)
+			}
+		}
+
+		maxRefundable := successfulPayment.Amount.Sub(totalAlreadyRefundedForBooking)
+		if maxRefundable.IsNegative() {
+			maxRefundable = decimal.Zero
+		}
+
+		var refundAmount decimal.Decimal
+		if validCount == len(bookingTickets) {
+			refundAmount = booking.Total
+		} else {
+			refundAmount = booking.Total.Sub(totalAlreadyRefundedForBooking)
+		}
+
+		if refundAmount.GreaterThan(maxRefundable) {
+			refundAmount = maxRefundable
+		}
+
+		if refundAmount.IsZero() || !refundAmount.IsPositive() {
+			continue
+		}
+
+		expectedRefundAmount = expectedRefundAmount.Add(refundAmount)
+
+		// Platform fee and tax portions
+		var platformFeeRefund decimal.Decimal
+		var taxRefund decimal.Decimal
+		if booking.Total.IsPositive() {
+			if booking.PlatformFee.IsPositive() {
+				remainingFee := booking.PlatformFee.Sub(priorPlatformFeeRefunded)
+				if remainingFee.IsPositive() {
+					computedFee := refundAmount.Mul(booking.PlatformFee).Div(booking.Total).RoundBank(2)
+					if computedFee.GreaterThan(remainingFee) {
+						platformFeeRefund = remainingFee
+					} else {
+						platformFeeRefund = computedFee
+					}
+				}
+			}
+			if booking.Tax.IsPositive() {
+				remainingTax := booking.Tax.Sub(priorTaxRefunded)
+				if remainingTax.IsPositive() {
+					computedTax := refundAmount.Mul(booking.Tax).Div(booking.Total).RoundBank(2)
+					if computedTax.GreaterThan(remainingTax) {
+						taxRefund = remainingTax
+					} else {
+						taxRefund = computedTax
+					}
+				}
+			}
+			if platformFeeRefund.Add(taxRefund).GreaterThan(refundAmount) {
+				if platformFeeRefund.GreaterThan(refundAmount) {
+					platformFeeRefund = refundAmount
+					taxRefund = decimal.Zero
+				} else {
+					taxRefund = refundAmount.Sub(platformFeeRefund)
+				}
+			}
+		}
+
+		totalPlatformFeeRefund = totalPlatformFeeRefund.Add(platformFeeRefund)
+		totalTaxRefund = totalTaxRefund.Add(taxRefund)
+	}
+
+	organizerPayableRevocation := expectedRefundAmount.Sub(totalPlatformFeeRefund).Sub(totalTaxRefund)
+	if organizerPayableRevocation.IsNegative() {
+		organizerPayableRevocation = decimal.Zero
+	}
+
+	return &domain.EventCancellationPreview{
+		Event: domain.CancellationEventInfo{
+			ID:            event.ID,
+			Title:         event.Title,
+			Status:        event.Status,
+			ScheduledDate: eventDateStr,
+		},
+		Eligibility: domain.CancellationEligibility{
+			IsCancellable:   assessment.IsCancellable,
+			BlockingReasons: blockingReasons,
+		},
+		OperationalImpact: domain.CancellationOperationalImpact{
+			TotalBookings:                    totalBookings,
+			AffectedBookings:                 affectedBookings,
+			TotalTicketsSold:                 totalTicketsSold,
+			AffectedTickets:                  affectedTickets,
+			ActiveReservationsReleased:       activeReservationsReleased,
+			ReservedSeatsReleased:            reservedSeatsReleased,
+			GeneralAdmissionQuantityReleased: gaQuantityReleased,
+			ActiveCheckoutsExpired:           activeCheckoutsExpired,
+		},
+		FinancialImpact: domain.CancellationFinancialImpact{
+			Currency:                   "INR",
+			GrossCollectedAmount:       grossCollectedAmount,
+			AlreadyRefundedAmount:      alreadyRefundedAmount,
+			ExpectedRefundAmount:       expectedRefundAmount,
+			PlatformFeeRefund:          totalPlatformFeeRefund,
+			TaxRefund:                  totalTaxRefund,
+			OrganizerPayableRevocation: organizerPayableRevocation,
+		},
+		SettlementImpact: domain.CancellationSettlementImpact{
+			HasCompletedSettlement:  assessment.HasCompletedSettlement,
+			HasInFlightSettlement:   assessment.HasInFlightSettlement,
+			PendingSettlementsCount: assessment.PendingSettlementsCount,
+			PendingSettlementsTotal: assessment.PendingSettlementsTotal,
+			SettlementWarning:       assessment.SettlementWarning,
+		},
+		GeneratedAt: now,
+	}, nil
 }

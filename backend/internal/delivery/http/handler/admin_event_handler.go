@@ -359,6 +359,26 @@ func (h *AdminEventHandler) GetEventCancellationStatus(ctx *gin.Context) {
 	})
 }
 
+func (h *AdminEventHandler) GetCancellationPreview(ctx *gin.Context) {
+	idParam := strings.TrimSpace(ctx.Param("id"))
+	eventID, err := uuid.Parse(idParam)
+	if err != nil {
+		ctx.Error(appErrors.NewValidationError("invalid event id"))
+		return
+	}
+
+	preview, err := h.adminEventUsecase.GetCancellationPreview(ctx.Request.Context(), eventID)
+	if err != nil {
+		mapAdminEventError(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    preview,
+	})
+}
+
 func mapAdminEventError(ctx *gin.Context, err error) {
 	if errors.Is(err, domain.ErrEventNotFound) {
 		ctx.Error(appErrors.NewNotFoundError("event not found"))

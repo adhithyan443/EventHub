@@ -317,6 +317,11 @@ func registerOrganizerRoutes(
 		"/events/:id/cancellation",
 		eventHandler.GetEventCancellationStatus,
 	)
+
+	organizer.GET(
+		"/events/:id/cancellation-preview",
+		eventHandler.GetCancellationPreview,
+	)
 }
 
 func registerAdminRoutes(
@@ -423,6 +428,7 @@ func registerAdminRoutes(
 	admin.POST("/events/:id/cancel", adminEventHandler.CancelEvent)
 	admin.PATCH("/events/:id/cancel", adminEventHandler.CancelEvent)
 	admin.GET("/events/:id/cancellation", adminEventHandler.GetEventCancellationStatus)
+	admin.GET("/events/:id/cancellation-preview", adminEventHandler.GetCancellationPreview)
 }
 
 func registerCategoryRoutes(

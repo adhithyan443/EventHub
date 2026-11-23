@@ -395,6 +395,7 @@ func setupAdminEventTestRouter(
 	admin.DELETE("/events/:id", adminEventHandler.DeleteEvent)
 	admin.POST("/events/:id/cancel", adminEventHandler.CancelEvent)
 	admin.GET("/events/:id/cancellation", adminEventHandler.GetEventCancellationStatus)
+	admin.GET("/events/:id/cancellation-preview", adminEventHandler.GetCancellationPreview)
 
 	return router
 }
@@ -665,5 +666,48 @@ func TestAdminEventHandler_CancelEventAndStatus(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &resp)
 		require.NoError(t, err)
 		assert.True(t, resp["success"].(bool))
+	})
+
+	t.Run("authorized admin gets cancellation preview successfully", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/events/"+eventID.String()+"/cancellation-preview", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]interface{}
+		err := json.Unmarshal(w.Body.Bytes(), &resp)
+		require.NoError(t, err)
+		assert.True(t, resp["success"].(bool))
+		data := resp["data"].(map[string]interface{})
+		assert.NotNil(t, data["eligibility"])
+	})
+
+	t.Run("admin preview fails with 400 on invalid uuid", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/events/invalid-uuid/cancellation-preview", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
+	t.Run("admin preview fails with 404 on nonexistent event", func(t *testing.T) {
+		missingID := uuid.New()
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/events/"+missingID.String()+"/cancellation-preview", nil)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("non-admin customer token is forbidden from admin preview", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/events/"+eventID.String()+"/cancellation-preview", nil)
+		req.Header.Set("Authorization", "Bearer "+customerToken)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
 	})
 }

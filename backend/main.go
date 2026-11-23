@@ -14,6 +14,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/database"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
+	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"

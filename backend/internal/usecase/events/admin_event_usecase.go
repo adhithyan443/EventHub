@@ -86,6 +86,16 @@ func (u *AdminEventUsecase) GetCancellationStatus(
 	return u.cancellationUsecase.GetEventCancellationStatus(ctx, eventID)
 }
 
+func (u *AdminEventUsecase) GetCancellationPreview(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (*domain.EventCancellationPreview, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.txManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.GetCancellationPreview(ctx, eventID)
+}
+
 func (u *AdminEventUsecase) ListEvents(
 	ctx context.Context,
 	filter domain.AdminEventFilter,

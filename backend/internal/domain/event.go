@@ -118,6 +118,58 @@ type EventCancellationSummary struct {
 	CompletionStatus          string          `json:"completion_status"`
 }
 
+// EventCancellationPreview models the comprehensive operational and financial impact
+// of an event cancellation before it is confirmed.
+type CancellationEventInfo struct {
+	ID            uuid.UUID `json:"id"`
+	Title         string    `json:"title"`
+	Status        string    `json:"status"`
+	ScheduledDate string    `json:"scheduled_date"`
+}
+
+type CancellationEligibility struct {
+	IsCancellable   bool     `json:"is_cancellable"`
+	BlockingReasons []string `json:"blocking_reasons"`
+}
+
+type CancellationOperationalImpact struct {
+	TotalBookings                    int `json:"total_bookings"`
+	AffectedBookings                 int `json:"affected_bookings"`
+	TotalTicketsSold                 int `json:"total_tickets_sold"`
+	AffectedTickets                  int `json:"affected_tickets"`
+	ActiveReservationsReleased       int `json:"active_reservations_released"`
+	ReservedSeatsReleased            int `json:"reserved_seats_released"`
+	GeneralAdmissionQuantityReleased int `json:"general_admission_quantity_released"`
+	ActiveCheckoutsExpired           int `json:"active_checkouts_expired"`
+}
+
+type CancellationFinancialImpact struct {
+	Currency                   string          `json:"currency"`
+	GrossCollectedAmount       decimal.Decimal `json:"gross_collected_amount"`
+	AlreadyRefundedAmount      decimal.Decimal `json:"already_refunded_amount"`
+	ExpectedRefundAmount       decimal.Decimal `json:"expected_refund_amount"`
+	PlatformFeeRefund          decimal.Decimal `json:"platform_fee_refund"`
+	TaxRefund                  decimal.Decimal `json:"tax_refund"`
+	OrganizerPayableRevocation decimal.Decimal `json:"organizer_payable_revocation"`
+}
+
+type CancellationSettlementImpact struct {
+	HasCompletedSettlement  bool            `json:"has_completed_settlement"`
+	HasInFlightSettlement   bool            `json:"has_in_flight_settlement"`
+	PendingSettlementsCount int             `json:"pending_settlements_count"`
+	PendingSettlementsTotal decimal.Decimal `json:"pending_settlements_total"`
+	SettlementWarning       string          `json:"settlement_warning,omitempty"`
+}
+
+type EventCancellationPreview struct {
+	Event             CancellationEventInfo         `json:"event"`
+	Eligibility       CancellationEligibility       `json:"eligibility"`
+	OperationalImpact CancellationOperationalImpact `json:"operational_impact"`
+	FinancialImpact   CancellationFinancialImpact   `json:"financial_impact"`
+	SettlementImpact  CancellationSettlementImpact  `json:"settlement_impact"`
+	GeneratedAt       time.Time                     `json:"generated_at"`
+}
+
 type EventRepository interface {
 	Create(event *Event) error
 	FindByID(id uuid.UUID) (*Event, error)

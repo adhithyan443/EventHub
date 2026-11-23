@@ -102,6 +102,17 @@ func (u *EventUsecase) GetCancellationStatus(
 	return u.cancellationUsecase.GetEventCancellationStatusForOrganizer(ctx, userID, eventID)
 }
 
+func (u *EventUsecase) GetCancellationPreview(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) (*domain.EventCancellationPreview, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.transactionManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.GetCancellationPreviewForOrganizer(ctx, userID, eventID)
+}
+
 type EventContactInput struct {
 	Name  string
 	Phone string
