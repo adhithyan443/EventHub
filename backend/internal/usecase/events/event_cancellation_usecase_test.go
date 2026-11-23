@@ -1359,6 +1359,75 @@ func TestEventCancellationUsecase_CancelEvent_FreeBooking_NoRefundCreated(t *tes
 	assert.Empty(t, f.txRepos.refundRepo.refunds)
 }
 
+func TestEventCancellationUsecase_CancelEvent_ZeroBookings_Success(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Low ticket demand, cancelling event early")
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	assert.Equal(t, domain.EventStatusCancelled, summary.EventStatus)
+	assert.Equal(t, 0, summary.TotalBookingsAffected)
+	assert.Equal(t, 0, summary.TotalTicketsAffected)
+	assert.True(t, summary.TotalEligibleRefundAmount.IsZero())
+	assert.Equal(t, 0, summary.PendingRefundCount)
+	assert.Equal(t, "NO_REFUNDS_NEEDED", summary.CompletionStatus)
+
+	// Cancellation record was persisted
+	c, cErr := f.txRepos.cancellationRepo.FindByEventID(f.eventID)
+	require.NoError(t, cErr)
+	require.NotNil(t, c)
+	assert.Equal(t, "Low ticket demand, cancelling event early", *c.CancellationReason)
+
+	// Organizer notified, no customer notices
+	select {
+	case <-f.notifier.notifyOrgCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for organizer notification")
+	}
+	assert.Len(t, f.notifier.customerNotices, 0)
+}
+
+func TestEventCancellationUsecase_CancelEvent_PendingBookings_SafelyCancelledWithoutRefund(t *testing.T) {
+	f := newCancellationFixture(t)
+	ctx := context.Background()
+
+	bID := uuid.New()
+	custID := uuid.New()
+	f.userRepo.users[custID] = &domain.User{
+		ID:       custID,
+		FullName: "Pending Customer",
+		Email:    "pending@example.com",
+	}
+
+	b := &domain.Booking{
+		ID:            bID,
+		UserID:        custID,
+		EventID:       f.eventID,
+		BookingNumber: "BK-PENDING-999",
+		Subtotal:      decimal.NewFromInt(150),
+		Total:         decimal.NewFromInt(165),
+		Status:        domain.BookingStatusPending,
+	}
+	f.txRepos.bookingRepo.bookings[bID] = b
+
+	summary, err := f.usecase.CancelEventByOrganizer(ctx, f.organizerUserID, f.eventID, "Safety concern at venue")
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	assert.Equal(t, domain.EventStatusCancelled, summary.EventStatus)
+	assert.Equal(t, 1, summary.TotalBookingsAffected)
+	assert.Equal(t, 0, summary.TotalTicketsAffected)
+	assert.True(t, summary.TotalEligibleRefundAmount.IsZero())
+	assert.Equal(t, "NO_REFUNDS_NEEDED", summary.CompletionStatus)
+
+	// Pending booking must be transitioned to CANCELLED
+	assert.Equal(t, domain.BookingStatusCancelled, f.txRepos.bookingRepo.bookings[bID].Status)
+	// No refund should be created for unpaid booking
+	assert.Empty(t, f.txRepos.refundRepo.refunds)
+}
+
 func TestEventCancellationUsecase_GetEventCancellationStatus_TrackingMetrics(t *testing.T) {
 	f := newCancellationFixture(t)
 	ctx := context.Background()

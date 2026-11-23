@@ -14,6 +14,7 @@ export default function AdminEventDetailDrawer({
   onEditClick,
   onPublishClick,
   onDeleteClick,
+  onCancelClick,
 }) {
   const [details, setDetails] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -645,7 +646,7 @@ export default function AdminEventDetailDrawer({
           )}
         </div>
 
-        {/* Drawer Actions Footer (Strictly NO Cancel Action) */}
+        {/* Drawer Actions Footer */}
         <div className="p-4 border-t border-[#dce2f7] bg-[#f9f9ff] flex items-center justify-between gap-3 shrink-0">
           <button
             type="button"
@@ -656,6 +657,29 @@ export default function AdminEventDetailDrawer({
           </button>
 
           <div className="flex items-center gap-2">
+            {status === "PUBLISHED" && typeof onCancelClick === "function" && (
+              <button
+                type="button"
+                onClick={() => onCancelClick(currentEvent)}
+                className="bg-[#fee2e2] hover:bg-[#fecaca] text-[#ba1a1a] border border-[#fecaca] text-xs font-semibold px-3.5 py-2 rounded-lg transition-colors cursor-pointer shadow-sm flex items-center gap-1.5"
+                title="Cancel Event"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="size-3.5 text-[#ba1a1a]"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                </svg>
+                <span>Cancel Event</span>
+              </button>
+            )}
+
             {status === "DRAFT" && (
               <button
                 type="button"
