@@ -351,8 +351,14 @@ func registerAdminRoutes(
 	if adminLedgerHandler != nil {
 		ledger := admin.Group("/ledger")
 		{
+			ledger.GET("/overview", adminLedgerHandler.GetFinancialOverview)
 			ledger.GET("/journals", adminLedgerHandler.ListJournals)
 			ledger.GET("/journals/:id", adminLedgerHandler.GetJournal)
+		}
+
+		finance := admin.Group("/finance")
+		{
+			finance.GET("/overview", adminLedgerHandler.GetFinancialOverview)
 		}
 	}
 

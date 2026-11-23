@@ -61,12 +61,29 @@ func (h *AdminLedgerHandler) ListJournals(ctx *gin.Context) {
 		search = strings.TrimSpace(ctx.Query("reference_id"))
 	}
 
+	var eventID *uuid.UUID
+	if eventParam := strings.TrimSpace(ctx.Query("event_id")); eventParam != "" {
+		if id, err := uuid.Parse(eventParam); err == nil {
+			eventID = &id
+		}
+	}
+
+	var organizerID *uuid.UUID
+	if orgParam := strings.TrimSpace(ctx.Query("organizer_id")); orgParam != "" {
+		if id, err := uuid.Parse(orgParam); err == nil {
+			organizerID = &id
+		}
+	}
+
 	filter := domain.AdminLedgerFilter{
-		Page:            page,
-		Limit:           limit,
-		TransactionType: strings.TrimSpace(ctx.Query("transaction_type")),
-		Status:          strings.TrimSpace(ctx.Query("status")),
-		Search:          search,
+		Page:             page,
+		Limit:            limit,
+		TransactionType:  strings.TrimSpace(ctx.Query("transaction_type")),
+		Status:           strings.TrimSpace(ctx.Query("status")),
+		SettlementStatus: strings.TrimSpace(ctx.Query("settlement_status")),
+		Search:           search,
+		EventID:          eventID,
+		OrganizerID:      organizerID,
 	}
 
 	if fromParam := strings.TrimSpace(ctx.Query("from")); fromParam != "" {
@@ -142,6 +159,66 @@ func (h *AdminLedgerHandler) GetJournal(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    detail,
+	})
+}
+
+// GetFinancialOverview handles GET /api/v1/admin/ledger/overview.
+func (h *AdminLedgerHandler) GetFinancialOverview(ctx *gin.Context) {
+	var filter domain.AdminFinancialFilter
+
+	if fromParam := strings.TrimSpace(ctx.Query("from")); fromParam != "" {
+		fromTime, err := parseLedgerDateParam(fromParam, false)
+		if err != nil {
+			ctx.Error(appErrors.NewValidationError("invalid from date parameter, expected RFC3339 or YYYY-MM-DD"))
+			return
+		}
+		filter.From = &fromTime
+	}
+
+	if toParam := strings.TrimSpace(ctx.Query("to")); toParam != "" {
+		toTime, err := parseLedgerDateParam(toParam, true)
+		if err != nil {
+			ctx.Error(appErrors.NewValidationError("invalid to date parameter, expected RFC3339 or YYYY-MM-DD"))
+			return
+		}
+		filter.To = &toTime
+	}
+
+	if eventParam := strings.TrimSpace(ctx.Query("event_id")); eventParam != "" {
+		if id, err := uuid.Parse(eventParam); err == nil {
+			filter.EventID = &id
+		} else {
+			ctx.Error(appErrors.NewValidationError("invalid event_id parameter, must be a valid UUID"))
+			return
+		}
+	}
+
+	if orgParam := strings.TrimSpace(ctx.Query("organizer_id")); orgParam != "" {
+		if id, err := uuid.Parse(orgParam); err == nil {
+			filter.OrganizerID = &id
+		} else {
+			ctx.Error(appErrors.NewValidationError("invalid organizer_id parameter, must be a valid UUID"))
+			return
+		}
+	}
+
+	filter.TransactionType = strings.TrimSpace(ctx.Query("transaction_type"))
+	filter.SettlementStatus = strings.TrimSpace(ctx.Query("settlement_status"))
+
+	overview, err := h.ledgerUsecase.GetFinancialOverview(ctx.Request.Context(), filter)
+	if err != nil {
+		h.logger.ErrorContext(ctx.Request.Context(), "admin_get_financial_overview_failed", slog.Any("error", err))
+		if errors.Is(err, domain.ErrInvalidDateRange) {
+			ctx.Error(appErrors.NewValidationError(err.Error()))
+			return
+		}
+		ctx.Error(appErrors.NewInternalError("failed to retrieve financial overview"))
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    overview,
 	})
 }
 
