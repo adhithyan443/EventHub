@@ -37,6 +37,7 @@ func setupRouter(
 	adminDashboardHandler *handler.AdminDashboardHandler,
 	adminLedgerHandler *handler.AdminLedgerHandler,
 	profileHandler *handler.ProfileHandler,
+	checkInHandler *handler.TicketCheckInHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) *gin.Engine {
@@ -83,6 +84,7 @@ func setupRouter(
 		organizerSettlementHandler,
 		eventHandler,
 		seatLayoutHandler,
+		checkInHandler,
 		jwtService,
 		userRepo,
 	)
@@ -211,6 +213,7 @@ func registerOrganizerRoutes(
 	organizerSettlementHandler *handler.OrganizerSettlementHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
+	checkInHandler *handler.TicketCheckInHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -262,6 +265,16 @@ func registerOrganizerRoutes(
 		}
 	}
 
+	// Ticket check-in endpoint (protected by role ORGANIZER).
+	if checkInHandler != nil {
+		eventCheckIn := organizer.Group("/events")
+		eventCheckIn.Use(middleware.RequireRole("ORGANIZER"))
+
+		eventCheckIn.POST(
+			"/:eventId/check-in",
+			checkInHandler.CheckIn,
+		)
+	}
 	// Organizer event endpoints.
 	organizer.POST(
 		"/events",

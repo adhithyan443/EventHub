@@ -88,4 +88,12 @@ type TicketRepository interface {
 		ctx context.Context,
 		eventID uuid.UUID,
 	) (int64, error)
+
+	MarkAsUsedIfValid(
+		ctx context.Context,
+		ticketID uuid.UUID,
+		eventID uuid.UUID,
+		usedAt time.Time,
+	) (bool, error)
+	
 }

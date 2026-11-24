@@ -65,6 +65,7 @@ type TransactionRepositories interface {
 
 	TicketTypeRepository() TicketTypeRepository
 	TicketRepository() TicketRepository
+	TicketScanRepository() TicketScanRepository
 
 	SeatReservationRepository() SeatReservationRepository
 	CheckoutRepository() CheckoutRepository
@@ -78,4 +79,5 @@ type TransactionRepositories interface {
 	FinanceAccountRepository() FinanceAccountRepository
 	FinanceJournalRepository() FinanceJournalRepository
 	SettlementRepository() SettlementRepository
+
 }

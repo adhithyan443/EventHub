@@ -143,7 +143,7 @@ func (u *EventCancellationUsecase) GetEventCancellationStatus(
 	return summary, nil
 }
 
-// GetEventCancellationStatusForOrganizer retrieves cancellation progress ensuring organizer ownership.
+// GetEventCancellationStatusForOrganizer retrieves cancellation progress ensuring ownership.
 func (u *EventCancellationUsecase) GetEventCancellationStatusForOrganizer(
 	ctx context.Context,
 	userID uuid.UUID,

@@ -264,6 +264,18 @@ func main() {
 	)
 
 	ticketHandler := handler.NewTicketHandler(ticketUsecase, qrService)
+
+	checkInUseCase := ticket.NewCheckInUseCase(
+		txManager,
+		qrService,
+		logger,
+	)
+
+	checkInHandler := handler.NewTicketCheckInHandler(
+		checkInUseCase,
+		logger,
+	)
+
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
@@ -512,6 +524,7 @@ func main() {
 		adminDashboardHandler,
 		adminLedgerHandler,
 		profileHandler,
+		checkInHandler,
 		jwtService,
 		userRepo,
 	)

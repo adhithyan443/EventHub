@@ -34,6 +34,7 @@ type ticketSelectionItem struct {
 
 type createReservationBody struct {
 	EventID      string                `json:"eventId"`
+	EventIDAlt   string                `json:"event_id"`
 	SeatIDs      []string              `json:"seat_ids"`
 	TicketTypeID *string               `json:"ticket_type_id"`
 	Quantity     int                   `json:"quantity"`
@@ -60,6 +61,9 @@ func (h *ReservationHandler) CreateReservation(c *gin.Context) {
 		return
 	}
 
+	if body.EventID == "" {
+		body.EventID = body.EventIDAlt
+	}
 	if body.EventID == "" {
 		body.EventID = c.Param("eventId")
 	}
