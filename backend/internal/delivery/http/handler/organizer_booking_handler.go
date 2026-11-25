@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/booking"
@@ -44,17 +45,37 @@ func NewOrganizerBookingHandler(
 	}
 }
 
+func getRequestID(ctx *gin.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	reqID := ctx.GetString(middleware.RequestIDKey)
+	if reqID == "" {
+		reqID = ctx.GetHeader("X-Request-ID")
+	}
+	return reqID
+}
+
+func contextWithRequestID(ctx *gin.Context) context.Context {
+	reqID := getRequestID(ctx)
+	reqCtx := ctx.Request.Context()
+	return booking.WithRequestID(reqCtx, reqID)
+}
+
 func (h *OrganizerBookingHandler) mapUsecaseError(ctx *gin.Context, op string, err error) {
+	reqID := getRequestID(ctx)
 	switch {
 	case errors.Is(err, booking.ErrUnauthorizedOrganizer),
 		errors.Is(err, booking.ErrUnauthorizedEvent):
 		h.logger.WarnContext(ctx.Request.Context(), op+"_forbidden",
+			slog.String("request_id", reqID),
 			slog.String("path", ctx.Request.URL.Path),
 			slog.Any("error", err),
 		)
 		ctx.Error(appErrors.NewForbiddenError(err.Error()))
 	case errors.Is(err, booking.ErrInvalidUserID):
 		h.logger.WarnContext(ctx.Request.Context(), op+"_unauthorized",
+			slog.String("request_id", reqID),
 			slog.String("path", ctx.Request.URL.Path),
 			slog.Any("error", err),
 		)
@@ -62,6 +83,7 @@ func (h *OrganizerBookingHandler) mapUsecaseError(ctx *gin.Context, op string, e
 	case errors.Is(err, booking.ErrEventNotFound),
 		errors.Is(err, domain.ErrBookingNotFound):
 		h.logger.WarnContext(ctx.Request.Context(), op+"_not_found",
+			slog.String("request_id", reqID),
 			slog.String("path", ctx.Request.URL.Path),
 			slog.Any("error", err),
 		)
@@ -74,12 +96,14 @@ func (h *OrganizerBookingHandler) mapUsecaseError(ctx *gin.Context, op string, e
 		errors.Is(err, booking.ErrInvalidBookingID),
 		errors.Is(err, booking.ErrInvalidEventID):
 		h.logger.WarnContext(ctx.Request.Context(), op+"_validation_error",
+			slog.String("request_id", reqID),
 			slog.String("path", ctx.Request.URL.Path),
 			slog.Any("error", err),
 		)
 		ctx.Error(appErrors.NewValidationError(err.Error()))
 	default:
 		h.logger.ErrorContext(ctx.Request.Context(), op+"_internal_error",
+			slog.String("request_id", reqID),
 			slog.String("path", ctx.Request.URL.Path),
 			slog.Any("error", err),
 		)
@@ -201,13 +225,15 @@ func (h *OrganizerBookingHandler) ListBookings(ctx *gin.Context) {
 		return
 	}
 
-	result, err := h.usecase.ListBookings(ctx.Request.Context(), userID, filter)
+	reqCtx := contextWithRequestID(ctx)
+	result, err := h.usecase.ListBookings(reqCtx, userID, filter)
 	if err != nil {
 		h.mapUsecaseError(ctx, "list_organizer_bookings", err)
 		return
 	}
 
-	h.logger.InfoContext(ctx.Request.Context(), "organizer_bookings_listed",
+	h.logger.InfoContext(reqCtx, "organizer_bookings_listed",
+		slog.String("request_id", getRequestID(ctx)),
 		slog.String("user_id", userID.String()),
 		slog.Int("page", result.Page),
 		slog.Int("limit", result.Limit),
@@ -246,13 +272,15 @@ func (h *OrganizerBookingHandler) GetBookingStats(ctx *gin.Context) {
 		return
 	}
 
-	stats, err := h.usecase.GetBookingStats(ctx.Request.Context(), userID, filter)
+	reqCtx := contextWithRequestID(ctx)
+	stats, err := h.usecase.GetBookingStats(reqCtx, userID, filter)
 	if err != nil {
 		h.mapUsecaseError(ctx, "get_organizer_booking_stats", err)
 		return
 	}
 
-	h.logger.InfoContext(ctx.Request.Context(), "organizer_booking_stats_retrieved",
+	h.logger.InfoContext(reqCtx, "organizer_booking_stats_retrieved",
+		slog.String("request_id", getRequestID(ctx)),
 		slog.String("user_id", userID.String()),
 		slog.Int64("total_bookings", stats.TotalBookings),
 	)
@@ -278,13 +306,15 @@ func (h *OrganizerBookingHandler) GetBookingDetail(ctx *gin.Context) {
 		return
 	}
 
-	detail, err := h.usecase.GetBookingDetail(ctx.Request.Context(), userID, bookingID)
+	reqCtx := contextWithRequestID(ctx)
+	detail, err := h.usecase.GetBookingDetail(reqCtx, userID, bookingID)
 	if err != nil {
 		h.mapUsecaseError(ctx, "get_organizer_booking_detail", err)
 		return
 	}
 
-	h.logger.InfoContext(ctx.Request.Context(), "organizer_booking_detail_retrieved",
+	h.logger.InfoContext(reqCtx, "organizer_booking_detail_retrieved",
+		slog.String("request_id", getRequestID(ctx)),
 		slog.String("user_id", userID.String()),
 		slog.String("booking_id", bookingID.String()),
 	)
@@ -309,13 +339,15 @@ func (h *OrganizerBookingHandler) ListAttendees(ctx *gin.Context) {
 		return
 	}
 
-	result, err := h.usecase.ListAttendees(ctx.Request.Context(), userID, filter)
+	reqCtx := contextWithRequestID(ctx)
+	result, err := h.usecase.ListAttendees(reqCtx, userID, filter)
 	if err != nil {
 		h.mapUsecaseError(ctx, "list_organizer_attendees", err)
 		return
 	}
 
-	h.logger.InfoContext(ctx.Request.Context(), "organizer_attendees_listed",
+	h.logger.InfoContext(reqCtx, "organizer_attendees_listed",
+		slog.String("request_id", getRequestID(ctx)),
 		slog.String("user_id", userID.String()),
 		slog.Int("page", result.Page),
 		slog.Int("limit", result.Limit),
@@ -354,13 +386,15 @@ func (h *OrganizerBookingHandler) GetAttendeeStats(ctx *gin.Context) {
 		return
 	}
 
-	stats, err := h.usecase.GetAttendeeStats(ctx.Request.Context(), userID, filter)
+	reqCtx := contextWithRequestID(ctx)
+	stats, err := h.usecase.GetAttendeeStats(reqCtx, userID, filter)
 	if err != nil {
 		h.mapUsecaseError(ctx, "get_organizer_attendee_stats", err)
 		return
 	}
 
-	h.logger.InfoContext(ctx.Request.Context(), "organizer_attendee_stats_retrieved",
+	h.logger.InfoContext(reqCtx, "organizer_attendee_stats_retrieved",
+		slog.String("request_id", getRequestID(ctx)),
 		slog.String("user_id", userID.String()),
 		slog.Int64("total_issued", stats.TotalIssuedTickets),
 	)

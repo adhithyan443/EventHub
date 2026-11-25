@@ -65,12 +65,39 @@ func NewOrganizerBookingUsecase(
 	}, nil
 }
 
+type requestIDContextKey struct{}
+
+// WithRequestID attaches a request ID to a context for structured usecase logging.
+func WithRequestID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if requestID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestIDContextKey{}, requestID)
+}
+
+func extractRequestID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if reqID, ok := ctx.Value(requestIDContextKey{}).(string); ok && reqID != "" {
+		return reqID
+	}
+	if reqID, ok := ctx.Value("request_id").(string); ok && reqID != "" {
+		return reqID
+	}
+	return ""
+}
+
 // resolveAndValidateOrganizer retrieves the organizer profile associated with the authenticated user ID
-// and enforces approved organizer account status (lifecycle: SUBMITTED -> UNDER_REVIEW -> APPROVED).
+// and enforces approved/active organizer account status (lifecycle: SUBMITTED -> UNDER_REVIEW -> APPROVED, account status: ACTIVE/APPROVED).
 func (u *OrganizerBookingUsecase) resolveAndValidateOrganizer(
 	ctx context.Context,
 	userID uuid.UUID,
 ) (*domain.Organizer, error) {
+	reqID := extractRequestID(ctx)
 	if userID == uuid.Nil {
 		return nil, ErrInvalidUserID
 	}
@@ -79,11 +106,13 @@ func (u *OrganizerBookingUsecase) resolveAndValidateOrganizer(
 	if err != nil {
 		if errors.Is(err, domain.ErrOrganizerNotFound) {
 			u.logger.WarnContext(ctx, "organizer access denied: organizer profile not found",
+				slog.String("request_id", reqID),
 				slog.String("user_id", userID.String()),
 			)
 			return nil, ErrUnauthorizedOrganizer
 		}
 		u.logger.ErrorContext(ctx, "failed to lookup organizer by user ID",
+			slog.String("request_id", reqID),
 			slog.String("user_id", userID.String()),
 			slog.Any("error", err),
 		)
@@ -91,8 +120,9 @@ func (u *OrganizerBookingUsecase) resolveAndValidateOrganizer(
 	}
 
 	status := strings.ToUpper(strings.TrimSpace(organizer.Status))
-	if status != "APPROVED" {
-		u.logger.WarnContext(ctx, "organizer access denied: unapproved organizer status",
+	if status != "APPROVED" && status != "ACTIVE" {
+		u.logger.WarnContext(ctx, "organizer access denied: unapproved or inactive organizer status",
+			slog.String("request_id", reqID),
 			slog.String("user_id", userID.String()),
 			slog.String("organizer_id", organizer.ID.String()),
 			slog.String("status", organizer.Status),
@@ -124,6 +154,7 @@ func (u *OrganizerBookingUsecase) validateEventOwnership(
 				return ErrEventNotFound
 			}
 			u.logger.ErrorContext(ctx, "failed to lookup event for organizer filter validation",
+				slog.String("request_id", extractRequestID(ctx)),
 				slog.String("event_id", eventID.String()),
 				slog.Any("error", err),
 			)
@@ -131,6 +162,7 @@ func (u *OrganizerBookingUsecase) validateEventOwnership(
 		}
 		if event.OrganizerID != organizerID {
 			u.logger.WarnContext(ctx, "security: organizer attempted to access foreign event",
+				slog.String("request_id", extractRequestID(ctx)),
 				slog.String("authenticated_organizer_id", organizerID.String()),
 				slog.String("requested_event_id", eventID.String()),
 				slog.String("actual_event_owner_id", event.OrganizerID.String()),
@@ -266,6 +298,7 @@ func (u *OrganizerBookingUsecase) ListBookings(
 	}
 
 	u.logger.InfoContext(ctx, "organizer_bookings_listing_requested",
+		slog.String("request_id", extractRequestID(ctx)),
 		slog.String("organizer_id", organizer.ID.String()),
 		slog.Int("page", filter.Page),
 		slog.Int("limit", filter.Limit),
@@ -294,6 +327,7 @@ func (u *OrganizerBookingUsecase) GetBookingStats(
 	}
 
 	u.logger.InfoContext(ctx, "organizer_booking_stats_requested",
+		slog.String("request_id", extractRequestID(ctx)),
 		slog.String("organizer_id", organizer.ID.String()),
 		slog.String("booking_status", filter.BookingStatus),
 		slog.String("payment_status", filter.PaymentStatus),
@@ -323,12 +357,14 @@ func (u *OrganizerBookingUsecase) GetBookingDetail(
 	if err != nil {
 		if errors.Is(err, domain.ErrBookingNotFound) {
 			u.logger.WarnContext(ctx, "organizer booking detail not found or unauthorized",
+				slog.String("request_id", extractRequestID(ctx)),
 				slog.String("organizer_id", organizer.ID.String()),
 				slog.String("booking_id", bookingID.String()),
 			)
 			return nil, domain.ErrBookingNotFound
 		}
 		u.logger.ErrorContext(ctx, "failed to query organizer booking detail",
+			slog.String("request_id", extractRequestID(ctx)),
 			slog.String("organizer_id", organizer.ID.String()),
 			slog.String("booking_id", bookingID.String()),
 			slog.Any("error", err),
@@ -337,6 +373,7 @@ func (u *OrganizerBookingUsecase) GetBookingDetail(
 	}
 
 	u.logger.InfoContext(ctx, "organizer_booking_detail_retrieved",
+		slog.String("request_id", extractRequestID(ctx)),
 		slog.String("organizer_id", organizer.ID.String()),
 		slog.String("booking_id", bookingID.String()),
 	)
@@ -360,6 +397,7 @@ func (u *OrganizerBookingUsecase) ListAttendees(
 	}
 
 	u.logger.InfoContext(ctx, "organizer_attendees_listing_requested",
+		slog.String("request_id", extractRequestID(ctx)),
 		slog.String("organizer_id", organizer.ID.String()),
 		slog.Int("page", filter.Page),
 		slog.Int("limit", filter.Limit),
@@ -387,6 +425,7 @@ func (u *OrganizerBookingUsecase) GetAttendeeStats(
 	}
 
 	u.logger.InfoContext(ctx, "organizer_attendee_stats_requested",
+		slog.String("request_id", extractRequestID(ctx)),
 		slog.String("organizer_id", organizer.ID.String()),
 		slog.String("check_in_status", filter.CheckInStatus),
 		slog.Bool("has_search", filter.Search != ""),

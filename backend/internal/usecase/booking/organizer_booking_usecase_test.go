@@ -317,17 +317,45 @@ func TestOrganizerAuthorization(t *testing.T) {
 		assert.EqualError(t, err, "db connection failure")
 	})
 
-	t.Run("organizer not approved", func(t *testing.T) {
-		statuses := []string{"PENDING", "REJECTED", "SUSPENDED", "INACTIVE", "ACTIVE", "SUBMITTED", "UNDER_REVIEW"}
-		for _, s := range statuses {
+	t.Run("organizer not approved or inactive", func(t *testing.T) {
+		unauthorizedStatuses := []string{"PENDING", "REJECTED", "SUSPENDED", "INACTIVE", "SUBMITTED", "UNDER_REVIEW", ""}
+		for _, s := range unauthorizedStatuses {
 			organizer.Status = s
 			_, err := uc.ListBookings(ctx, userID, domain.OrganizerBookingFilter{})
 			assert.Equal(t, ErrUnauthorizedOrganizer, err, "status %s should be unauthorized", s)
-		}
 
-		organizer.Status = "APPROVED"
-		_, err := uc.ListBookings(ctx, userID, domain.OrganizerBookingFilter{})
-		assert.NoError(t, err, "APPROVED status should be authorized")
+			_, err = uc.GetBookingStats(ctx, userID, domain.OrganizerBookingFilter{})
+			assert.Equal(t, ErrUnauthorizedOrganizer, err, "stats status %s should be unauthorized", s)
+
+			_, err = uc.ListAttendees(ctx, userID, domain.OrganizerAttendeeFilter{})
+			assert.Equal(t, ErrUnauthorizedOrganizer, err, "attendees status %s should be unauthorized", s)
+
+			_, err = uc.GetAttendeeStats(ctx, userID, domain.OrganizerAttendeeFilter{})
+			assert.Equal(t, ErrUnauthorizedOrganizer, err, "attendee stats status %s should be unauthorized", s)
+
+			_, err = uc.GetBookingDetail(ctx, userID, uuid.New())
+			assert.Equal(t, ErrUnauthorizedOrganizer, err, "booking detail status %s should be unauthorized", s)
+		}
+	})
+
+	t.Run("approved and active organizer status authorized across all operations", func(t *testing.T) {
+		validStatuses := []string{"APPROVED", "ACTIVE", "approved", "active", " Approved ", " Active "}
+		reqCtx := WithRequestID(ctx, "req-test-auth-123")
+
+		for _, s := range validStatuses {
+			organizer.Status = s
+			_, err := uc.ListBookings(reqCtx, userID, domain.OrganizerBookingFilter{})
+			assert.NoError(t, err, "ListBookings should succeed for status %s", s)
+
+			_, err = uc.GetBookingStats(reqCtx, userID, domain.OrganizerBookingFilter{})
+			assert.NoError(t, err, "GetBookingStats should succeed for status %s", s)
+
+			_, err = uc.ListAttendees(reqCtx, userID, domain.OrganizerAttendeeFilter{})
+			assert.NoError(t, err, "ListAttendees should succeed for status %s", s)
+
+			_, err = uc.GetAttendeeStats(reqCtx, userID, domain.OrganizerAttendeeFilter{})
+			assert.NoError(t, err, "GetAttendeeStats should succeed for status %s", s)
+		}
 	})
 }
 
