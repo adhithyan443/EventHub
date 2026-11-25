@@ -84,14 +84,35 @@ export default function OrganizerAttendeesPage() {
       try {
         const res = await getOrganizerEvents({ limit: 100 });
         if (cancelled) return;
-        const list = Array.isArray(res?.data?.events)
+        const rawList = Array.isArray(res?.data?.events)
           ? res.data.events
           : Array.isArray(res?.data)
           ? res.data
           : Array.isArray(res?.events)
           ? res.events
           : [];
-        setOrganizerEvents(list);
+
+        const normalizedList = rawList
+          .map((ev) => {
+            if (!ev || typeof ev !== "object") return null;
+            const id = ev.id || ev.ID || ev.event_id || ev.eventId || "";
+            const title =
+              ev.title ||
+              ev.Title ||
+              ev.name ||
+              ev.eventName ||
+              ev.event_name ||
+              "";
+            if (!id) return null;
+            return {
+              ...ev,
+              id: String(id),
+              title: String(title).trim() || "Untitled Event",
+            };
+          })
+          .filter(Boolean);
+
+        setOrganizerEvents(normalizedList);
       } catch (err) {
         if (!cancelled) {
           console.error("Failed to load organizer events for attendee filter dropdown:", err);
@@ -368,12 +389,24 @@ export default function OrganizerAttendeesPage() {
               disabled={loadingEvents}
               className="w-full px-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#00685F] focus:border-transparent transition-all text-slate-700 font-medium disabled:opacity-60"
             >
-              <option value="ALL">All Events</option>
-              {organizerEvents.map((ev) => (
-                <option key={ev.id} value={ev.id}>
-                  {ev.title}
-                </option>
-              ))}
+              <option value="ALL">
+                {loadingEvents ? "Loading events..." : "All Events"}
+              </option>
+              {organizerEvents.map((ev) => {
+                const eventId = ev.id || ev.ID || ev.event_id || "";
+                const eventTitle =
+                  ev.title ||
+                  ev.Title ||
+                  ev.name ||
+                  ev.eventName ||
+                  "Untitled Event";
+                if (!eventId) return null;
+                return (
+                  <option key={eventId} value={eventId}>
+                    {eventTitle}
+                  </option>
+                );
+              })}
             </select>
           </div>
 
