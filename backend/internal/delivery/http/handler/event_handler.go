@@ -640,11 +640,16 @@ func (h *EventHandler) UpdateEvent(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		h.logger.Warn(
 			"event_update_invalid_event_id",
-			"event_id", c.Param("id"),
+			"event_id", rawEventID,
 			"user_id", userID,
 			"error", err,
 		)
@@ -1192,12 +1197,17 @@ func (h *EventHandler) GetEventDetails(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		h.logger.Warn(
 			"event_details_invalid_id",
 			"user_id", userID,
-			"event_id", c.Param("id"),
+			"event_id", rawEventID,
 		)
 
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1265,12 +1275,17 @@ func (h *EventHandler) DeleteEvent(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		h.logger.Warn(
 			"event_delete_invalid_id",
 			"user_id", userID,
-			"event_id", c.Param("id"),
+			"event_id", rawEventID,
 		)
 
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1340,12 +1355,17 @@ func (h *EventHandler) CancelEvent(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		h.logger.Warn(
 			"event_cancel_invalid_id",
 			"user_id", userID,
-			"event_id", c.Param("id"),
+			"event_id", rawEventID,
 		)
 
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -1381,6 +1401,37 @@ func (h *EventHandler) CancelEvent(c *gin.Context) {
 				"message": "event not found",
 			})
 
+		case errors.Is(err, domain.ErrCancellationReasonRequired):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": "cancellation reason is required",
+			})
+
+		case errors.Is(err, domain.ErrCancellationReasonTooLong):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+
+		case errors.Is(err, domain.ErrEventAlreadyCancelled):
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"message": "event is already cancelled",
+			})
+
+		case errors.Is(err, domain.ErrEventCannotBeCancelledWithCompletedSettlement),
+			errors.Is(err, domain.ErrEventCannotBeCancelledWithActiveSettlement):
+			c.JSON(http.StatusConflict, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+
+		case errors.Is(err, domain.ErrEventCannotBeCancelled):
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+
 		default:
 			h.logger.Error(
 				"event_cancel_handler_failed",
@@ -1411,7 +1462,12 @@ func (h *EventHandler) GetEventCancellationStatus(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -1452,6 +1508,65 @@ func (h *EventHandler) GetEventCancellationStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    summary,
+	})
+}
+
+func (h *EventHandler) GetCancellationPreview(c *gin.Context) {
+	userID, err := getAuthenticatedUserID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid event id",
+		})
+		return
+	}
+
+	preview, err := h.eventUsecase.GetCancellationPreview(
+		c.Request.Context(),
+		userID,
+		eventID,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, eventUsecase.ErrUnauthorizedOrganizer):
+			c.JSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "you are not authorized to preview cancellation for this event",
+			})
+		case errors.Is(err, domain.ErrEventNotFound):
+			c.JSON(http.StatusNotFound, gin.H{
+				"success": false,
+				"message": "event not found",
+			})
+		default:
+			h.logger.ErrorContext(c.Request.Context(), "get_cancellation_preview_failed",
+				slog.String("event_id", eventID.String()),
+				slog.String("user_id", userID.String()),
+				slog.Any("error", err),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "failed to generate cancellation preview",
+			})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    preview,
 	})
 }
 
@@ -1549,12 +1664,17 @@ func (h *EventHandler) PublishEvent(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		h.logger.Warn(
 			"event_publish_invalid_event_id",
 			"user_id", userID,
-			"event_id", c.Param("id"),
+			"event_id", rawEventID,
 		)
 
 		c.JSON(http.StatusBadRequest, gin.H{

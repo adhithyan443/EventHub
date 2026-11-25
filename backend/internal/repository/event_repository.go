@@ -157,7 +157,7 @@ func (r *EventRepository) FindByIDForUpdate(id uuid.UUID) (*domain.Event, error)
 	var eventModel models.EventModel
 
 	if err := r.db.
-		Clauses(clause.Locking{Strength: "UPDATE"}).
+		Clauses(clause.Locking{Strength: "NO KEY UPDATE"}).
 		Where("id = ?", id).
 		First(&eventModel).Error; err != nil {
 

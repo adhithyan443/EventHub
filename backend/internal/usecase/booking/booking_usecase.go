@@ -114,6 +114,18 @@ func (u *BookingUsecase) CreateBooking(
 				return domain.ErrInvalidReservationRequest
 			}
 
+			// Validate that the event is public and not cancelled.
+			if tx.EventRepository() != nil {
+				event, evErr := tx.EventRepository().FindByID(reservation.EventID)
+				if evErr == nil {
+					if event.Status != domain.EventStatusPublished {
+						return domain.ErrEventNotPublic
+					}
+				} else if !errors.Is(evErr, domain.ErrEventNotFound) {
+					return evErr
+				}
+			}
+
 			reservationItems, err := tx.SeatReservationRepository().
 				FindItemsByReservationID(ctx, reservation.ID)
 			if err != nil {

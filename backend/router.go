@@ -37,6 +37,7 @@ func setupRouter(
 	adminDashboardHandler *handler.AdminDashboardHandler,
 	adminLedgerHandler *handler.AdminLedgerHandler,
 	profileHandler *handler.ProfileHandler,
+	checkInHandler *handler.TicketCheckInHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) *gin.Engine {
@@ -83,6 +84,7 @@ func setupRouter(
 		organizerSettlementHandler,
 		eventHandler,
 		seatLayoutHandler,
+		checkInHandler,
 		jwtService,
 		userRepo,
 	)
@@ -211,6 +213,7 @@ func registerOrganizerRoutes(
 	organizerSettlementHandler *handler.OrganizerSettlementHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
+	checkInHandler *handler.TicketCheckInHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -262,6 +265,24 @@ func registerOrganizerRoutes(
 		}
 	}
 
+	// Ticket check-in endpoint (protected by role ORGANIZER).
+	if checkInHandler != nil {
+		eventCheckIn := organizer.Group("/events")
+		eventCheckIn.Use(middleware.RequireRole("ORGANIZER"))
+
+		eventCheckIn.POST(
+			"/:eventId/check-in",
+			checkInHandler.CheckIn,
+		)
+		eventCheckIn.POST(
+			"/:eventId/check-in/manual/lookup",
+			checkInHandler.LookupManualBooking,
+		)
+		eventCheckIn.POST(
+			"/:eventId/check-in/manual/confirm",
+			checkInHandler.ConfirmManualBooking,
+		)
+	}
 	// Organizer event endpoints.
 	organizer.POST(
 		"/events",
@@ -269,22 +290,22 @@ func registerOrganizerRoutes(
 	)
 
 	organizer.POST(
-		"/events/:id/seat-layout",
+		"/events/:eventId/seat-layout",
 		seatLayoutHandler.CreateSeatLayout,
 	)
 
 	organizer.PUT(
-		"/events/:id/seat-layout",
+		"/events/:eventId/seat-layout",
 		seatLayoutHandler.UpdateSeatLayout,
 	)
 
 	organizer.PUT(
-		"/events/:id",
+		"/events/:eventId",
 		eventHandler.UpdateEvent,
 	)
 
 	organizer.DELETE(
-		"/events/:id",
+		"/events/:eventId",
 		eventHandler.DeleteEvent,
 	)
 
@@ -294,28 +315,33 @@ func registerOrganizerRoutes(
 	)
 
 	organizer.GET(
-		"/events/:id",
+		"/events/:eventId",
 		eventHandler.GetEventDetails,
 	)
 
 	organizer.PATCH(
-		"/events/:id/publish",
+		"/events/:eventId/publish",
 		eventHandler.PublishEvent,
 	)
 
 	organizer.POST(
-		"/events/:id/cancel",
+		"/events/:eventId/cancel",
 		eventHandler.CancelEvent,
 	)
 
 	organizer.PATCH(
-		"/events/:id/cancel",
+		"/events/:eventId/cancel",
 		eventHandler.CancelEvent,
 	)
 
 	organizer.GET(
-		"/events/:id/cancellation",
+		"/events/:eventId/cancellation",
 		eventHandler.GetEventCancellationStatus,
+	)
+
+	organizer.GET(
+		"/events/:eventId/cancellation-preview",
+		eventHandler.GetCancellationPreview,
 	)
 }
 
@@ -423,6 +449,7 @@ func registerAdminRoutes(
 	admin.POST("/events/:id/cancel", adminEventHandler.CancelEvent)
 	admin.PATCH("/events/:id/cancel", adminEventHandler.CancelEvent)
 	admin.GET("/events/:id/cancellation", adminEventHandler.GetEventCancellationStatus)
+	admin.GET("/events/:id/cancellation-preview", adminEventHandler.GetCancellationPreview)
 }
 
 func registerCategoryRoutes(

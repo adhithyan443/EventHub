@@ -73,6 +73,12 @@ func (u *EventUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
 	}
 }
 
+func (u *EventUsecase) SetNotifier(notifier domain.EventCancellationNotifier) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetNotifier(notifier)
+	}
+}
+
 func (u *EventUsecase) CancelEvent(
 	ctx context.Context,
 	userID uuid.UUID,
@@ -94,6 +100,17 @@ func (u *EventUsecase) GetCancellationStatus(
 		u.cancellationUsecase = NewEventCancellationUsecase(u.transactionManager, nil, u.logger)
 	}
 	return u.cancellationUsecase.GetEventCancellationStatusForOrganizer(ctx, userID, eventID)
+}
+
+func (u *EventUsecase) GetCancellationPreview(
+	ctx context.Context,
+	userID uuid.UUID,
+	eventID uuid.UUID,
+) (*domain.EventCancellationPreview, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.transactionManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.GetCancellationPreviewForOrganizer(ctx, userID, eventID)
 }
 
 type EventContactInput struct {

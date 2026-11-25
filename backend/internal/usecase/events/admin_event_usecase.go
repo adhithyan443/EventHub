@@ -58,6 +58,12 @@ func (u *AdminEventUsecase) SetDispatchTracker(tracker domain.DispatchTracker) {
 	}
 }
 
+func (u *AdminEventUsecase) SetNotifier(notifier domain.EventCancellationNotifier) {
+	if u.cancellationUsecase != nil {
+		u.cancellationUsecase.SetNotifier(notifier)
+	}
+}
+
 func (u *AdminEventUsecase) CancelEvent(
 	ctx context.Context,
 	adminID uuid.UUID,
@@ -78,6 +84,16 @@ func (u *AdminEventUsecase) GetCancellationStatus(
 		u.cancellationUsecase = NewEventCancellationUsecase(u.txManager, nil, u.logger)
 	}
 	return u.cancellationUsecase.GetEventCancellationStatus(ctx, eventID)
+}
+
+func (u *AdminEventUsecase) GetCancellationPreview(
+	ctx context.Context,
+	eventID uuid.UUID,
+) (*domain.EventCancellationPreview, error) {
+	if u.cancellationUsecase == nil {
+		u.cancellationUsecase = NewEventCancellationUsecase(u.txManager, nil, u.logger)
+	}
+	return u.cancellationUsecase.GetCancellationPreview(ctx, eventID)
 }
 
 func (u *AdminEventUsecase) ListEvents(

@@ -14,6 +14,7 @@ import (
 	"github.com/adhithyan443/EventHub/backend/internal/database"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/handler"
 	"github.com/adhithyan443/EventHub/backend/internal/delivery/http/middleware"
+	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appLogger "github.com/adhithyan443/EventHub/backend/internal/logger"
 	"github.com/adhithyan443/EventHub/backend/internal/repository"
 	"github.com/adhithyan443/EventHub/backend/internal/service/email"
@@ -133,6 +134,9 @@ func main() {
 		cfg.SMTPFrom,
 		cfg.FrontendURL,
 	)
+	if smtpSvc, ok := emailService.(*email.SMTPEmailService); ok {
+		smtpSvc.SetLogger(logger)
+	}
 
 	// Shared repositories and transaction manager.
 	userRepo := repository.NewUserRepository(db, logger)
@@ -260,6 +264,18 @@ func main() {
 	)
 
 	ticketHandler := handler.NewTicketHandler(ticketUsecase, qrService)
+
+	checkInUseCase := ticket.NewCheckInUseCase(
+		txManager,
+		qrService,
+		logger,
+	)
+
+	checkInHandler := handler.NewTicketCheckInHandler(
+		checkInUseCase,
+		logger,
+	)
+
 	// Category dependencies.
 	categoryRepository := repository.NewCategoryRepository(db, logger)
 
@@ -277,6 +293,9 @@ func main() {
 		logger,
 	)
 	eventUsecase.SetRefundProcessor(refundUsecase)
+	if notifier, ok := emailService.(domain.EventCancellationNotifier); ok {
+		eventUsecase.SetNotifier(notifier)
+	}
 
 	eventHandler := handler.NewEventHandler(
 		eventUsecase,
@@ -399,6 +418,9 @@ func main() {
 
 	adminEventUsecase := eventUC.NewAdminEventUsecase(txManager, eventRepository, s3Service, logger)
 	adminEventUsecase.SetRefundProcessor(refundUsecase)
+	if notifier, ok := emailService.(domain.EventCancellationNotifier); ok {
+		adminEventUsecase.SetNotifier(notifier)
+	}
 	adminEventHandler := handler.NewAdminEventHandler(adminEventUsecase, logger)
 
 	// Admin payments dependencies.
@@ -502,6 +524,7 @@ func main() {
 		adminDashboardHandler,
 		adminLedgerHandler,
 		profileHandler,
+		checkInHandler,
 		jwtService,
 		userRepo,
 	)

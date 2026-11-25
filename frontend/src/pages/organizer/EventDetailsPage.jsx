@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 
-import { ORGANIZER_ROUTES, getEditEventRoute } from "../../constants/eventConstants";
+import { ORGANIZER_ROUTES, getEditEventRoute, getScanTicketsRoute } from "../../constants/eventConstants";
 
 import {
   ArrowLeftIcon,
@@ -24,6 +24,7 @@ import { getOrganizerEventPaymentSummaries } from "../../api/organizerPaymentApi
 import notify from "../../utils/toast";
 import DeleteEventConfirmationModal from "../../components/organizer/events/DeleteEventConfirmationModal";
 import PublishEventConfirmationModal from "../../components/organizer/events/PublishEventConfirmationModal";
+import CancelEventModal from "../../components/organizer/events/CancelEventModal";
 
 export default function EventDetailsPage() {
   const { eventId } = useParams();
@@ -51,6 +52,28 @@ export default function EventDetailsPage() {
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [publishError, setPublishError] = useState("");
+
+  const [showCancelModal, setShowCancelModal] = useState(false);
+
+  const handleCancellationSuccess = async () => {
+    setEvent((prev) =>
+      prev
+        ? {
+            ...prev,
+            Event: {
+              ...prev.Event,
+              Status: "CANCELLED",
+            },
+          }
+        : prev
+    );
+
+    try {
+      await fetchEventDetails();
+    } catch (refetchErr) {
+      console.warn("Could not refetch event details after cancellation:", refetchErr);
+    }
+  };
 
   useEffect(() => {
     if (location.state?.successMessage) {
@@ -356,6 +379,42 @@ export default function EventDetailsPage() {
             </button>
           )}
 
+          {String(eventData?.Status || "").toUpperCase() === "PUBLISHED" && (
+            <button
+              type="button"
+              onClick={() => navigate(getScanTicketsRoute(eventId))}
+              className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+            >
+              <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 7h3v3H7V7zm7 0h3v3h-3V7zm-7 7h3v3H7v-3zm7 0h3v3h-3v-3z" />
+              </svg>
+              <span>Scan Tickets</span>
+            </button>
+          )}
+
+          {String(eventData?.Status || "").toUpperCase() === "PUBLISHED" && (
+            <button
+              type="button"
+              onClick={() => setShowCancelModal(true)}
+              className="border border-red-200 bg-white hover:bg-red-50 text-red-600 text-xs sm:text-sm font-medium px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="size-3.5 text-red-600"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </svg>
+
+              <span>Cancel Event</span>
+            </button>
+          )}
+
           {String(eventData?.Status || "").toUpperCase() === "DRAFT" && (
             <button
               type="button"
@@ -415,6 +474,16 @@ export default function EventDetailsPage() {
               >
                 👥 View Registered Attendees
               </button>
+
+              {String(eventData?.Status || "").toUpperCase() === "PUBLISHED" && (
+                <button
+                  type="button"
+                  onClick={() => setShowCancelModal(true)}
+                  className="w-full border border-red-200 hover:bg-red-50 text-red-600 text-xs sm:text-sm font-semibold py-2.5 px-3 rounded-lg text-center transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span>🚫 Cancel This Event</span>
+                </button>
+              )}
             </div>
           </div>
         }
@@ -448,6 +517,15 @@ export default function EventDetailsPage() {
         eventTitle={eventData?.Title}
         loading={isPublishing}
         error={publishError}
+      />
+
+      {/* Cancel Event Modal with Impact Preview */}
+      <CancelEventModal
+        isOpen={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        eventId={eventId}
+        eventTitle={eventData?.Title}
+        onSuccess={handleCancellationSuccess}
       />
     </div>
   );

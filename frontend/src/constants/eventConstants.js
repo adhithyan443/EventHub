@@ -23,6 +23,8 @@ export const ORGANIZER_ROUTES = Object.freeze({
   CREATE_REVIEW: "/organizer/events/create/review",
   CREATE_EVENT_ALIAS: "/organizer/create-event",
   MY_EVENTS: "/organizer/events",
+  SCAN_TICKETS: "/organizer/scan",
+  EVENT_SCAN_TICKETS: "/organizer/events/:eventId/scan",
   EVENT_DETAILS: "/organizer/events/:eventId",
   EDIT_EVENT: "/organizer/events/:eventId/edit",
   BOOKINGS: "/organizer/bookings",
@@ -36,6 +38,8 @@ export const ORGANIZER_ROUTES = Object.freeze({
 
 export const getEventDetailsRoute = (eventId) => `/organizer/events/${eventId}`;
 export const getEditEventRoute = (eventId) => `/organizer/events/${eventId}/edit`;
+export const getScanTicketsRoute = (eventId) => eventId ? `/organizer/events/${eventId}/scan` : "/organizer/scan";
+
 
 
 // Alias EVENT_TYPES to LOCATION_TYPES

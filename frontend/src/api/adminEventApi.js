@@ -108,3 +108,45 @@ export const getCategories = async () => {
   const response = await apiClient.get("/categories");
   return response.data;
 };
+
+/**
+ * Fetch cancellation impact preview for an event as platform admin.
+ *
+ * @param {string} eventId
+ * @returns {Promise<Object>} API response data
+ */
+export const getAdminEventCancellationPreview = async (eventId) => {
+  const response = await apiClient.get(
+    `/admin/events/${eventId}/cancellation-preview`
+  );
+  return response.data;
+};
+
+/**
+ * Cancel an event as platform administrator with mandatory reason.
+ *
+ * @param {string} eventId
+ * @param {string} reason
+ * @returns {Promise<Object>} API response data
+ */
+export const cancelAdminEvent = async (eventId, reason) => {
+  const response = await apiClient.post(
+    `/admin/events/${eventId}/cancel`,
+    { reason }
+  );
+  return response.data;
+};
+
+/**
+ * Get cancellation status and summary for an event as platform admin.
+ *
+ * @param {string} eventId
+ * @returns {Promise<Object>} API response data
+ */
+export const getAdminEventCancellationStatus = async (eventId) => {
+  const response = await apiClient.get(
+    `/admin/events/${eventId}/cancellation`
+  );
+  return response.data;
+};
+

@@ -17,6 +17,7 @@ const (
 type ReservationUsecase struct {
 	transactionManager domain.TransactionManager
 	logger             *slog.Logger
+	nowFunc            func() time.Time
 }
 
 func NewReservationUsecase(
@@ -27,6 +28,66 @@ func NewReservationUsecase(
 		transactionManager: transactionManager,
 		logger:             logger,
 	}
+}
+
+func (u *ReservationUsecase) now() time.Time {
+	if u.nowFunc != nil {
+		return u.nowFunc()
+	}
+	return time.Now()
+}
+
+// SetNowFunc sets a deterministic clock function for testing.
+func (u *ReservationUsecase) SetNowFunc(fn func() time.Time) {
+	u.nowFunc = fn
+}
+
+// resolveSalesDateLocation determines the timezone location for sales date boundary checks.
+// If the sales date carries an explicit non-UTC location, that location is respected.
+// Otherwise, it aligns with the evaluation timestamp's timezone (now.Location()), defaulting to UTC.
+func resolveSalesDateLocation(salesDate *time.Time, now time.Time) *time.Location {
+	if salesDate != nil && salesDate.Location() != nil && salesDate.Location() != time.UTC {
+		return salesDate.Location()
+	}
+	if now.Location() != nil {
+		return now.Location()
+	}
+	return time.UTC
+}
+
+// isBeforeSalesStartDate checks whether the reservation attempt is strictly before the calendar start date.
+// Sales open at 00:00:00 on the configured start date in the resolved timezone.
+func isBeforeSalesStartDate(now time.Time, salesStartDate *time.Time) bool {
+	if salesStartDate == nil {
+		return false
+	}
+	loc := resolveSalesDateLocation(salesStartDate, now)
+	startOfDay := time.Date(
+		salesStartDate.Year(),
+		salesStartDate.Month(),
+		salesStartDate.Day(),
+		0, 0, 0, 0,
+		loc,
+	)
+	return now.In(loc).Before(startOfDay)
+}
+
+// isAfterSalesEndDate checks whether the reservation attempt is strictly after the calendar end date.
+// Sales remain open throughout the configured end date until 23:59:59.999999999 (exclusive boundary is next day 00:00:00)
+// in the resolved timezone.
+func isAfterSalesEndDate(now time.Time, salesEndDate *time.Time) bool {
+	if salesEndDate == nil {
+		return false
+	}
+	loc := resolveSalesDateLocation(salesEndDate, now)
+	exclusiveEnd := time.Date(
+		salesEndDate.Year(),
+		salesEndDate.Month(),
+		salesEndDate.Day()+1,
+		0, 0, 0, 0,
+		loc,
+	)
+	return !now.In(loc).Before(exclusiveEnd)
 }
 
 type TicketSelection struct {
@@ -87,6 +148,10 @@ func (u *ReservationUsecase) CreateReservation(
 				domain.EventTypeHybrid:
 				// Supported event type.
 			default:
+				u.logger.WarnContext(ctx, "reservation rejected: unsupported event type",
+					slog.String("event_id", req.EventID.String()),
+					slog.String("event_type", event.EventType),
+				)
 				return domain.ErrInvalidReservationRequest
 			}
 
@@ -114,15 +179,27 @@ func (u *ReservationUsecase) CreateReservation(
 				return domain.ErrInvalidReservationRequest
 			}
 
-			now := time.Now()
+			now := u.now()
 
-			if setting.SalesStartDate != nil &&
-				now.Before(*setting.SalesStartDate) {
+			if isBeforeSalesStartDate(now, setting.SalesStartDate) {
+				u.logger.WarnContext(ctx, "reservation rejected: sales window has not started",
+					slog.String("event_id", req.EventID.String()),
+					slog.String("user_id", req.UserID.String()),
+					slog.Time("now", now),
+					slog.String("sales_start_date", setting.SalesStartDate.Format("2006-01-02")),
+					slog.String("reason", "sales_not_started"),
+				)
 				return domain.ErrInvalidReservationRequest
 			}
 
-			if setting.SalesEndDate != nil &&
-				now.After(*setting.SalesEndDate) {
+			if isAfterSalesEndDate(now, setting.SalesEndDate) {
+				u.logger.WarnContext(ctx, "reservation rejected: sales window has closed",
+					slog.String("event_id", req.EventID.String()),
+					slog.String("user_id", req.UserID.String()),
+					slog.Time("now", now),
+					slog.String("sales_end_date", setting.SalesEndDate.Format("2006-01-02")),
+					slog.String("reason", "sales_closed"),
+				)
 				return domain.ErrInvalidReservationRequest
 			}
 
@@ -132,11 +209,20 @@ func (u *ReservationUsecase) CreateReservation(
 				// Online events must never use reserved seating.
 				if event.EventType == domain.EventTypeOnline ||
 					setting.SeatLayoutType != SeatLayoutTypeSeated {
+					u.logger.WarnContext(ctx, "reservation rejected: seated reservation not permitted for event",
+						slog.String("event_id", req.EventID.String()),
+						slog.String("event_type", event.EventType),
+						slog.String("seat_layout_type", setting.SeatLayoutType),
+					)
 					return domain.ErrInvalidReservationRequest
 				}
 			} else {
 				// General Admission requires GENERAL ticketing mode.
 				if setting.SeatLayoutType != SeatLayoutTypeGeneral {
+					u.logger.WarnContext(ctx, "reservation rejected: general reservation requires general layout type",
+						slog.String("event_id", req.EventID.String()),
+						slog.String("seat_layout_type", setting.SeatLayoutType),
+					)
 					return domain.ErrInvalidReservationRequest
 				}
 			}
@@ -188,6 +274,12 @@ func (u *ReservationUsecase) CreateReservation(
 					}
 
 					if section.SeatLayoutID != layout.ID {
+						u.logger.WarnContext(ctx, "reservation rejected: seat section does not belong to event layout",
+							slog.String("event_id", req.EventID.String()),
+							slog.String("seat_id", seatID.String()),
+							slog.String("section_id", section.ID.String()),
+							slog.String("layout_id", layout.ID.String()),
+						)
 						return domain.ErrInvalidReservationRequest
 					}
 
@@ -290,7 +382,7 @@ func (u *ReservationUsecase) ExpireReservation(
 
 	err := u.transactionManager.WithinTransaction(
 		func(tx domain.TransactionRepositories) error {
-			now := time.Now()
+			now := u.now()
 
 			expired, err := tx.SeatReservationRepository().ExpireIfActive(
 				ctx,
@@ -463,7 +555,7 @@ func (u *ReservationUsecase) ProcessExpiredReservations(
 			expiredReservations, err =
 				tx.SeatReservationRepository().FindExpiredActive(
 					ctx,
-					time.Now(),
+					u.now(),
 					limit,
 				)
 

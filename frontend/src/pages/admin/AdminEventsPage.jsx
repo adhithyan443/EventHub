@@ -4,6 +4,7 @@ import AdminEventDetailDrawer from "../../components/admin/AdminEventDetailDrawe
 import EditEventModal from "../../components/admin/EditEventModal";
 import PublishEventModal from "../../components/admin/PublishEventModal";
 import DeleteEventModal from "../../components/admin/DeleteEventModal";
+import AdminCancelEventModal from "../../components/admin/AdminCancelEventModal";
 import notify from "../../utils/toast";
 
 const PER_PAGE = 10;
@@ -45,6 +46,7 @@ export default function AdminEventsPage() {
   const [activeEditEvent, setActiveEditEvent] = useState(null);
   const [activePublishEvent, setActivePublishEvent] = useState(null);
   const [activeDeleteEvent, setActiveDeleteEvent] = useState(null);
+  const [activeCancelEvent, setActiveCancelEvent] = useState(null);
 
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -174,6 +176,25 @@ export default function AdminEventsPage() {
     if (activeDrawerEvent) {
       setActiveDrawerEvent(null);
     }
+  };
+
+  const handleEventCancelled = (eventId) => {
+    setRefreshKey((k) => k + 1);
+    if (
+      activeDrawerEvent &&
+      (activeDrawerEvent.id === eventId || activeDrawerEvent.ID === eventId)
+    ) {
+      setActiveDrawerEvent((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "CANCELLED",
+              Status: "CANCELLED",
+            }
+          : null
+      );
+    }
+    setActiveCancelEvent(null);
   };
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
@@ -588,7 +609,7 @@ export default function AdminEventsPage() {
                           </span>
                         </td>
 
-                        {/* Action Buttons (Strictly NO Cancel Action Button) */}
+                        {/* Action Buttons */}
                         <td className="py-3.5 px-4 text-right">
                           <div className="flex items-center justify-end gap-1.5 shrink-0">
                             {/* View Details */}
@@ -600,6 +621,18 @@ export default function AdminEventsPage() {
                             >
                               Details
                             </button>
+
+                            {/* Cancel (Published only) */}
+                            {ev.status === "PUBLISHED" && (
+                              <button
+                                type="button"
+                                onClick={() => setActiveCancelEvent(ev)}
+                                className="text-xs font-semibold px-2.5 py-1 text-[#ba1a1a] hover:bg-[#fff5f4] rounded-md transition-colors cursor-pointer border border-[#ffdad6]"
+                                title="Cancel Event"
+                              >
+                                Cancel
+                              </button>
+                            )}
 
                             {/* Publish (Draft only) */}
                             {ev.status === "DRAFT" && (
@@ -701,6 +734,9 @@ export default function AdminEventsPage() {
           onDeleteClick={(ev) => {
             setActiveDeleteEvent(ev);
           }}
+          onCancelClick={(ev) => {
+            setActiveCancelEvent(ev);
+          }}
         />
       )}
 
@@ -731,6 +767,16 @@ export default function AdminEventsPage() {
           isOpen={Boolean(activeDeleteEvent)}
           onClose={() => setActiveDeleteEvent(null)}
           onSuccess={handleEventDeleted}
+        />
+      )}
+
+      {/* Cancel Event Modal with Impact Preview */}
+      {activeCancelEvent && (
+        <AdminCancelEventModal
+          event={activeCancelEvent}
+          isOpen={Boolean(activeCancelEvent)}
+          onClose={() => setActiveCancelEvent(null)}
+          onSuccess={handleEventCancelled}
         />
       )}
     </div>

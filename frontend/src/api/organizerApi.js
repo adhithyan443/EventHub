@@ -121,3 +121,83 @@ export const publishOrganizerEvent = async (eventId) => {
 
     return response.data;
 };
+
+// Get cancellation impact preview for an organizer event.
+export const getOrganizerEventCancellationPreview = async (eventId) => {
+    const response = await apiClient.get(
+        `/organizers/events/${eventId}/cancellation-preview`
+    );
+
+    return response.data;
+};
+
+// Cancel an event for the authenticated organizer.
+export const cancelOrganizerEvent = async (eventId, reason) => {
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/cancel`,
+        { reason }
+    );
+
+    return response.data;
+};
+
+// Get cancellation status and summary for an organizer event.
+export const getOrganizerEventCancellationStatus = async (eventId) => {
+    const response = await apiClient.get(
+        `/organizers/events/${eventId}/cancellation`
+    );
+
+    return response.data;
+};
+
+// Check in an attendee ticket for an event by validating its signed QR payload.
+export const checkInOrganizerTicket = async (eventId, qrPayload) => {
+    if (!eventId) {
+        throw new Error("Event ID is required for ticket check-in.");
+    }
+    if (!qrPayload || !qrPayload.trim()) {
+        throw new Error("QR payload is required for ticket check-in.");
+    }
+
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/check-in`,
+        { qr_payload: qrPayload.trim() }
+    );
+
+    return response.data;
+};
+
+// Look up a booking and admission details by human-readable reference number.
+export const lookupManualBookingCheckIn = async (eventId, bookingReference) => {
+    if (!eventId) {
+        throw new Error("Event ID is required for manual check-in lookup.");
+    }
+    if (!bookingReference || !bookingReference.trim()) {
+        throw new Error("Booking reference is required for manual check-in lookup.");
+    }
+
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/check-in/manual/lookup`,
+        { booking_reference: bookingReference.trim() }
+    );
+
+    return response.data;
+};
+
+// Confirm manual check-in of remaining valid tickets for a booking reference.
+export const confirmManualBookingCheckIn = async (eventId, bookingReference) => {
+    if (!eventId) {
+        throw new Error("Event ID is required for manual check-in confirmation.");
+    }
+    if (!bookingReference || !bookingReference.trim()) {
+        throw new Error("Booking reference is required for manual check-in confirmation.");
+    }
+
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/check-in/manual/confirm`,
+        { booking_reference: bookingReference.trim() }
+    );
+
+    return response.data;
+};
+

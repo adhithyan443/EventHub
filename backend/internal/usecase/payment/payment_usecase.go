@@ -1400,7 +1400,7 @@ func (u *PaymentUsecase) validateCheckout(
 	}
 
 	reservation, err := tx.SeatReservationRepository().
-		FindByIDForUpdate(ctx, checkout.ReservationID)
+		FindByID(ctx, checkout.ReservationID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1409,6 +1409,17 @@ func (u *PaymentUsecase) validateCheckout(
 		reservation.Status != domain.ReservationStatusActive ||
 		!time.Now().Before(reservation.ExpiresAt) {
 		return nil, nil, domain.ErrCheckoutNotPayable
+	}
+
+	if tx.EventRepository() != nil {
+		event, evErr := tx.EventRepository().FindByID(reservation.EventID)
+		if evErr == nil {
+			if event.Status != domain.EventStatusPublished {
+				return nil, nil, domain.ErrCheckoutNotPayable
+			}
+		} else if !errors.Is(evErr, domain.ErrEventNotFound) {
+			return nil, nil, evErr
+		}
 	}
 
 	return checkout, reservation, nil

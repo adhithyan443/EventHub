@@ -64,6 +64,18 @@ func (u *CheckoutUsecase) CreateCheckout(
 				return domain.ErrInvalidReservationRequest
 			}
 
+			// Validate that the event is public and not cancelled.
+			if tx.EventRepository() != nil {
+				event, evErr := tx.EventRepository().FindByID(reservation.EventID)
+				if evErr == nil {
+					if event.Status != domain.EventStatusPublished {
+						return domain.ErrEventNotPublic
+					}
+				} else if !errors.Is(evErr, domain.ErrEventNotFound) {
+					return evErr
+				}
+			}
+
 			// Return the existing checkout if one already exists.
 			existing, err := tx.CheckoutRepository().
 				FindByReservationID(ctx, reservation.ID)

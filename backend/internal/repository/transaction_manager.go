@@ -45,6 +45,7 @@ type transactionRepositories struct {
 
 	ticketTypeRepo domain.TicketTypeRepository
 	ticketRepo     domain.TicketRepository
+	ticketScanRepo domain.TicketScanRepository
 
 	seatReservationRepo      domain.SeatReservationRepository
 	checkoutRepo             domain.CheckoutRepository
@@ -149,6 +150,7 @@ func (m *TransactionManager) WithinTransaction(
 
 			ticketTypeRepo: NewTicketTypeRepository(txDB, m.logger),
 			ticketRepo:     NewTicketRepository(txDB, m.logger),
+			ticketScanRepo: NewTicketScanRepository(txDB, m.logger),
 
 			seatReservationRepo:      NewSeatReservationRepository(txDB, m.logger),
 			checkoutRepo:             NewCheckoutRepository(txDB, m.logger),
@@ -263,6 +265,10 @@ func (r *transactionRepositories) EventContactRepository() domain.EventContactRe
 
 func (r *transactionRepositories) TicketTypeRepository() domain.TicketTypeRepository {
 	return r.ticketTypeRepo
+}
+
+func (r *transactionRepositories) TicketScanRepository() domain.TicketScanRepository {
+	return r.ticketScanRepo
 }
 
 func (r *transactionRepositories) SeatReservationRepository() domain.SeatReservationRepository {

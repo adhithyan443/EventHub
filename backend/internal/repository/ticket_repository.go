@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	"github.com/adhithyan443/EventHub/backend/internal/repository/models"
@@ -369,4 +370,48 @@ func toTicketDomain(model *models.TicketModel) *domain.Ticket {
 		CreatedAt:       model.CreatedAt,
 		UpdatedAt:       model.UpdatedAt,
 	}
+}
+
+func (r *ticketRepository) MarkAsUsedIfValid(
+	ctx context.Context,
+	ticketID uuid.UUID,
+	eventID uuid.UUID,
+	usedAt time.Time,
+) (bool, error) {
+	result := r.db.WithContext(ctx).
+		Model(&models.TicketModel{}).
+		Where(
+			"id = ? AND event_id = ? AND status = ?",
+			ticketID,
+			eventID,
+			domain.TicketStatusValid,
+		).
+		Updates(map[string]interface{}{
+			"status":  domain.TicketStatusUsed,
+			"used_at": usedAt,
+		})
+
+	if result.Error != nil {
+		r.logger.ErrorContext(ctx, "failed to mark ticket as used",
+			slog.String("ticket_id", ticketID.String()),
+			slog.String("event_id", eventID.String()),
+			slog.String("error", result.Error.Error()),
+		)
+		return false, result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		r.logger.WarnContext(ctx, "ticket check-in was not applied",
+			slog.String("ticket_id", ticketID.String()),
+			slog.String("event_id", eventID.String()),
+		)
+		return false, nil
+	}
+
+	r.logger.InfoContext(ctx, "ticket marked as used",
+		slog.String("ticket_id", ticketID.String()),
+		slog.String("event_id", eventID.String()),
+	)
+
+	return true, nil
 }
