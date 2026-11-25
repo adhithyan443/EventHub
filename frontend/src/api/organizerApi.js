@@ -167,3 +167,37 @@ export const checkInOrganizerTicket = async (eventId, qrPayload) => {
     return response.data;
 };
 
+// Look up a booking and admission details by human-readable reference number.
+export const lookupManualBookingCheckIn = async (eventId, bookingReference) => {
+    if (!eventId) {
+        throw new Error("Event ID is required for manual check-in lookup.");
+    }
+    if (!bookingReference || !bookingReference.trim()) {
+        throw new Error("Booking reference is required for manual check-in lookup.");
+    }
+
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/check-in/manual/lookup`,
+        { booking_reference: bookingReference.trim() }
+    );
+
+    return response.data;
+};
+
+// Confirm manual check-in of remaining valid tickets for a booking reference.
+export const confirmManualBookingCheckIn = async (eventId, bookingReference) => {
+    if (!eventId) {
+        throw new Error("Event ID is required for manual check-in confirmation.");
+    }
+    if (!bookingReference || !bookingReference.trim()) {
+        throw new Error("Booking reference is required for manual check-in confirmation.");
+    }
+
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/check-in/manual/confirm`,
+        { booking_reference: bookingReference.trim() }
+    );
+
+    return response.data;
+};
+

@@ -421,6 +421,44 @@ const handleManualCodeSubmit = async (payload) => {
   }
 };
 
+// Handle successful manual booking reference check-in
+const handleManualCheckInSuccess = useCallback(
+  (ticketData, serverMessage) => {
+    const targetEventId = selectedEventIdRef.current;
+    if (!targetEventId) return;
+
+    playFeedbackTone(true);
+    const count = ticketData?.checked_in_count || ticketData?.total_count || 1;
+    const bookingRef = ticketData?.booking_reference || "BOOKING";
+
+    const successResult = {
+      status: "SUCCESS",
+      title: `Manual Pass Verified (${count} ${count === 1 ? "Ticket" : "Tickets"})`,
+      message: serverMessage || `Booking checked in successfully (${count} tickets)`,
+      data: ticketData,
+      timestamp: new Date(),
+    };
+
+    setScanResult(successResult);
+    setRecentScansByEvent((prev) => ({
+      ...prev,
+      [targetEventId]: [
+        {
+          id: ticketData?.ticket_id || `tc-${Date.now()}`,
+          ticketCode: `MANUAL (${bookingRef}) - ${count} TIX`,
+          status: "SUCCESS",
+          message: serverMessage || `Manual Booking Checked In (${count} tickets)`,
+          timestamp: new Date(),
+        },
+        ...(prev[targetEventId] || []).slice(0, 49),
+      ],
+    }));
+
+    notify.success(serverMessage || `Booking pass verified! ${count} tickets checked in.`);
+  },
+  [playFeedbackTone]
+);
+
 // Clear scans for active event only
 const handleClearRecentScans = () => {
   if (!selectedEventId) return;
@@ -747,6 +785,8 @@ return (
     <ManualCodeModal
       isOpen={isManualModalOpen}
       onClose={() => setIsManualModalOpen(false)}
+      eventId={selectedEventId}
+      onCheckInSuccess={handleManualCheckInSuccess}
       onSubmit={handleManualCodeSubmit}
       isSubmitting={isSubmittingManual}
     />

@@ -274,6 +274,14 @@ func registerOrganizerRoutes(
 			"/:eventId/check-in",
 			checkInHandler.CheckIn,
 		)
+		eventCheckIn.POST(
+			"/:eventId/check-in/manual/lookup",
+			checkInHandler.LookupManualBooking,
+		)
+		eventCheckIn.POST(
+			"/:eventId/check-in/manual/confirm",
+			checkInHandler.ConfirmManualBooking,
+		)
 	}
 	// Organizer event endpoints.
 	organizer.POST(

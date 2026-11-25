@@ -146,7 +146,7 @@ func (r *bookingRepository) FindByBookingNumber(
 	var bookingModel models.BookingModel
 
 	err := r.db.WithContext(ctx).
-		Where("booking_number = ?", bookingNumber).
+		Where("LOWER(booking_number) = LOWER(?)", strings.TrimSpace(bookingNumber)).
 		First(&bookingModel).Error
 
 	if err != nil {
