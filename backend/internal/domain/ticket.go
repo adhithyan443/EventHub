@@ -95,5 +95,14 @@ type TicketRepository interface {
 		eventID uuid.UUID,
 		usedAt time.Time,
 	) (bool, error)
-	
+
+	FindOrganizerAttendees(
+		ctx context.Context,
+		filter OrganizerAttendeeFilter,
+	) (*OrganizerAttendeeListResult, error)
+
+	GetOrganizerAttendeeStats(
+		ctx context.Context,
+		filter OrganizerAttendeeFilter,
+	) (*OrganizerAttendeeStats, error)
 }
