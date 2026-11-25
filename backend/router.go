@@ -20,6 +20,7 @@ func setupRouter(
 	organizerProfileHandler *handler.OrganizerProfileHandler,
 	organizerPaymentHandler *handler.OrganizerPaymentHandler,
 	organizerSettlementHandler *handler.OrganizerSettlementHandler,
+	organizerBookingHandler *handler.OrganizerBookingHandler,
 	categoryHandler *handler.CategoryHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
@@ -82,6 +83,7 @@ func setupRouter(
 		organizerProfileHandler,
 		organizerPaymentHandler,
 		organizerSettlementHandler,
+		organizerBookingHandler,
 		eventHandler,
 		seatLayoutHandler,
 		checkInHandler,
@@ -211,6 +213,7 @@ func registerOrganizerRoutes(
 	organizerProfileHandler *handler.OrganizerProfileHandler,
 	organizerPaymentHandler *handler.OrganizerPaymentHandler,
 	organizerSettlementHandler *handler.OrganizerSettlementHandler,
+	organizerBookingHandler *handler.OrganizerBookingHandler,
 	eventHandler *handler.EventHandler,
 	seatLayoutHandler *handler.SeatLayoutHandler,
 	checkInHandler *handler.TicketCheckInHandler,
@@ -262,6 +265,24 @@ func registerOrganizerRoutes(
 			settlements.POST("", organizerSettlementHandler.RequestSettlement)
 			settlements.GET("", organizerSettlementHandler.ListSettlements)
 			settlements.GET("/:id", organizerSettlementHandler.GetSettlement)
+		}
+	}
+
+	// Organizer booking & attendee endpoints (protected by role ORGANIZER).
+	if organizerBookingHandler != nil {
+		bookings := organizer.Group("/bookings")
+		bookings.Use(middleware.RequireRole("ORGANIZER"))
+		{
+			bookings.GET("/stats", organizerBookingHandler.GetBookingStats)
+			bookings.GET("", organizerBookingHandler.ListBookings)
+			bookings.GET("/:id", organizerBookingHandler.GetBookingDetail)
+		}
+
+		attendees := organizer.Group("/attendees")
+		attendees.Use(middleware.RequireRole("ORGANIZER"))
+		{
+			attendees.GET("/stats", organizerBookingHandler.GetAttendeeStats)
+			attendees.GET("", organizerBookingHandler.ListAttendees)
 		}
 	}
 

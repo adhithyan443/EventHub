@@ -50,6 +50,8 @@ import EventDetailsPage from "../pages/organizer/EventDetailsPage";
 import EditEventPage from "../pages/organizer/EditEventPage";
 import OrganizerPaymentsPage from "../pages/organizer/OrganizerPaymentsPage";
 import OrganizerSettlementsPage from "../pages/organizer/OrganizerSettlementsPage";
+import OrganizerBookingsPage from "../pages/organizer/OrganizerBookingsPage";
+import OrganizerAttendeesPage from "../pages/organizer/OrganizerAttendeesPage";
 import ScanTicketsPage from "../pages/organizer/ScanTicketsPage";
 
 
@@ -149,8 +151,8 @@ export default function AppRoutes() {
                     <Route path="events/:eventId/edit" element={<EditEventPage />} />
                     <Route path="events/:eventId/scan" element={<ScanTicketsPage />} />
                     <Route path="scan" element={<ScanTicketsPage />} />
-                    <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
-                    <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
+                    <Route path="bookings" element={<OrganizerBookingsPage />} />
+                    <Route path="attendees" element={<OrganizerAttendeesPage />} />
                     <Route path="payments" element={<OrganizerPaymentsPage />} />
                     <Route path="settlements" element={<OrganizerSettlementsPage />} />
                     <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />

@@ -445,6 +445,21 @@ func main() {
 	}
 	organizerPaymentHandler := handler.NewOrganizerPaymentHandler(organizerPaymentUsecase, logger)
 
+	// Organizer bookings and attendees dependencies.
+	bookingRepo := repository.NewBookingRepository(db, logger)
+	organizerBookingUsecase, err := booking.NewOrganizerBookingUsecase(
+		bookingRepo,
+		ticketRepository,
+		organizerRepo,
+		eventRepository,
+		logger,
+	)
+	if err != nil {
+		logger.Error("organizer booking usecase initialization failed", "error", err)
+		return
+	}
+	organizerBookingHandler := handler.NewOrganizerBookingHandler(organizerBookingUsecase, logger)
+
 	// Organizer settlement & balance projection dependencies.
 	financeJournalRepo := repository.NewFinanceJournalRepository(db, logger)
 	refundRepo := repository.NewRefundRepository(db, logger)
@@ -507,6 +522,7 @@ func main() {
 		organizerProfileHandler,
 		organizerPaymentHandler,
 		organizerSettlementHandler,
+		organizerBookingHandler,
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,

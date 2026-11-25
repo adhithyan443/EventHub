@@ -19,6 +19,7 @@ func TestSetupRouter(t *testing.T) {
 		&handler.OrganizerProfileHandler{},
 		nil,
 		nil,
+		nil,
 		&handler.CategoryHandler{},
 		&handler.EventHandler{},
 		&handler.SeatLayoutHandler{},
