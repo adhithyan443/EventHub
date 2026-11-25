@@ -1,7 +1,13 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { formatCurrency, formatDateTime } from "../../utils/formatters";
 import notify from "../../utils/toast";
 import OrganizerBookingDetailDrawer from "../../components/organizer/OrganizerBookingDetailDrawer";
+import {
+  getOrganizerBookings,
+  getOrganizerBookingStats,
+  getOrganizerBookingDetail,
+} from "../../api/organizerBookingApi";
+import { getOrganizerEvents } from "../../api/organizerApi";
 
 // Status Badge Styling Maps
 const bookingStatusBadgeStyles = {
@@ -46,241 +52,22 @@ const PAYMENT_STATUS_OPTIONS = [
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
-// ============================================================================
-// TEMPORARY MOCK DATA (Phase 5 UI Demonstration - Strictly Domain-Aligned)
-// ============================================================================
-const MOCK_EVENTS = [
-  { id: "e1111111-1111-1111-1111-111111111111", title: "Sunburn Arena EDM Night 2026", venue_name: "MMRDA Grounds, Mumbai" },
-  { id: "e2222222-2222-2222-2222-222222222222", title: "Global Tech Summit & Hackathon", venue_name: "Bangalore International Exhibition Centre" },
-  { id: "e3333333-3333-3333-3333-333333333333", title: "Arijit Singh Live Symphony", venue_name: "Jawaharlal Nehru Stadium, Delhi" },
-];
-
-const INITIAL_MOCK_BOOKINGS = [
-  {
-    id: "b1000001-0000-0000-0000-000000000001",
-    booking_number: "ORD-2026-0891",
-    created_at: "2026-11-25T14:32:00Z",
-    customer: {
-      id: "u1",
-      full_name: "Aarav Sharma",
-      email: "aarav.sharma@example.com",
-      phone: "+91 98765 43210",
-    },
-    event: {
-      id: "e1111111-1111-1111-1111-111111111111",
-      title: "Sunburn Arena EDM Night 2026",
-      event_type: "Concert",
-      venue_name: "MMRDA Grounds, Mumbai",
-    },
-    ticket_count: 2,
-    original_booking_total: "3500.00",
-    currency: "INR",
-    booking_status: "CONFIRMED",
-    payment_status: "SUCCESS",
-    refund_status: "",
-    financials: {
-      subtotal: "3000.00",
-      platform_fee: "200.00",
-      tax: "300.00",
-      discount: "0.00",
-      original_booking_total: "3500.00",
-      successful_captured_amount: "3500.00",
-      total_refunded_amount: "0.00",
-      net_captured_after_refunds: "3500.00",
-      currency: "INR",
-    },
-    items: [
-      { id: "bi-1", ticket_type_name: "VIP Early Bird", quantity: 2, unit_price: "1500.00", total_price: "3000.00", seat_label: "VIP-A12" },
-    ],
-    tickets: [
-      { id: "tck-1", ticket_code: "TCK-EDM-01", admission_number: 1, ticket_type_name: "VIP Early Bird", seat_label: "VIP-A12", price: "1500.00", status: "VALID", issued_at: "2026-11-25T14:32:00Z" },
-      { id: "tck-2", ticket_code: "TCK-EDM-02", admission_number: 2, ticket_type_name: "VIP Early Bird", seat_label: "VIP-A13", price: "1500.00", status: "VALID", issued_at: "2026-11-25T14:32:00Z" },
-    ],
-    payments: [
-      { id: "pay-1", transaction_id: "pay_EDM9918231", provider: "Razorpay", payment_method: "UPI", amount: "3500.00", status: "SUCCESS", paid_at: "2026-11-25T14:33:10Z" },
-    ],
-    refunds: [],
-    cancellation_policy: { cancellation_allowed: true, cancellation_deadline_hours: 48, refund_policy: "Standard Tier", refund_percentage: 80 },
-  },
-  {
-    id: "b1000002-0000-0000-0000-000000000002",
-    booking_number: "ORD-2026-0892",
-    created_at: "2026-11-24T18:15:00Z",
-    customer: {
-      id: "u2",
-      full_name: "Priya Patel",
-      email: "priya.patel@example.com",
-      phone: "+91 91234 56789",
-    },
-    event: {
-      id: "e2222222-2222-2222-2222-222222222222",
-      title: "Global Tech Summit & Hackathon",
-      event_type: "Conference",
-      venue_name: "Bangalore International Exhibition Centre",
-    },
-    ticket_count: 1,
-    original_booking_total: "1999.00",
-    currency: "INR",
-    booking_status: "CONFIRMED",
-    payment_status: "SUCCESS",
-    refund_status: "",
-    financials: {
-      subtotal: "1800.00",
-      platform_fee: "100.00",
-      tax: "99.00",
-      discount: "0.00",
-      original_booking_total: "1999.00",
-      successful_captured_amount: "1999.00",
-      total_refunded_amount: "0.00",
-      net_captured_after_refunds: "1999.00",
-      currency: "INR",
-    },
-    items: [
-      { id: "bi-2", ticket_type_name: "Delegate Pass", quantity: 1, unit_price: "1800.00", total_price: "1800.00" },
-    ],
-    tickets: [
-      { id: "tck-3", ticket_code: "TCK-GTS-44", admission_number: 1, ticket_type_name: "Delegate Pass", price: "1800.00", status: "USED", issued_at: "2026-11-24T18:15:00Z", used_at: "2026-11-25T09:00:00Z" },
-    ],
-    payments: [
-      { id: "pay-2", transaction_id: "pay_GTS1102941", provider: "Razorpay", payment_method: "Credit Card", amount: "1999.00", status: "SUCCESS", paid_at: "2026-11-24T18:16:02Z" },
-    ],
-    refunds: [],
-  },
-  {
-    id: "b1000003-0000-0000-0000-000000000003",
-    booking_number: "ORD-2026-0893",
-    created_at: "2026-11-23T11:05:00Z",
-    customer: {
-      id: "u3",
-      full_name: "Rohan Verma",
-      email: "rohan.v@example.com",
-    },
-    event: {
-      id: "e3333333-3333-3333-3333-333333333333",
-      title: "Arijit Singh Live Symphony",
-      event_type: "Concert",
-      venue_name: "Jawaharlal Nehru Stadium, Delhi",
-    },
-    ticket_count: 2,
-    original_booking_total: "4000.00",
-    currency: "INR",
-    booking_status: "PARTIALLY_CANCELLED",
-    payment_status: "SUCCESS",
-    refund_status: "PARTIAL",
-    financials: {
-      subtotal: "3600.00",
-      platform_fee: "200.00",
-      tax: "200.00",
-      discount: "0.00",
-      original_booking_total: "4000.00",
-      successful_captured_amount: "4000.00",
-      total_refunded_amount: "2000.00",
-      net_captured_after_refunds: "2000.00",
-      currency: "INR",
-    },
-    items: [
-      { id: "bi-3", ticket_type_name: "Gold Seating", quantity: 2, unit_price: "1800.00", total_price: "3600.00", seat_label: "G-10" },
-    ],
-    tickets: [
-      { id: "tck-4", ticket_code: "TCK-ARJ-101", admission_number: 1, ticket_type_name: "Gold Seating", seat_label: "G-10", price: "1800.00", status: "VALID", issued_at: "2026-11-23T11:05:00Z" },
-      { id: "tck-5", ticket_code: "TCK-ARJ-102", admission_number: 2, ticket_type_name: "Gold Seating", seat_label: "G-11", price: "1800.00", status: "REFUNDED", issued_at: "2026-11-23T11:05:00Z" },
-    ],
-    payments: [
-      { id: "pay-3", transaction_id: "pay_ARJ7712399", provider: "Razorpay", payment_method: "Net Banking", amount: "4000.00", status: "SUCCESS", paid_at: "2026-11-23T11:06:40Z" },
-    ],
-    refunds: [
-      { id: "ref-1", amount: "2000.00", reason: "Partial attendee schedule conflict", status: "SUCCESS", gateway_refund_id: "rfnd_ARJ881", created_at: "2026-11-24T10:00:00Z" },
-    ],
-  },
-  {
-    id: "b1000004-0000-0000-0000-000000000004",
-    booking_number: "ORD-2026-0894",
-    created_at: "2026-11-22T09:40:00Z",
-    customer: {
-      id: "u4",
-      full_name: "Neha Kulkarni",
-      email: "neha.k@example.com",
-    },
-    event: {
-      id: "e1111111-1111-1111-1111-111111111111",
-      title: "Sunburn Arena EDM Night 2026",
-      event_type: "Concert",
-      venue_name: "MMRDA Grounds, Mumbai",
-    },
-    ticket_count: 1,
-    original_booking_total: "1750.00",
-    currency: "INR",
-    booking_status: "CANCELLED",
-    payment_status: "SUCCESS",
-    refund_status: "FULL",
-    financials: {
-      subtotal: "1500.00",
-      platform_fee: "150.00",
-      tax: "100.00",
-      discount: "0.00",
-      original_booking_total: "1750.00",
-      successful_captured_amount: "1750.00",
-      total_refunded_amount: "1750.00",
-      net_captured_after_refunds: "0.00",
-      currency: "INR",
-    },
-    items: [
-      { id: "bi-4", ticket_type_name: "VIP Early Bird", quantity: 1, unit_price: "1500.00", total_price: "1500.00" },
-    ],
-    tickets: [
-      { id: "tck-6", ticket_code: "TCK-EDM-99", admission_number: 1, ticket_type_name: "VIP Early Bird", price: "1500.00", status: "CANCELLED", issued_at: "2026-11-22T09:40:00Z" },
-    ],
-    payments: [
-      { id: "pay-4", transaction_id: "pay_EDM551203", provider: "Razorpay", payment_method: "Debit Card", amount: "1750.00", status: "SUCCESS", paid_at: "2026-11-22T09:41:00Z" },
-    ],
-    refunds: [
-      { id: "ref-2", amount: "1750.00", reason: "Customer requested cancellation before deadline", status: "SUCCESS", gateway_refund_id: "rfnd_EDM002", created_at: "2026-11-23T14:20:00Z" },
-    ],
-  },
-  {
-    id: "b1000005-0000-0000-0000-000000000005",
-    booking_number: "ORD-2026-0895",
-    created_at: "2026-11-21T16:20:00Z",
-    customer: {
-      id: "u5",
-      full_name: "Vikram Joshi",
-      email: "vikram.j@example.com",
-    },
-    event: {
-      id: "e2222222-2222-2222-2222-222222222222",
-      title: "Global Tech Summit & Hackathon",
-      event_type: "Conference",
-      venue_name: "Bangalore International Exhibition Centre",
-    },
-    ticket_count: 1,
-    original_booking_total: "1999.00",
-    currency: "INR",
-    booking_status: "PENDING",
-    payment_status: "PENDING",
-    refund_status: "",
-    financials: {
-      subtotal: "1800.00",
-      platform_fee: "100.00",
-      tax: "99.00",
-      discount: "0.00",
-      original_booking_total: "1999.00",
-      successful_captured_amount: "0.00",
-      total_refunded_amount: "0.00",
-      net_captured_after_refunds: "0.00",
-      currency: "INR",
-    },
-    items: [
-      { id: "bi-5", ticket_type_name: "Delegate Pass", quantity: 1, unit_price: "1800.00", total_price: "1800.00" },
-    ],
-    tickets: [],
-    payments: [],
-    refunds: [],
-  },
-];
+const INITIAL_STATS = {
+  total_bookings: 0,
+  confirmed_bookings: 0,
+  cancelled_bookings: 0,
+  partially_cancelled_bookings: 0,
+  total_tickets_sold: 0,
+  gross_captured_amount: "0.00",
+  total_refunded_amount: "0.00",
+  net_captured_amount: "0.00",
+  currency: "INR",
+};
 
 export default function OrganizerBookingsPage() {
   // State for Filters & Search
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedEventId, setSelectedEventId] = useState("");
   const [bookingStatus, setBookingStatus] = useState("ALL");
   const [paymentStatus, setPaymentStatus] = useState("ALL");
@@ -290,108 +77,147 @@ export default function OrganizerBookingsPage() {
   // Pagination State
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(10);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+
+  // Data States
+  const [bookings, setBookings] = useState([]);
+  const [stats, setStats] = useState(INITIAL_STATS);
+  const [organizerEvents, setOrganizerEvents] = useState([]);
 
   // UI Interactive States
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadingEvents, setLoadingEventsList] = useState(false);
   const [error, setError] = useState(null);
   const [activeBookingDetail, setActiveBookingDetail] = useState(null);
   const [copiedCode, setCopiedCode] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  // Filter Bookings locally (Phase 5 UI demonstration; Phase 6 swaps with API)
-  const filteredBookings = useMemo(() => {
-    return INITIAL_MOCK_BOOKINGS.filter((item) => {
-      // Event filter
-      if (selectedEventId && item.event?.id !== selectedEventId) {
-        return false;
-      }
-      // Booking Status filter
-      if (bookingStatus !== "ALL" && item.booking_status !== bookingStatus) {
-        return false;
-      }
-      // Payment Status filter
-      if (paymentStatus !== "ALL") {
-        if (paymentStatus === "REFUNDED" && !["FULL", "PARTIAL", "REFUNDED"].includes(item.refund_status)) return false;
-        if (paymentStatus === "PARTIAL" && item.refund_status !== "PARTIAL") return false;
-        if (paymentStatus === "FULL" && item.refund_status !== "FULL") return false;
-        if (paymentStatus === "PENDING_REFUND" && item.refund_status !== "PENDING") return false;
-        if (["SUCCESS", "PENDING", "FAILED"].includes(paymentStatus) && item.payment_status !== paymentStatus) {
-          return false;
+  // Debounce search input by 350ms
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  // Load organizer events list for filter dropdown
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadEvents() {
+      setLoadingEventsList(true);
+      try {
+        const res = await getOrganizerEvents({ limit: 100 });
+        if (cancelled) return;
+        const list = Array.isArray(res?.data?.events)
+          ? res.data.events
+          : Array.isArray(res?.data)
+          ? res.data
+          : Array.isArray(res?.events)
+          ? res.events
+          : [];
+        setOrganizerEvents(list);
+      } catch (err) {
+        if (!cancelled) {
+          console.error("Failed to load organizer events for filter dropdown:", err);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingEventsList(false);
         }
       }
-      // Search
-      if (search.trim()) {
-        const query = search.toLowerCase();
-        const refMatch = item.booking_number?.toLowerCase().includes(query);
-        const nameMatch = item.customer?.full_name?.toLowerCase().includes(query);
-        const emailMatch = item.customer?.email?.toLowerCase().includes(query);
-        if (!refMatch && !nameMatch && !emailMatch) return false;
-      }
-      // Date Range
-      if (fromDate) {
-        const bookingDate = new Date(item.created_at).toISOString().split("T")[0];
-        if (bookingDate < fromDate) return false;
-      }
-      if (toDate) {
-        const bookingDate = new Date(item.created_at).toISOString().split("T")[0];
-        if (bookingDate > toDate) return false;
-      }
-      return true;
-    });
-  }, [selectedEventId, bookingStatus, paymentStatus, search, fromDate, toDate]);
-
-  // Aggregate Stats (Calculated strictly based on domain definitions)
-  const stats = useMemo(() => {
-    let totalBookings = filteredBookings.length;
-    let confirmedBookings = 0;
-    let cancelledBookings = 0;
-    let totalTicketsSold = 0;
-    let grossCaptured = 0;
-    let totalRefunded = 0;
-
-    filteredBookings.forEach((b) => {
-      if (b.booking_status === "CONFIRMED") confirmedBookings++;
-      if (b.booking_status === "CANCELLED") cancelledBookings++;
-
-      // Tickets sold (active eligible admissions)
-      const activeTickets = (b.tickets || []).filter(
-        (t) => t.status === "VALID" || t.status === "USED"
-      ).length;
-      totalTicketsSold += activeTickets > 0 ? activeTickets : b.booking_status === "CONFIRMED" ? b.ticket_count : 0;
-
-      // Captured & Refunded
-      const captured = parseFloat(b.financials?.successful_captured_amount || "0");
-      const refunded = parseFloat(b.financials?.total_refunded_amount || "0");
-      grossCaptured += captured;
-      totalRefunded += refunded;
-    });
-
-    const netCaptured = grossCaptured - totalRefunded;
-
-    return {
-      totalBookings,
-      confirmedBookings,
-      cancelledBookings,
-      totalTicketsSold,
-      grossCaptured,
-      totalRefunded,
-      netCaptured,
-    };
-  }, [filteredBookings]);
-
-  // Pagination calculation
-  const totalRecords = filteredBookings.length;
-  const totalPages = Math.max(1, Math.ceil(totalRecords / limit));
-  const paginatedBookings = useMemo(() => {
-    const start = (page - 1) * limit;
-    return filteredBookings.slice(start, start + limit);
-  }, [filteredBookings, page, limit]);
-
-  // Auto-correct page when filter changes cause totalPages to shrink
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(1);
     }
-  }, [totalPages, page]);
+
+    loadEvents();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Fetch bookings list and aggregate stats from backend
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchBookingsData() {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const filterOptions = {
+          page,
+          limit,
+          event_id: selectedEventId,
+          booking_status: bookingStatus,
+          payment_status: paymentStatus,
+          search: debouncedSearch,
+          from: fromDate,
+          to: toDate,
+        };
+
+        const [bookingsRes, statsRes] = await Promise.all([
+          getOrganizerBookings(filterOptions),
+          getOrganizerBookingStats(filterOptions),
+        ]);
+
+        if (cancelled) return;
+
+        // Process Bookings List & Pagination Envelopes
+        const bookingsList =
+          bookingsRes?.data?.bookings ||
+          bookingsRes?.bookings ||
+          (Array.isArray(bookingsRes?.data) ? bookingsRes.data : []);
+
+        const paginationInfo =
+          bookingsRes?.data?.pagination ||
+          bookingsRes?.data ||
+          bookingsRes?.pagination ||
+          {};
+
+        setBookings(bookingsList);
+        setTotalRecords(paginationInfo.total_records ?? bookingsList.length);
+        setTotalPages(Math.max(1, paginationInfo.total_pages ?? Math.ceil(bookingsList.length / limit)));
+
+        // Process Stats Envelope
+        if (statsRes?.data) {
+          setStats(statsRes.data);
+        } else if (statsRes && typeof statsRes === "object" && statsRes.total_bookings !== undefined) {
+          setStats(statsRes);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Error fetching organizer bookings:", err);
+        const errorMsg =
+          err.response?.data?.message ||
+          err.response?.data?.error ||
+          err.message ||
+          "Failed to load bookings. Please check your connection and retry.";
+        setError(errorMsg);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    fetchBookingsData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    page,
+    limit,
+    selectedEventId,
+    bookingStatus,
+    paymentStatus,
+    debouncedSearch,
+    fromDate,
+    toDate,
+    refreshKey,
+  ]);
 
   const copyToClipboard = async (text, label) => {
     if (!text) return;
@@ -407,6 +233,7 @@ export default function OrganizerBookingsPage() {
 
   const handleResetFilters = () => {
     setSearch("");
+    setDebouncedSearch("");
     setSelectedEventId("");
     setBookingStatus("ALL");
     setPaymentStatus("ALL");
@@ -415,6 +242,23 @@ export default function OrganizerBookingsPage() {
     setPage(1);
     notify.info("Filters cleared");
   };
+
+  const handleViewBookingDetail = async (bookingSummary) => {
+    setActiveBookingDetail(bookingSummary);
+    try {
+      const res = await getOrganizerBookingDetail(bookingSummary.id);
+      if (res?.data) {
+        setActiveBookingDetail(res.data);
+      }
+    } catch (err) {
+      console.error("Failed to load deep booking details:", err);
+      notify.error("Could not load complete booking breakdown");
+    }
+  };
+
+  const hasActiveFilters = Boolean(
+    search || selectedEventId || bookingStatus !== "ALL" || paymentStatus !== "ALL" || fromDate || toDate
+  );
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-white w-full">
@@ -436,13 +280,7 @@ export default function OrganizerBookingsPage() {
 
         <button
           type="button"
-          onClick={() => {
-            setLoading(true);
-            setTimeout(() => {
-              setLoading(false);
-              notify.info("Bookings refreshed");
-            }, 400);
-          }}
+          onClick={() => setRefreshKey((k) => k + 1)}
           disabled={loading}
           className="bg-[#f9f9ff] border border-[#bcc9c6] text-[#141b2b] text-xs sm:text-sm font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 hover:bg-[#eef0fb] transition-colors cursor-pointer self-start md:self-auto shrink-0"
         >
@@ -456,7 +294,7 @@ export default function OrganizerBookingsPage() {
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5">
         {/* =================================================================== */}
-        {/* SUMMARY METRICS CARDS                                               */}
+        {/* SUMMARY METRICS CARDS (Server-Owned Statistics)                     */}
         {/* =================================================================== */}
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-3.5">
           {/* Card 1: Total Bookings */}
@@ -465,7 +303,7 @@ export default function OrganizerBookingsPage() {
               Total Orders
             </span>
             <span className="text-[#141b2b] text-xl lg:text-2xl font-bold tracking-tight">
-              {stats.totalBookings}
+              {stats.total_bookings ?? 0}
             </span>
             <span className="text-[11px] mt-1 text-[#6d7a77] font-medium">All booking orders</span>
           </div>
@@ -476,7 +314,7 @@ export default function OrganizerBookingsPage() {
               Confirmed
             </span>
             <span className="text-[#15803d] text-xl lg:text-2xl font-bold tracking-tight">
-              {stats.confirmedBookings}
+              {stats.confirmed_bookings ?? 0}
             </span>
             <span className="text-[11px] mt-1 text-[#15803d] font-medium">Active reservations</span>
           </div>
@@ -487,7 +325,7 @@ export default function OrganizerBookingsPage() {
               Cancelled
             </span>
             <span className="text-[#b91c1c] text-xl lg:text-2xl font-bold tracking-tight">
-              {stats.cancelledBookings}
+              {stats.cancelled_bookings ?? 0}
             </span>
             <span className="text-[11px] mt-1 text-[#b91c1c] font-medium">Cancelled orders</span>
           </div>
@@ -498,7 +336,7 @@ export default function OrganizerBookingsPage() {
               Tickets Sold
             </span>
             <span className="text-[#141b2b] text-xl lg:text-2xl font-bold tracking-tight">
-              {stats.totalTicketsSold}
+              {stats.total_tickets_sold ?? 0}
             </span>
             <span className="text-[11px] mt-1 text-[#6d7a77] font-medium">Valid admissions</span>
           </div>
@@ -509,7 +347,7 @@ export default function OrganizerBookingsPage() {
               Gross Captured
             </span>
             <span className="text-[#141b2b] text-xl lg:text-2xl font-bold tracking-tight">
-              {formatCurrency(stats.grossCaptured)}
+              {formatCurrency(stats.gross_captured_amount, stats.currency)}
             </span>
             <span className="text-[11px] mt-1 text-[#6d7a77] font-medium">Total gateway captures</span>
           </div>
@@ -520,7 +358,7 @@ export default function OrganizerBookingsPage() {
               Net Captured
             </span>
             <span className="text-[#00685f] text-xl lg:text-2xl font-bold tracking-tight">
-              {formatCurrency(stats.netCaptured)}
+              {formatCurrency(stats.net_captured_amount, stats.currency)}
             </span>
             <span className="text-[11px] mt-1 text-[#00685f] font-medium">Captured after refunds</span>
           </div>
@@ -540,10 +378,7 @@ export default function OrganizerBookingsPage() {
                 type="text"
                 placeholder="Search booking #, customer, email..."
                 value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
+                onChange={(e) => setSearch(e.target.value)}
                 className="w-full bg-white border border-[#bcc9c6] rounded-lg pl-9 pr-8 py-2 text-xs sm:text-sm text-[#141b2b] placeholder:text-[#6d7a77] focus:outline-none focus:ring-1 focus:ring-[#00685f]/40"
               />
               {search && (
@@ -565,10 +400,11 @@ export default function OrganizerBookingsPage() {
                   setSelectedEventId(e.target.value);
                   setPage(1);
                 }}
-                className="w-full bg-white border border-[#bcc9c6] rounded-lg px-3 py-2 text-xs sm:text-sm text-[#141b2b] focus:outline-none focus:ring-1 focus:ring-[#00685f]/40 cursor-pointer"
+                disabled={loadingEvents}
+                className="w-full bg-white border border-[#bcc9c6] rounded-lg px-3 py-2 text-xs sm:text-sm text-[#141b2b] focus:outline-none focus:ring-1 focus:ring-[#00685f]/40 cursor-pointer disabled:opacity-60"
               >
                 <option value="">All Events</option>
-                {MOCK_EVENTS.map((evt) => (
+                {organizerEvents.map((evt) => (
                   <option key={evt.id} value={evt.id}>
                     {evt.title}
                   </option>
@@ -643,7 +479,7 @@ export default function OrganizerBookingsPage() {
               </div>
             </div>
 
-            {(search || selectedEventId || bookingStatus !== "ALL" || paymentStatus !== "ALL" || fromDate || toDate) && (
+            {hasActiveFilters && (
               <button
                 type="button"
                 onClick={handleResetFilters}
@@ -664,12 +500,12 @@ export default function OrganizerBookingsPage() {
         <div className="bg-white border border-[#bcc9c6] rounded-xl shadow-xs overflow-hidden">
           {error ? (
             <div className="p-8 text-center text-xs text-[#b91c1c]">
-              <p className="font-bold">Failed to load bookings</p>
+              <p className="font-bold text-sm">Failed to load bookings</p>
               <p className="mt-1 text-[#6d7a77]">{error}</p>
               <button
                 type="button"
-                onClick={() => setError(null)}
-                className="mt-3 px-3 py-1.5 bg-[#fef2f2] border border-[#fecaca] rounded-lg text-xs font-semibold cursor-pointer"
+                onClick={() => setRefreshKey((k) => k + 1)}
+                className="mt-3 px-3 py-1.5 bg-[#fef2f2] border border-[#fecaca] text-[#b91c1c] hover:bg-[#fee2e2] rounded-lg text-xs font-semibold cursor-pointer transition-colors"
               >
                 Retry
               </button>
@@ -680,7 +516,7 @@ export default function OrganizerBookingsPage() {
                 <div key={i} className="h-12 bg-gray-100 rounded-lg animate-pulse" />
               ))}
             </div>
-          ) : paginatedBookings.length === 0 ? (
+          ) : bookings.length === 0 ? (
             <div className="py-12 px-4 text-center">
               <svg className="w-12 h-12 mx-auto text-[#bcc9c6] mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -689,13 +525,15 @@ export default function OrganizerBookingsPage() {
               <p className="text-xs text-[#6d7a77] mt-1 max-w-sm mx-auto">
                 No orders match your active filter criteria. Try adjusting your search query, status filters, or date range.
               </p>
-              <button
-                type="button"
-                onClick={handleResetFilters}
-                className="mt-4 px-4 py-2 bg-[#00685f] text-white rounded-lg text-xs font-bold hover:bg-[#005149] transition-colors cursor-pointer"
-              >
-                Reset Filters
-              </button>
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={handleResetFilters}
+                  className="mt-4 px-4 py-2 bg-[#00685f] text-white rounded-lg text-xs font-bold hover:bg-[#005149] transition-colors cursor-pointer"
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -714,7 +552,7 @@ export default function OrganizerBookingsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#bcc9c6]/30">
-                  {paginatedBookings.map((b) => {
+                  {bookings.map((b) => {
                     const bStatus = b.booking_status?.toUpperCase() || "CONFIRMED";
                     const bBadge = bookingStatusBadgeStyles[bStatus] || "bg-[#f3f4f6] text-[#4b5563]";
 
@@ -749,24 +587,24 @@ export default function OrganizerBookingsPage() {
 
                         {/* Customer */}
                         <td className="py-3 px-4">
-                          <div className="font-bold text-[#141b2b]">{b.customer?.full_name}</div>
-                          <div className="text-[11px] text-[#6d7a77]">{b.customer?.email}</div>
+                          <div className="font-bold text-[#141b2b]">{b.customer?.full_name || "—"}</div>
+                          <div className="text-[11px] text-[#6d7a77]">{b.customer?.email || "—"}</div>
                         </td>
 
                         {/* Event */}
                         <td className="py-3 px-4 max-w-[200px]">
                           <div className="font-semibold text-[#141b2b] truncate" title={b.event?.title}>
-                            {b.event?.title}
+                            {b.event?.title || "—"}
                           </div>
                           <div className="text-[11px] text-[#6d7a77] truncate">
-                            {b.event?.venue_name}
+                            {b.event?.venue_name || "Venue TBD"}
                           </div>
                         </td>
 
                         {/* Tickets */}
                         <td className="py-3 px-3 text-center">
                           <span className="inline-block bg-[#eef0fb] text-[#141b2b] px-2 py-0.5 rounded font-bold text-[11px]">
-                            {b.ticket_count}
+                            {b.ticket_count ?? 1}
                           </span>
                         </td>
 
@@ -805,7 +643,7 @@ export default function OrganizerBookingsPage() {
                         <td className="py-3 px-4 text-right">
                           <button
                             type="button"
-                            onClick={() => setActiveBookingDetail(b)}
+                            onClick={() => handleViewBookingDetail(b)}
                             className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-bold text-[#00685f] hover:text-white bg-[#e6f4f2] hover:bg-[#00685f] rounded-lg transition-colors cursor-pointer"
                           >
                             <svg className="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
@@ -824,7 +662,7 @@ export default function OrganizerBookingsPage() {
           )}
 
           {/* Table Footer with Pagination */}
-          {!loading && filteredBookings.length > 0 && (
+          {!loading && !error && bookings.length > 0 && (
             <div className="px-4 py-3 border-t border-[#bcc9c6] bg-[#f9f9ff] flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
               <div className="text-[#6d7a77]">
                 Showing <span className="font-bold text-[#141b2b]">{(page - 1) * limit + 1}</span> to{" "}
