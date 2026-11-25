@@ -38,6 +38,31 @@ const formatVenueLocation = (event) => {
   return "Venue TBA";
 };
 
+const parseLocalDateOnly = (dateStr) => {
+  if (!dateStr) return null;
+  const datePart = typeof dateStr === "string" ? dateStr.split("T")[0] : "";
+  const parts = datePart.split("-");
+  if (parts.length === 3) {
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    const d = new Date(year, month, day);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return null;
+};
+
+const formatDateOnly = (dateStr) => {
+  if (!dateStr) return "Date TBA";
+  const localDate = parseLocalDateOnly(dateStr);
+  if (!localDate) return formatDate(dateStr);
+  return localDate.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+};
+
 export default function SeatSelectionPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
@@ -130,7 +155,30 @@ export default function SeatSelectionPage() {
 
   const bookingLimit = event?.setting?.booking_limit_per_user || 9;
 
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const salesStartObj = parseLocalDateOnly(event?.setting?.sales_start_date);
+  const salesEndObj = parseLocalDateOnly(event?.setting?.sales_end_date);
+
+  const isSalesUpcoming = Boolean(salesStartObj && todayStart < salesStartObj);
+
+  let isSalesClosed = false;
+  if (salesEndObj) {
+    const salesEndDeadline = new Date(salesEndObj);
+    salesEndDeadline.setHours(23, 59, 59, 999);
+    isSalesClosed = now > salesEndDeadline;
+  }
+
   const toggleSeat = (seat, row, section) => {
+    if (isSalesUpcoming || isSalesClosed) {
+      const msg = isSalesUpcoming
+        ? `Ticket sales have not opened yet. Booking opens on ${formatDateOnly(event?.setting?.sales_start_date)}.`
+        : `Ticket sales closed on ${formatDateOnly(event?.setting?.sales_end_date)}.`;
+      notify.warning(msg);
+      return;
+    }
+
     if (seat.status !== "AVAILABLE" && !selectedSeats.some((s) => s.id === seat.id)) {
       return;
     }
@@ -247,6 +295,15 @@ export default function SeatSelectionPage() {
 
   const handleContinueToCheckout = async () => {
     if (selectedSeats.length === 0) return;
+
+    if (isSalesUpcoming || isSalesClosed) {
+      const msg = isSalesUpcoming
+        ? `Ticket sales have not opened yet. Booking opens on ${formatDateOnly(event?.setting?.sales_start_date)}.`
+        : `Ticket sales closed on ${formatDateOnly(event?.setting?.sales_end_date)}.`;
+      setReservationError(msg);
+      notify.error(msg);
+      return;
+    }
 
     if (!isAuthenticated) {
       navigate("/login", {
@@ -461,6 +518,29 @@ export default function SeatSelectionPage() {
               <span className="text-[#8a8fa0]">•</span>
               <span>{formatVenueLocation(event)}</span>
             </p>
+
+            {isSalesUpcoming && (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs sm:text-sm text-amber-800 flex items-center gap-3">
+                <span className="text-lg">⏳</span>
+                <div>
+                  <span className="font-bold">Sales Not Started: </span>
+                  <span>
+                    Ticket sales for this event open on {formatDateOnly(event?.setting?.sales_start_date)}. Seats cannot be reserved yet.
+                  </span>
+                </div>
+              </div>
+            )}
+            {isSalesClosed && (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-xs sm:text-sm text-rose-800 flex items-center gap-3">
+                <span className="text-lg">🛑</span>
+                <div>
+                  <span className="font-bold">Sales Closed: </span>
+                  <span>
+                    Ticket sales for this event closed on {formatDateOnly(event?.setting?.sales_end_date)}. Reservations are no longer accepted.
+                  </span>
+                </div>
+              </div>
+            )}
 
             {/* Status Legend Card */}
             <section className="my-6 rounded-xl border border-[#bcc9c6] bg-white p-4 shadow-xs">
@@ -714,7 +794,7 @@ export default function SeatSelectionPage() {
                 <button
                   type="button"
                   onClick={handleContinueToCheckout}
-                  disabled={selectedSeats.length === 0 || isReserving}
+                  disabled={selectedSeats.length === 0 || isReserving || isSalesUpcoming || isSalesClosed}
                   className="h-12 w-full rounded-lg bg-[#00796d] px-5 font-bold text-white shadow-xs transition hover:bg-[#00685f] disabled:cursor-not-allowed disabled:bg-[#9db5b1] focus:outline-none focus:ring-2 focus:ring-[#00796d]/40 flex items-center justify-center gap-2 cursor-pointer"
                 >
                   {isReserving ? (
@@ -722,6 +802,10 @@ export default function SeatSelectionPage() {
                       <span className="size-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                       <span>Reserving Seats...</span>
                     </>
+                  ) : isSalesUpcoming ? (
+                    "Sales Not Started"
+                  ) : isSalesClosed ? (
+                    "Sales Closed"
                   ) : (
                     "Continue to Checkout →"
                   )}

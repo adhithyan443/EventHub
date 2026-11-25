@@ -2,9 +2,11 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
@@ -32,11 +34,22 @@ type TicketCheckInRequest struct {
 	QRPayload string `json:"qr_payload" binding:"required"`
 }
 
-type TicketCheckInResponse struct {
+type TicketSummaryResponse struct {
 	TicketID   uuid.UUID `json:"ticket_id"`
 	TicketCode string    `json:"ticket_code"`
 	Status     string    `json:"status"`
 	UsedAt     string    `json:"used_at"`
+}
+
+type TicketCheckInResponse struct {
+	Type       string                  `json:"type"`
+	TicketID   uuid.UUID               `json:"ticket_id"`
+	TicketCode string                  `json:"ticket_code"`
+	Status     string                  `json:"status"`
+	UsedAt     string                  `json:"used_at"`
+	BookingID  *uuid.UUID              `json:"booking_id,omitempty"`
+	TotalCount int                     `json:"total_count"`
+	Tickets    []TicketSummaryResponse `json:"tickets,omitempty"`
 }
 
 func (h *TicketCheckInHandler) CheckIn(ctx *gin.Context) {
@@ -63,7 +76,7 @@ func (h *TicketCheckInHandler) CheckIn(ctx *gin.Context) {
 		return
 	}
 
-	checkedInTicket, err := h.checkInUseCase.CheckIn(
+	checkInResult, err := h.checkInUseCase.CheckIn(
 		ctx.Request.Context(),
 		userID,
 		eventID,
@@ -82,7 +95,8 @@ func (h *TicketCheckInHandler) CheckIn(ctx *gin.Context) {
 			))
 
 		case errors.Is(err, domain.ErrEventNotFound),
-			errors.Is(err, domain.ErrTicketNotFound):
+			errors.Is(err, domain.ErrTicketNotFound),
+			errors.Is(err, domain.ErrBookingNotFound):
 			ctx.Error(appErrors.NewNotFoundError(
 				"event or ticket not found",
 			))
@@ -104,16 +118,45 @@ func (h *TicketCheckInHandler) CheckIn(ctx *gin.Context) {
 		return
 	}
 
+	ticketSummaries := make([]TicketSummaryResponse, len(checkInResult.Tickets))
+	for i, t := range checkInResult.Tickets {
+		usedAtStr := ""
+		if t.UsedAt != nil {
+			usedAtStr = t.UsedAt.UTC().Format(time.RFC3339)
+		}
+		ticketSummaries[i] = TicketSummaryResponse{
+			TicketID:   t.ID,
+			TicketCode: t.TicketCode,
+			Status:     t.Status,
+			UsedAt:     usedAtStr,
+		}
+	}
+
+	primaryTicket := checkInResult.Ticket
+	primaryUsedAt := ""
+	if primaryTicket.UsedAt != nil {
+		primaryUsedAt = primaryTicket.UsedAt.UTC().Format(time.RFC3339)
+	}
+
 	response := TicketCheckInResponse{
-		TicketID:   checkedInTicket.ID,
-		TicketCode: checkedInTicket.TicketCode,
-		Status:     checkedInTicket.Status,
-		UsedAt:     checkedInTicket.UsedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		Type:       string(checkInResult.Type),
+		BookingID:  checkInResult.BookingID,
+		TotalCount: checkInResult.TotalCount,
+		TicketID:   primaryTicket.ID,
+		TicketCode: primaryTicket.TicketCode,
+		Status:     primaryTicket.Status,
+		UsedAt:     primaryUsedAt,
+		Tickets:    ticketSummaries,
+	}
+
+	message := "ticket checked in successfully"
+	if checkInResult.Type == ticket.CheckInTypeBooking {
+		message = fmt.Sprintf("booking checked in successfully (%d tickets)", checkInResult.TotalCount)
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"message": "ticket checked in successfully",
+		"message": message,
 		"data":    response,
 	})
 }

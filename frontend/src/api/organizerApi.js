@@ -149,3 +149,21 @@ export const getOrganizerEventCancellationStatus = async (eventId) => {
 
     return response.data;
 };
+
+// Check in an attendee ticket for an event by validating its signed QR payload.
+export const checkInOrganizerTicket = async (eventId, qrPayload) => {
+    if (!eventId) {
+        throw new Error("Event ID is required for ticket check-in.");
+    }
+    if (!qrPayload || !qrPayload.trim()) {
+        throw new Error("QR payload is required for ticket check-in.");
+    }
+
+    const response = await apiClient.post(
+        `/organizers/events/${eventId}/check-in`,
+        { qr_payload: qrPayload.trim() }
+    );
+
+    return response.data;
+};
+

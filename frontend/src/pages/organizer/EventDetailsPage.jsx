@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import { useParams, useNavigate, useLocation, Link } from "react-router-dom";
 
-import { ORGANIZER_ROUTES, getEditEventRoute } from "../../constants/eventConstants";
+import { ORGANIZER_ROUTES, getEditEventRoute, getScanTicketsRoute } from "../../constants/eventConstants";
 
 import {
   ArrowLeftIcon,
@@ -376,6 +376,19 @@ export default function EventDetailsPage() {
               <TrashIcon className="size-3.5 text-red-600" />
 
               <span>Delete Event</span>
+            </button>
+          )}
+
+          {String(eventData?.Status || "").toUpperCase() === "PUBLISHED" && (
+            <button
+              type="button"
+              onClick={() => navigate(getScanTicketsRoute(eventId))}
+              className="bg-[#00685f] hover:bg-[#005a52] text-white text-xs sm:text-sm font-semibold px-4 py-2 rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+            >
+              <svg className="size-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 7h3v3H7V7zm7 0h3v3h-3V7zm-7 7h3v3H7v-3zm7 0h3v3h-3v-3z" />
+              </svg>
+              <span>Scan Tickets</span>
             </button>
           )}
 

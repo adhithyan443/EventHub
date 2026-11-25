@@ -64,6 +64,23 @@ export default function OrganizerSidebar({ className = "", isOpen = false, onClo
       ),
     },
     {
+      label: "Scan Tickets",
+      path: ORGANIZER_ROUTES.SCAN_TICKETS,
+      isActive: (pathname) =>
+        pathname.startsWith("/organizer/scan") || pathname.includes("/scan"),
+      icon: (active) => (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 7h3v3H7V7zm7 0h3v3h-3V7zm-7 7h3v3H7v-3zm7 0h3v3h-3v-3z"
+            stroke={active ? "#00685F" : "#3D4947"}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ),
+    },
+    {
       label: "Create Event",
       path: ORGANIZER_ROUTES.CREATE_STEP_1,
       // Matches any step in the create-event flow

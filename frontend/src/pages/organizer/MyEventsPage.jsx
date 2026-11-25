@@ -5,6 +5,7 @@ import {
   ORGANIZER_ROUTES,
   getEventDetailsRoute,
   getEditEventRoute,
+  getScanTicketsRoute,
 } from "../../constants/eventConstants";
 
 import StatusBadge from "../../components/organizer/events/StatusBadge";
@@ -950,6 +951,20 @@ export default function MyEventsPage() {
                                   Details
                                 </span>
                               </button>
+
+                              {String(event?.Status || "").toUpperCase() === "PUBLISHED" && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveActionMenuId(null);
+                                    navigate(getScanTicketsRoute(eventId));
+                                  }}
+                                  className="w-full px-3.5 py-2 hover:bg-[#00685f]/10 text-[#00685f] font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+                                >
+                                  <span>📷</span>
+                                  <span>Scan Tickets</span>
+                                </button>
+                              )}
 
                               {String(event?.Status || "").toUpperCase() === "DRAFT" ? (
                                 <button

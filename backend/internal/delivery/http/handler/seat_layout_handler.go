@@ -78,11 +78,16 @@ func (h *SeatLayoutHandler) CreateSeatLayout(c *gin.Context) {
 		return
 	}
 
-	eventID, err := uuid.Parse(c.Param("id"))
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
+
+	eventID, err := uuid.Parse(rawEventID)
 	if err != nil {
 		h.logger.Warn(
 			"invalid event ID",
-			slog.String("event_id", c.Param("id")),
+			slog.String("event_id", rawEventID),
 		)
 		c.Error(appErrors.NewValidationError("invalid event ID"))
 		return
@@ -269,7 +274,10 @@ func (h *SeatLayoutHandler) UpdateSeatLayout(c *gin.Context) {
 		return
 	}
 
-	rawEventID := c.Param("id")
+	rawEventID := c.Param("eventId")
+	if rawEventID == "" {
+		rawEventID = c.Param("id")
+	}
 	if rawEventID == "" {
 		rawEventID = c.Param("event_id")
 	}

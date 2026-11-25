@@ -282,22 +282,22 @@ func registerOrganizerRoutes(
 	)
 
 	organizer.POST(
-		"/events/:id/seat-layout",
+		"/events/:eventId/seat-layout",
 		seatLayoutHandler.CreateSeatLayout,
 	)
 
 	organizer.PUT(
-		"/events/:id/seat-layout",
+		"/events/:eventId/seat-layout",
 		seatLayoutHandler.UpdateSeatLayout,
 	)
 
 	organizer.PUT(
-		"/events/:id",
+		"/events/:eventId",
 		eventHandler.UpdateEvent,
 	)
 
 	organizer.DELETE(
-		"/events/:id",
+		"/events/:eventId",
 		eventHandler.DeleteEvent,
 	)
 
@@ -307,32 +307,32 @@ func registerOrganizerRoutes(
 	)
 
 	organizer.GET(
-		"/events/:id",
+		"/events/:eventId",
 		eventHandler.GetEventDetails,
 	)
 
 	organizer.PATCH(
-		"/events/:id/publish",
+		"/events/:eventId/publish",
 		eventHandler.PublishEvent,
 	)
 
 	organizer.POST(
-		"/events/:id/cancel",
+		"/events/:eventId/cancel",
 		eventHandler.CancelEvent,
 	)
 
 	organizer.PATCH(
-		"/events/:id/cancel",
+		"/events/:eventId/cancel",
 		eventHandler.CancelEvent,
 	)
 
 	organizer.GET(
-		"/events/:id/cancellation",
+		"/events/:eventId/cancellation",
 		eventHandler.GetEventCancellationStatus,
 	)
 
 	organizer.GET(
-		"/events/:id/cancellation-preview",
+		"/events/:eventId/cancellation-preview",
 		eventHandler.GetCancellationPreview,
 	)
 }
