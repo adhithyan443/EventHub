@@ -285,7 +285,7 @@ func main() {
 		logger,
 	)
 
-	categoryHandler := handler.NewCategoryHandler(categoryUsecase)
+	categoryHandler := handler.NewCategoryHandler(categoryUsecase, logger)
 
 	// Event dependencies.
 	eventUsecase := eventUC.NewEventUsecase(

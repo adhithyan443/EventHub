@@ -106,6 +106,7 @@ func setupRouter(
 		adminLedgerHandler,
 		adminBookingHandler,
 		adminSystemHandler,
+		categoryHandler,
 		jwtService,
 		userRepo,
 	)
@@ -385,6 +386,7 @@ func registerAdminRoutes(
 	adminLedgerHandler *handler.AdminLedgerHandler,
 	adminBookingHandler *handler.AdminBookingHandler,
 	adminSystemHandler *handler.AdminSystemHandler,
+	categoryHandler *handler.CategoryHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -396,6 +398,17 @@ func registerAdminRoutes(
 		middleware.RequireActiveUser(userRepo),
 		middleware.RequireRole("ADMIN"),
 	)
+
+	// Category management endpoints
+	if categoryHandler != nil {
+		categories := admin.Group("/categories")
+		{
+			categories.GET("", categoryHandler.AdminListCategories)
+			categories.POST("", categoryHandler.AdminCreateCategory)
+			categories.PUT("/:id", categoryHandler.AdminUpdateCategory)
+			categories.PATCH("/:id/status", categoryHandler.AdminToggleStatus)
+		}
+	}
 
 	// Dashboard analytics endpoint
 	if adminDashboardHandler != nil {
