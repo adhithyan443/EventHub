@@ -26,12 +26,15 @@ import AdminApplicationsPage from "../pages/admin/AdminApplicationsPage";
 import AdminOrganizersPage from "../pages/admin/AdminOrganizersPage";
 import AdminUsersPage from "../pages/admin/AdminUsersPage";
 import AdminEventsPage from "../pages/admin/AdminEventsPage";
+import AdminBookingsPage from "../pages/admin/AdminBookingsPage";
+import AdminAttendeesPage from "../pages/admin/AdminAttendeesPage";
 import AdminPaymentsPage from "../pages/admin/AdminPaymentsPage";
 import AdminSettlementsPage from "../pages/admin/AdminSettlementsPage";
 import AdminLedgerPage from "../pages/admin/AdminLedgerPage";
 import AdminPlaceholderPage from "../pages/admin/AdminPlaceholderPage";
 import AdminPricingTaxPage from "../pages/admin/AdminPricingTaxPage";
 import AdminProfilePage from "../pages/admin/AdminProfilePage";
+import AdminSystemMonitoringPage from "../pages/admin/AdminSystemMonitoringPage";
 import VenueDemoPage from "../pages/venue/VenueDemoPage";
 
 // Organizer UI Components
@@ -50,6 +53,8 @@ import EventDetailsPage from "../pages/organizer/EventDetailsPage";
 import EditEventPage from "../pages/organizer/EditEventPage";
 import OrganizerPaymentsPage from "../pages/organizer/OrganizerPaymentsPage";
 import OrganizerSettlementsPage from "../pages/organizer/OrganizerSettlementsPage";
+import OrganizerBookingsPage from "../pages/organizer/OrganizerBookingsPage";
+import OrganizerAttendeesPage from "../pages/organizer/OrganizerAttendeesPage";
 import ScanTicketsPage from "../pages/organizer/ScanTicketsPage";
 
 
@@ -116,12 +121,14 @@ export default function AppRoutes() {
                     <Route path="organizers" element={<AdminOrganizersPage />} />
                     <Route path="users" element={<AdminUsersPage />} />
                     <Route path="events" element={<AdminEventsPage />} />
-                    <Route path="bookings" element={<AdminPlaceholderPage title="Bookings" />} />
+                    <Route path="bookings" element={<AdminBookingsPage />} />
+                    <Route path="attendees" element={<AdminAttendeesPage />} />
                     <Route path="payments" element={<AdminPaymentsPage />} />
                     <Route path="settlements" element={<AdminSettlementsPage />} />
                     <Route path="ledger" element={<AdminLedgerPage />} />
                     <Route path="finance" element={<AdminLedgerPage />} />
                     <Route path="pricing-tax" element={<AdminPricingTaxPage />} />
+                    <Route path="system-monitoring" element={<AdminSystemMonitoringPage />} />
                     <Route path="categories" element={<AdminPlaceholderPage title="Categories" />} />
                     <Route path="reports" element={<AdminPlaceholderPage title="Reports" />} />
                     <Route path="profile" element={<AdminProfilePage />} />
@@ -149,8 +156,8 @@ export default function AppRoutes() {
                     <Route path="events/:eventId/edit" element={<EditEventPage />} />
                     <Route path="events/:eventId/scan" element={<ScanTicketsPage />} />
                     <Route path="scan" element={<ScanTicketsPage />} />
-                    <Route path="bookings" element={<OrganizerPlaceholderPage title="Bookings" />} />
-                    <Route path="attendees" element={<OrganizerPlaceholderPage title="Attendees" />} />
+                    <Route path="bookings" element={<OrganizerBookingsPage />} />
+                    <Route path="attendees" element={<OrganizerAttendeesPage />} />
                     <Route path="payments" element={<OrganizerPaymentsPage />} />
                     <Route path="settlements" element={<OrganizerSettlementsPage />} />
                     <Route path="reports" element={<OrganizerPlaceholderPage title="Reports" />} />

@@ -168,4 +168,35 @@ type BookingRepository interface {
 		ctx context.Context,
 		eventID uuid.UUID,
 	) (AdminEventBookingStats, error)
+
+	FindOrganizerBookings(
+		ctx context.Context,
+		filter OrganizerBookingFilter,
+	) (*OrganizerBookingListResult, error)
+
+	GetOrganizerBookingStats(
+		ctx context.Context,
+		filter OrganizerBookingFilter,
+	) (*OrganizerBookingStats, error)
+
+	FindOrganizerBookingDetail(
+		ctx context.Context,
+		organizerID uuid.UUID,
+		bookingID uuid.UUID,
+	) (*OrganizerBookingDetail, error)
+
+	FindAdminBookings(
+		ctx context.Context,
+		filter AdminBookingFilter,
+	) (*AdminBookingListResult, error)
+
+	GetAdminBookingStats(
+		ctx context.Context,
+		filter AdminBookingFilter,
+	) (*AdminBookingStats, error)
+
+	FindAdminBookingDetail(
+		ctx context.Context,
+		bookingID uuid.UUID,
+	) (*AdminBookingDetail, error)
 }

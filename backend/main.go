@@ -38,6 +38,7 @@ import (
 	refundUC "github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/settlement"
+	systemmonitoring "github.com/adhithyan443/EventHub/backend/internal/usecase/system_monitoring"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
@@ -445,6 +446,21 @@ func main() {
 	}
 	organizerPaymentHandler := handler.NewOrganizerPaymentHandler(organizerPaymentUsecase, logger)
 
+	// Organizer bookings and attendees dependencies.
+	bookingRepo := repository.NewBookingRepository(db, logger)
+	organizerBookingUsecase, err := booking.NewOrganizerBookingUsecase(
+		bookingRepo,
+		ticketRepository,
+		organizerRepo,
+		eventRepository,
+		logger,
+	)
+	if err != nil {
+		logger.Error("organizer booking usecase initialization failed", "error", err)
+		return
+	}
+	organizerBookingHandler := handler.NewOrganizerBookingHandler(organizerBookingUsecase, logger)
+
 	// Organizer settlement & balance projection dependencies.
 	financeJournalRepo := repository.NewFinanceJournalRepository(db, logger)
 	refundRepo := repository.NewRefundRepository(db, logger)
@@ -499,6 +515,24 @@ func main() {
 	adminLedgerUsecase := adminledger.NewAdminLedgerUsecase(adminLedgerRepo, logger)
 	adminLedgerHandler := handler.NewAdminLedgerHandler(adminLedgerUsecase, logger)
 
+	// Admin Booking & Attendee dependencies.
+	adminBookingUsecase, err := booking.NewAdminBookingUsecase(
+		bookingRepo,
+		ticketRepository,
+		organizerRepo,
+		eventRepository,
+		logger,
+	)
+	if err != nil {
+		logger.Error("admin booking usecase initialization failed", "error", err)
+		return
+	}
+	adminBookingHandler := handler.NewAdminBookingHandler(adminBookingUsecase, logger)
+
+	systemMonitoringRepo := repository.NewSystemMonitoringRepository("app.log", logger)
+	systemMonitoringUsecase := systemmonitoring.NewSystemMonitoringUsecase(systemMonitoringRepo, logger)
+	adminSystemHandler := handler.NewAdminSystemHandler(systemMonitoringUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -507,6 +541,7 @@ func main() {
 		organizerProfileHandler,
 		organizerPaymentHandler,
 		organizerSettlementHandler,
+		organizerBookingHandler,
 		categoryHandler,
 		eventHandler,
 		seatLayoutHandler,
@@ -523,6 +558,8 @@ func main() {
 		adminSettlementHandler,
 		adminDashboardHandler,
 		adminLedgerHandler,
+		adminBookingHandler,
+		adminSystemHandler,
 		profileHandler,
 		checkInHandler,
 		jwtService,

@@ -64,7 +64,7 @@ export default function AdminEventDetailDrawer({
   const ticketTypes = Array.isArray(details?.ticket_types) ? details.ticket_types : [];
   const seatLayout = details?.seat_layout;
   const seatSections = Array.isArray(details?.seat_sections) ? details.seat_sections : [];
-  const bookingStats = details?.booking_stats || {
+  const booking_stats = details?.booking_stats || {
     total_bookings: 0,
     confirmed_bookings: 0,
     cancelled_bookings: 0,
@@ -261,7 +261,7 @@ export default function AdminEventDetailDrawer({
                   <div className="bg-[#f9f9ff] border border-[#dce2f7] rounded-xl p-3 flex items-center justify-between text-xs">
                     <div>
                       <span className="text-[#3d4947] font-medium">Event ID: </span>
-                      <span className="font-mono text-[#141b2b]">{currentEvent.id}</span>
+                      <span className="font-mono text-[#141b2b]">{currentEvent.ID}</span>
                     </div>
                     <button
                       type="button"
@@ -281,15 +281,15 @@ export default function AdminEventDetailDrawer({
                       <div>
                         <span className="text-[#3d4947] block">Event Date:</span>
                         <span className="font-semibold text-[#141b2b]">
-                          {formatDate(schedule?.event_date || currentEvent.event_date)}
+                          {formatDate(schedule?.EventDate || currentEvent.event_date)}
                         </span>
                       </div>
                       <div>
                         <span className="text-[#3d4947] block">Time:</span>
                         <span className="font-semibold text-[#141b2b]">
-                          {schedule?.is_all_day || currentEvent.is_all_day
+                          {schedule?.IsAllDay || currentEvent.is_all_day
                             ? "All-Day Event"
-                            : `${formatTime(schedule?.start_time || currentEvent.start_time)} - ${formatTime(schedule?.end_time || currentEvent.end_time)}`}
+                            : `${formatTime(schedule?.StartTime || currentEvent.start_time)} - ${formatTime(schedule?.EndTime || currentEvent.end_time)}`}
                         </span>
                       </div>
                     </div>
@@ -319,7 +319,7 @@ export default function AdminEventDetailDrawer({
                       Description
                     </h3>
                     <p className="text-xs text-[#3d4947] leading-relaxed whitespace-pre-line">
-                      {currentEvent.description || "No description provided."}
+                      {currentEvent.Description || "No description provided."}
                     </p>
                   </div>
 
@@ -356,15 +356,15 @@ export default function AdminEventDetailDrawer({
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                         <div>
                           <span className="text-[#3d4947] block">Name:</span>
-                          <span className="font-semibold text-[#141b2b]">{contact.name || "—"}</span>
+                          <span className="font-semibold text-[#141b2b]">{contact.Name || "—"}</span>
                         </div>
                         <div>
                           <span className="text-[#3d4947] block">Email:</span>
-                          <span className="font-semibold text-[#141b2b]">{contact.email || "—"}</span>
+                          <span className="font-semibold text-[#141b2b]">{contact.Email || "—"}</span>
                         </div>
                         <div>
                           <span className="text-[#3d4947] block">Phone:</span>
-                          <span className="font-semibold text-[#141b2b]">{contact.phone || "—"}</span>
+                          <span className="font-semibold text-[#141b2b]">{contact.Phone || "—"}</span>
                         </div>
                       </div>
                     </div>
@@ -452,13 +452,13 @@ export default function AdminEventDetailDrawer({
                       <div>
                         <span className="text-[#3d4947] block">Layout Mode:</span>
                         <span className="font-bold text-[#141b2b]">
-                          {setting?.seat_layout_type || currentEvent.seat_layout_type || "GENERAL"}
+                          {setting?.SeatLayoutType || currentEvent.seat_layout_type || "GENERAL"}
                         </span>
                       </div>
                       <div>
                         <span className="text-[#3d4947] block">Booking Limit / User:</span>
                         <span className="font-semibold text-[#141b2b]">
-                          {setting?.booking_limit_per_user || 10} tickets
+                          {setting?.BookingLimitPerUser || 10} tickets
                         </span>
                       </div>
                     </div>
@@ -474,13 +474,13 @@ export default function AdminEventDetailDrawer({
                         <div>
                           <span className="text-[#3d4947] block">Cancellation Allowed:</span>
                           <span className="font-semibold text-[#141b2b]">
-                            {cancellation.cancellation_allowed ? "Yes" : "No"}
+                            {cancellation.CancellationAllowed ? "Yes" : "No"}
                           </span>
                         </div>
                         <div>
                           <span className="text-[#3d4947] block">Refund Policy:</span>
                           <span className="font-semibold text-[#141b2b]">
-                            {cancellation.refund_policy || "NO_REFUND"} ({cancellation.refund_percentage}%)
+                            {cancellation.RefundPolicy || "NO_REFUND"} ({cancellation.RefundPercentage}%)
                           </span>
                         </div>
                       </div>
@@ -488,7 +488,7 @@ export default function AdminEventDetailDrawer({
                   )}
 
                   {/* Seated layout sections */}
-                  {setting?.seat_layout_type === "SEATED" ? (
+                  {setting?.SeatLayoutType === "SEATED" ? (
                     <div className="border border-[#dce2f7] rounded-xl p-4 bg-white space-y-3 text-xs">
                       <div className="flex items-center justify-between">
                         <h3 className="font-bold text-[#141b2b] uppercase tracking-wider">
@@ -515,12 +515,12 @@ export default function AdminEventDetailDrawer({
                             </thead>
                             <tbody className="divide-y divide-[#f1f3ff]">
                               {seatSections.map((sec) => (
-                                <tr key={sec.id}>
-                                  <td className="py-2 pr-2 font-medium text-[#141b2b]">{sec.name}</td>
-                                  <td className="py-2 px-2 font-mono">{formatCurrency(sec.price)}</td>
-                                  <td className="py-2 px-2">{sec.total_capacity}</td>
-                                  <td className="py-2 px-2 font-semibold text-[#00685f]">{sec.sold_quantity}</td>
-                                  <td className="py-2 pl-2 font-semibold text-[#141b2b]">{sec.available_quantity}</td>
+                                <tr key={sec.ID}>
+                                  <td className="py-2 pr-2 font-medium text-[#141b2b]">{sec.Name}</td>
+                                  <td className="py-2 px-2 font-mono">{formatCurrency(sec.Price)}</td>
+                                  <td className="py-2 px-2">{sec.TotalCapacity}</td>
+                                  <td className="py-2 px-2 font-semibold text-[#00685f]">{Number(sec.TotalCapacity) - Number(sec.AvailableQuantity)}</td>
+                                  <td className="py-2 pl-2 font-semibold text-[#141b2b]">{sec.AvailableQuantity}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -556,11 +556,11 @@ export default function AdminEventDetailDrawer({
                             <tbody className="divide-y divide-[#f1f3ff]">
                               {ticketTypes.map((tt) => (
                                 <tr key={tt.id}>
-                                  <td className="py-2 pr-2 font-medium text-[#141b2b]">{tt.name}</td>
+                                  <td className="py-2 pr-2 font-medium text-[#141b2b]">{tt.Name}</td>
                                   <td className="py-2 px-2 font-mono">{formatCurrency(tt.price)}</td>
-                                  <td className="py-2 px-2">{tt.total_quantity}</td>
+                                  <td className="py-2 px-2">{tt.TotalQuantity}</td>
                                   <td className="py-2 pl-2 font-semibold text-[#00685f]">
-                                    {tt.available_quantity}
+                                    {tt.AvailableQuantity}
                                   </td>
                                 </tr>
                               ))}
@@ -591,7 +591,7 @@ export default function AdminEventDetailDrawer({
                         Confirmed Bookings
                       </span>
                       <span className="text-xl font-bold text-[#141b2b]">
-                        {bookingStats.confirmed_bookings}
+                        {booking_stats.confirmed_bookings}
                       </span>
                     </div>
 
@@ -600,7 +600,7 @@ export default function AdminEventDetailDrawer({
                         Tickets Sold
                       </span>
                       <span className="text-xl font-bold text-[#00685f]">
-                        {bookingStats.tickets_sold}
+                        {booking_stats.tickets_sold}
                       </span>
                     </div>
 
@@ -609,7 +609,7 @@ export default function AdminEventDetailDrawer({
                         Total Gross Revenue
                       </span>
                       <span className="text-lg font-bold text-[#141b2b] font-mono">
-                        {formatCurrency(bookingStats.total_revenue)}
+                        {formatCurrency(booking_stats.total_revenue)}
                       </span>
                     </div>
 
@@ -627,7 +627,7 @@ export default function AdminEventDetailDrawer({
                         Total Orders
                       </span>
                       <span className="text-xl font-bold text-[#141b2b]">
-                        {bookingStats.total_bookings}
+                        {booking_stats.total_bookings}
                       </span>
                     </div>
 
@@ -636,7 +636,7 @@ export default function AdminEventDetailDrawer({
                         Cancelled Orders
                       </span>
                       <span className="text-xl font-bold text-[#ba1a1a]">
-                        {bookingStats.cancelled_bookings}
+                        {booking_stats.cancelled_bookings}
                       </span>
                     </div>
                   </div>
