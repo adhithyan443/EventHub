@@ -38,6 +38,7 @@ func setupRouter(
 	adminDashboardHandler *handler.AdminDashboardHandler,
 	adminLedgerHandler *handler.AdminLedgerHandler,
 	adminBookingHandler *handler.AdminBookingHandler,
+	adminSystemHandler *handler.AdminSystemHandler,
 	profileHandler *handler.ProfileHandler,
 	checkInHandler *handler.TicketCheckInHandler,
 	jwtService *token.JWTService,
@@ -104,6 +105,7 @@ func setupRouter(
 		adminDashboardHandler,
 		adminLedgerHandler,
 		adminBookingHandler,
+		adminSystemHandler,
 		jwtService,
 		userRepo,
 	)
@@ -121,11 +123,13 @@ func setupRouter(
 }
 
 func registerHealthRoutes(router *gin.Engine) {
-	router.GET("/health", func(ctx *gin.Context) {
+	healthHandler := func(ctx *gin.Context) {
 		ctx.JSON(http.StatusOK, gin.H{
 			"status": "ok",
 		})
-	})
+	}
+	router.GET("/health", healthHandler)
+	router.GET("/api/v1/health", healthHandler)
 }
 
 func registerAuthRoutes(
@@ -380,6 +384,7 @@ func registerAdminRoutes(
 	adminDashboardHandler *handler.AdminDashboardHandler,
 	adminLedgerHandler *handler.AdminLedgerHandler,
 	adminBookingHandler *handler.AdminBookingHandler,
+	adminSystemHandler *handler.AdminSystemHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -437,6 +442,14 @@ func registerAdminRoutes(
 		{
 			attendees.GET("/stats", adminBookingHandler.GetAttendeeStats)
 			attendees.GET("", adminBookingHandler.ListAttendees)
+		}
+	}
+
+	// System Monitoring endpoints
+	if adminSystemHandler != nil {
+		system := admin.Group("/system")
+		{
+			system.GET("/logs", adminSystemHandler.GetLogs)
 		}
 	}
 

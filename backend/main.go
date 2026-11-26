@@ -38,6 +38,7 @@ import (
 	refundUC "github.com/adhithyan443/EventHub/backend/internal/usecase/refund"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/reservation"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/settlement"
+	systemmonitoring "github.com/adhithyan443/EventHub/backend/internal/usecase/system_monitoring"
 	"github.com/adhithyan443/EventHub/backend/internal/usecase/ticket"
 	userUC "github.com/adhithyan443/EventHub/backend/internal/usecase/user"
 	"github.com/adhithyan443/EventHub/backend/internal/worker"
@@ -528,6 +529,10 @@ func main() {
 	}
 	adminBookingHandler := handler.NewAdminBookingHandler(adminBookingUsecase, logger)
 
+	systemMonitoringRepo := repository.NewSystemMonitoringRepository("app.log", logger)
+	systemMonitoringUsecase := systemmonitoring.NewSystemMonitoringUsecase(systemMonitoringRepo, logger)
+	adminSystemHandler := handler.NewAdminSystemHandler(systemMonitoringUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -554,6 +559,7 @@ func main() {
 		adminDashboardHandler,
 		adminLedgerHandler,
 		adminBookingHandler,
+		adminSystemHandler,
 		profileHandler,
 		checkInHandler,
 		jwtService,

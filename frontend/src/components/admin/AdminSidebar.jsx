@@ -146,8 +146,8 @@ const navGroups = [
     ],
   },
   {
-    id: "platform-configuration",
-    title: "Platform Configuration",
+    id: "platform-management",
+    title: "Platform Management",
     items: [
       {
         path: "/admin/categories",
@@ -170,6 +170,15 @@ const navGroups = [
               d="M8 0C3.58 0 0 3.58 0 8C0 12.42 3.58 16 8 16C12.42 16 16 12.42 16 8C16 3.58 12.42 0 8 0ZM8.75 12H7.25V10.5H8.75V12ZM9.07 7.75L8.4 8.44C7.86 8.98 7.5 9.5 7.5 10.5H6.5V10.25C6.5 9.42 6.84 8.67 7.38 8.13L8.31 7.19C8.58 6.92 8.75 6.54 8.75 6.12C8.75 5.29 8.08 4.62 7.25 4.62C6.42 4.62 5.75 5.29 5.75 6.12H4.25C4.25 4.46 5.59 3.12 7.25 3.12C8.91 3.12 10.25 4.46 10.25 6.12C10.25 6.78 9.98 7.37 9.07 7.75Z"
               fill="currentColor"
             />
+          </svg>
+        ),
+      },
+      {
+        path: "/admin/system-monitoring",
+        label: "System Monitoring",
+        icon: (
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
           </svg>
         ),
       },
