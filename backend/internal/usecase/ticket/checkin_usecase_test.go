@@ -321,6 +321,15 @@ func (r *mockBookingRepo) GetOrganizerBookingStats(ctx context.Context, filter d
 func (r *mockBookingRepo) FindOrganizerBookingDetail(ctx context.Context, organizerID uuid.UUID, bookingID uuid.UUID) (*domain.OrganizerBookingDetail, error) {
 	return nil, nil
 }
+func (r *mockBookingRepo) FindAdminBookings(ctx context.Context, filter domain.AdminBookingFilter) (*domain.AdminBookingListResult, error) {
+	return nil, nil
+}
+func (r *mockBookingRepo) GetAdminBookingStats(ctx context.Context, filter domain.AdminBookingFilter) (*domain.AdminBookingStats, error) {
+	return nil, nil
+}
+func (r *mockBookingRepo) FindAdminBookingDetail(ctx context.Context, bookingID uuid.UUID) (*domain.AdminBookingDetail, error) {
+	return nil, nil
+}
 
 // Mock Ticket Repository
 type mockTicketRepo struct {
@@ -387,6 +396,12 @@ func (r *mockTicketRepo) FindOrganizerAttendees(ctx context.Context, filter doma
 	return nil, nil
 }
 func (r *mockTicketRepo) GetOrganizerAttendeeStats(ctx context.Context, filter domain.OrganizerAttendeeFilter) (*domain.OrganizerAttendeeStats, error) {
+	return nil, nil
+}
+func (r *mockTicketRepo) FindAdminAttendees(ctx context.Context, filter domain.AdminAttendeeFilter) (*domain.AdminAttendeeListResult, error) {
+	return nil, nil
+}
+func (r *mockTicketRepo) GetAdminAttendeeStats(ctx context.Context, filter domain.AdminAttendeeFilter) (*domain.AdminAttendeeStats, error) {
 	return nil, nil
 }
 

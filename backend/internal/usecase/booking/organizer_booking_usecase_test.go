@@ -79,11 +79,15 @@ func (m *mockEventRepo) GetAdminStatusCounts() (domain.AdminEventStatusCounts, e
 }
 
 type mockBookingRepo struct {
-	listResult     *domain.OrganizerBookingListResult
-	statsResult    *domain.OrganizerBookingStats
-	detailResult   *domain.OrganizerBookingDetail
-	capturedFilter domain.OrganizerBookingFilter
-	err            error
+	listResult           *domain.OrganizerBookingListResult
+	statsResult          *domain.OrganizerBookingStats
+	detailResult         *domain.OrganizerBookingDetail
+	adminListResult      *domain.AdminBookingListResult
+	adminStatsResult     *domain.AdminBookingStats
+	adminDetailResult    *domain.AdminBookingDetail
+	capturedFilter       domain.OrganizerBookingFilter
+	capturedAdminBFilter domain.AdminBookingFilter
+	err                  error
 }
 
 func (m *mockBookingRepo) Create(ctx context.Context, booking *domain.Booking, items []domain.BookingItem) error {
@@ -164,12 +168,38 @@ func (m *mockBookingRepo) FindOrganizerBookingDetail(ctx context.Context, organi
 	}
 	return m.detailResult, nil
 }
+func (m *mockBookingRepo) FindAdminBookings(ctx context.Context, filter domain.AdminBookingFilter) (*domain.AdminBookingListResult, error) {
+	m.capturedAdminBFilter = filter
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.adminListResult, nil
+}
+func (m *mockBookingRepo) GetAdminBookingStats(ctx context.Context, filter domain.AdminBookingFilter) (*domain.AdminBookingStats, error) {
+	m.capturedAdminBFilter = filter
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.adminStatsResult, nil
+}
+func (m *mockBookingRepo) FindAdminBookingDetail(ctx context.Context, bookingID uuid.UUID) (*domain.AdminBookingDetail, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.adminDetailResult == nil {
+		return nil, domain.ErrBookingNotFound
+	}
+	return m.adminDetailResult, nil
+}
 
 type mockTicketRepo struct {
-	attendeesResult *domain.OrganizerAttendeeListResult
-	statsResult     *domain.OrganizerAttendeeStats
-	capturedFilter  domain.OrganizerAttendeeFilter
-	err             error
+	attendeesResult      *domain.OrganizerAttendeeListResult
+	statsResult          *domain.OrganizerAttendeeStats
+	adminAttendeesResult *domain.AdminAttendeeListResult
+	adminStatsResult     *domain.AdminAttendeeStats
+	capturedFilter       domain.OrganizerAttendeeFilter
+	capturedAdminAFilter domain.AdminAttendeeFilter
+	err                  error
 }
 
 func (m *mockTicketRepo) Create(ctx context.Context, ticket *domain.Ticket) error { return nil }
@@ -219,6 +249,20 @@ func (m *mockTicketRepo) GetOrganizerAttendeeStats(ctx context.Context, filter d
 		return nil, m.err
 	}
 	return m.statsResult, nil
+}
+func (m *mockTicketRepo) FindAdminAttendees(ctx context.Context, filter domain.AdminAttendeeFilter) (*domain.AdminAttendeeListResult, error) {
+	m.capturedAdminAFilter = filter
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.adminAttendeesResult, nil
+}
+func (m *mockTicketRepo) GetAdminAttendeeStats(ctx context.Context, filter domain.AdminAttendeeFilter) (*domain.AdminAttendeeStats, error) {
+	m.capturedAdminAFilter = filter
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.adminStatsResult, nil
 }
 
 func setupOrganizerTestEnv() (
@@ -693,5 +737,109 @@ func TestOrganizerAttendees(t *testing.T) {
 
 		_, err = uc.GetAttendeeStats(ctx, userID, domain.OrganizerAttendeeFilter{})
 		assert.EqualError(t, err, "attendee repo failed")
+	})
+}
+
+func TestAdminBookingUsecase(t *testing.T) {
+	bRepo := &mockBookingRepo{}
+	tRepo := &mockTicketRepo{}
+	u, err := NewAdminBookingUsecase(bRepo, tRepo, nil, nil, nil)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+
+	t.Run("list bookings success", func(t *testing.T) {
+		bRepo.adminListResult = &domain.AdminBookingListResult{
+			Bookings: []domain.AdminBookingListItem{
+				{
+					ID:            uuid.New(),
+					BookingNumber: "BK-ADM-1",
+					Organizer: domain.AdminOrganizerBrief{
+						BusinessName: "Grand Shows",
+					},
+				},
+			},
+			TotalRecords: 1,
+			Page:         1,
+			Limit:        10,
+			TotalPages:   1,
+		}
+
+		res, err := u.ListBookings(ctx, domain.AdminBookingFilter{Page: 1, Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(res.Bookings))
+		assert.Equal(t, "BK-ADM-1", res.Bookings[0].BookingNumber)
+		assert.Equal(t, "Grand Shows", res.Bookings[0].Organizer.BusinessName)
+	})
+
+	t.Run("list bookings validation", func(t *testing.T) {
+		from := time.Now()
+		to := from.Add(-1 * time.Hour)
+		_, err := u.ListBookings(ctx, domain.AdminBookingFilter{Page: 1, Limit: 10, From: &from, To: &to})
+		assert.ErrorIs(t, err, ErrInvalidDateRange)
+
+		_, err = u.ListBookings(ctx, domain.AdminBookingFilter{Page: 1, Limit: 10, BookingStatus: "INVALID"})
+		assert.ErrorIs(t, err, ErrInvalidBookingStatus)
+
+		_, err = u.ListBookings(ctx, domain.AdminBookingFilter{Page: 1, Limit: 10, PaymentStatus: "INVALID"})
+		assert.ErrorIs(t, err, ErrInvalidPaymentStatus)
+
+		_, err = u.ListBookings(ctx, domain.AdminBookingFilter{Page: 0, Limit: 10})
+		assert.ErrorIs(t, err, ErrInvalidPagination)
+	})
+
+	t.Run("booking stats", func(t *testing.T) {
+		bRepo.adminStatsResult = &domain.AdminBookingStats{
+			TotalBookings:     100,
+			ConfirmedBookings: 90,
+			CancelledBookings: 10,
+		}
+
+		res, err := u.GetBookingStats(ctx, domain.AdminBookingFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(100), res.TotalBookings)
+	})
+
+	t.Run("booking detail", func(t *testing.T) {
+		_, err := u.GetBookingDetail(ctx, uuid.Nil)
+		assert.ErrorIs(t, err, ErrInvalidBookingID)
+
+		bID := uuid.New()
+		bRepo.adminDetailResult = &domain.AdminBookingDetail{
+			ID:            bID,
+			BookingNumber: "BK-ADM-DETAIL",
+		}
+		detail, err := u.GetBookingDetail(ctx, bID)
+		require.NoError(t, err)
+		assert.Equal(t, "BK-ADM-DETAIL", detail.BookingNumber)
+	})
+
+	t.Run("attendees list and stats", func(t *testing.T) {
+		tRepo.adminAttendeesResult = &domain.AdminAttendeeListResult{
+			Attendees: []domain.AdminAttendeeListItem{
+				{
+					TicketID:   uuid.New(),
+					TicketCode: "TCK-ADM-1",
+				},
+			},
+			TotalRecords: 1,
+			Page:         1,
+			Limit:        10,
+			TotalPages:   1,
+		}
+
+		res, err := u.ListAttendees(ctx, domain.AdminAttendeeFilter{Page: 1, Limit: 10})
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(res.Attendees))
+
+		_, err = u.ListAttendees(ctx, domain.AdminAttendeeFilter{Page: 1, Limit: 10, CheckInStatus: "INVALID"})
+		assert.ErrorIs(t, err, ErrInvalidCheckInStatus)
+
+		tRepo.adminStatsResult = &domain.AdminAttendeeStats{
+			TotalIssuedTickets: 200,
+		}
+		stats, err := u.GetAttendeeStats(ctx, domain.AdminAttendeeFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, int64(200), stats.TotalIssuedTickets)
 	})
 }

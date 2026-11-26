@@ -514,6 +514,20 @@ func main() {
 	adminLedgerUsecase := adminledger.NewAdminLedgerUsecase(adminLedgerRepo, logger)
 	adminLedgerHandler := handler.NewAdminLedgerHandler(adminLedgerUsecase, logger)
 
+	// Admin Booking & Attendee dependencies.
+	adminBookingUsecase, err := booking.NewAdminBookingUsecase(
+		bookingRepo,
+		ticketRepository,
+		organizerRepo,
+		eventRepository,
+		logger,
+	)
+	if err != nil {
+		logger.Error("admin booking usecase initialization failed", "error", err)
+		return
+	}
+	adminBookingHandler := handler.NewAdminBookingHandler(adminBookingUsecase, logger)
+
 	// Router setup.
 	router := setupRouter(
 		logger,
@@ -539,6 +553,7 @@ func main() {
 		adminSettlementHandler,
 		adminDashboardHandler,
 		adminLedgerHandler,
+		adminBookingHandler,
 		profileHandler,
 		checkInHandler,
 		jwtService,

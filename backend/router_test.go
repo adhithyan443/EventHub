@@ -36,6 +36,7 @@ func TestSetupRouter(t *testing.T) {
 		&handler.AdminSettlementHandler{},
 		nil,
 		nil,
+		&handler.AdminBookingHandler{},
 		&handler.ProfileHandler{},
 		&handler.TicketCheckInHandler{},
 		jwtSvc,

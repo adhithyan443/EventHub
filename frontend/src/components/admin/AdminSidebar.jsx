@@ -80,6 +80,18 @@ const navItems = [
     ),
   },
   {
+    path: "/admin/attendees",
+    label: "Attendees",
+    icon: (
+      <svg width="18" height="14" viewBox="0 0 22 16" fill="none">
+        <path
+          d="M15.5 8C17.43 8 18.99 6.43 18.99 4.5C18.99 2.57 17.43 1 15.5 1C13.57 1 12 2.57 12 4.5C12 6.43 13.57 8 15.5 8ZM6.5 8C8.43 8 9.99 6.43 9.99 4.5C9.99 2.57 8.43 1 6.5 1C4.57 1 3 2.57 3 4.5C3 6.43 4.57 8 6.5 8ZM6.5 10C3.83 10 0.5 11.34 0.5 14V16H12.5V14C12.5 11.34 9.17 10 6.5 10ZM15.5 10C15.14 10 14.73 10.03 14.3 10.09C15.59 11.02 16.5 12.33 16.5 14V16H21.5V14C21.5 11.34 18.17 10 15.5 10Z"
+          fill="currentColor"
+        />
+      </svg>
+    ),
+  },
+  {
     path: "/admin/payments",
     label: "Payments & Refunds",
     icon: (

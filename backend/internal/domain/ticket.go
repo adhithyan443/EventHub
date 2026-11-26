@@ -105,4 +105,14 @@ type TicketRepository interface {
 		ctx context.Context,
 		filter OrganizerAttendeeFilter,
 	) (*OrganizerAttendeeStats, error)
+
+	FindAdminAttendees(
+		ctx context.Context,
+		filter AdminAttendeeFilter,
+	) (*AdminAttendeeListResult, error)
+
+	GetAdminAttendeeStats(
+		ctx context.Context,
+		filter AdminAttendeeFilter,
+	) (*AdminAttendeeStats, error)
 }

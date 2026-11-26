@@ -184,4 +184,19 @@ type BookingRepository interface {
 		organizerID uuid.UUID,
 		bookingID uuid.UUID,
 	) (*OrganizerBookingDetail, error)
+
+	FindAdminBookings(
+		ctx context.Context,
+		filter AdminBookingFilter,
+	) (*AdminBookingListResult, error)
+
+	GetAdminBookingStats(
+		ctx context.Context,
+		filter AdminBookingFilter,
+	) (*AdminBookingStats, error)
+
+	FindAdminBookingDetail(
+		ctx context.Context,
+		bookingID uuid.UUID,
+	) (*AdminBookingDetail, error)
 }

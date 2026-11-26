@@ -37,6 +37,7 @@ func setupRouter(
 	adminSettlementHandler *handler.AdminSettlementHandler,
 	adminDashboardHandler *handler.AdminDashboardHandler,
 	adminLedgerHandler *handler.AdminLedgerHandler,
+	adminBookingHandler *handler.AdminBookingHandler,
 	profileHandler *handler.ProfileHandler,
 	checkInHandler *handler.TicketCheckInHandler,
 	jwtService *token.JWTService,
@@ -102,6 +103,7 @@ func setupRouter(
 		adminSettlementHandler,
 		adminDashboardHandler,
 		adminLedgerHandler,
+		adminBookingHandler,
 		jwtService,
 		userRepo,
 	)
@@ -377,6 +379,7 @@ func registerAdminRoutes(
 	adminSettlementHandler *handler.AdminSettlementHandler,
 	adminDashboardHandler *handler.AdminDashboardHandler,
 	adminLedgerHandler *handler.AdminLedgerHandler,
+	adminBookingHandler *handler.AdminBookingHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
 ) {
@@ -418,6 +421,22 @@ func registerAdminRoutes(
 			settlements.POST("/:id/approve", adminSettlementHandler.ApproveSettlement)
 			settlements.POST("/:id/reject", adminSettlementHandler.RejectSettlement)
 			settlements.POST("/:id/retry", adminSettlementHandler.RetrySettlement)
+		}
+	}
+
+	// Booking & Attendee management endpoints
+	if adminBookingHandler != nil {
+		bookings := admin.Group("/bookings")
+		{
+			bookings.GET("/stats", adminBookingHandler.GetBookingStats)
+			bookings.GET("", adminBookingHandler.ListBookings)
+			bookings.GET("/:id", adminBookingHandler.GetBookingDetail)
+		}
+
+		attendees := admin.Group("/attendees")
+		{
+			attendees.GET("/stats", adminBookingHandler.GetAttendeeStats)
+			attendees.GET("", adminBookingHandler.ListAttendees)
 		}
 	}
 
