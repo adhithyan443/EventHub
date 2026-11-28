@@ -118,7 +118,7 @@ func setupRouter(
 	registerBookingRoutes(router, bookingHandler, jwtService, userRepo)
 	registerPaymentRoutes(router, paymentHandler, jwtService, userRepo)
 	registerTicketRoutes(router, ticketHandler, jwtService, userRepo)
-	registerProfileRoutes(router, profileHandler, jwtService, userRepo)
+	registerProfileRoutes(router, profileHandler, jwtService, userRepo, logger)
 
 	return router
 }
@@ -676,7 +676,14 @@ func registerProfileRoutes(
 	profileHandler *handler.ProfileHandler,
 	jwtService *token.JWTService,
 	userRepo domain.UserRepository,
+	logger *slog.Logger,
 ) {
+	rateLimiter := middleware.NewRateLimiter(
+		5,
+		time.Minute,
+		logger,
+	)
+
 	profile := router.Group("/api/v1/profile")
 	profile.Use(
 		middleware.Auth(jwtService),
@@ -685,6 +692,7 @@ func registerProfileRoutes(
 
 	profile.GET("", profileHandler.GetProfile)
 	profile.PUT("", profileHandler.UpdateProfile)
+	profile.PUT("/password", rateLimiter.Middleware(), profileHandler.UpdatePassword)
 	profile.POST("/email/request-change", profileHandler.RequestEmailChange)
 	profile.POST("/email/resend-otp", profileHandler.ResendEmailChangeOTP)
 	profile.POST("/email/verify-change", profileHandler.VerifyEmailChange)

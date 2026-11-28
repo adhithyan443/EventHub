@@ -27,6 +27,9 @@ func NewRateLimiter(
 	window time.Duration,
 	logger *slog.Logger,
 ) *RateLimiter {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &RateLimiter{
 		clients:     make(map[string]*clientRateLimit),
 		maxRequests: maxRequests,

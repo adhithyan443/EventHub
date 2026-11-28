@@ -84,6 +84,41 @@ func (h *ProfileHandler) UpdateProfile(ctx *gin.Context) {
 	})
 }
 
+type updatePasswordRequest struct {
+	CurrentPassword string `json:"current_password" binding:"required"`
+	NewPassword     string `json:"new_password" binding:"required"`
+}
+
+func (h *ProfileHandler) UpdatePassword(ctx *gin.Context) {
+	userID, ok := h.getUserID(ctx)
+	if !ok {
+		return
+	}
+
+	var req updatePasswordRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{
+			"code":    "VALIDATION_ERROR",
+			"message": "current_password and new_password are required",
+		})
+		return
+	}
+
+	err := h.usecase.UpdatePassword(ctx.Request.Context(), userID, profile.UpdatePasswordInput{
+		CurrentPassword: req.CurrentPassword,
+		NewPassword:     req.NewPassword,
+	})
+	if err != nil {
+		ctx.Error(err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Password updated successfully. Please log in again with your new password.",
+	})
+}
+
 type requestEmailChangeRequest struct {
 	NewEmail string `json:"new_email" binding:"required,email"`
 }

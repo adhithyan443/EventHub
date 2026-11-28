@@ -21,6 +21,7 @@ export default function ProfilePage() {
 
     const [showLogoutModal, setShowLogoutModal] = useState(false);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
 
     // TODO: replace with real fields once /auth/profile returns phone/memberSince
     const displayUser = {
@@ -56,8 +57,15 @@ export default function ProfilePage() {
 
                 <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 w-full items-start">
                     <div className="lg:col-span-5 flex flex-col gap-6">
-                        <UnifiedProfileCard />
-                        <AccountSettingsCard onLogout={() => setShowLogoutModal(true)} />
+                        <UnifiedProfileCard
+                            isPasswordModalOpen={isPasswordModalOpen}
+                            onPasswordModalClose={() => setIsPasswordModalOpen(false)}
+                            onOpenPasswordModal={() => setIsPasswordModalOpen(true)}
+                        />
+                        <AccountSettingsCard
+                            onLogout={() => setShowLogoutModal(true)}
+                            onChangePassword={() => setIsPasswordModalOpen(true)}
+                        />
                     </div>
 
                     <div className="lg:col-span-7 flex flex-col gap-6">

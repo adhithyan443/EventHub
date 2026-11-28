@@ -2,9 +2,16 @@ import { useState, useEffect, useRef } from "react";
 import useAuthStore from "../../store/authStore";
 import { updateProfile, uploadAvatar, removeAvatar, getProfile } from "../../api/profileApi";
 import EmailChangeModal from "./EmailChangeModal";
+import ChangePasswordModal from "./ChangePasswordModal";
 import notify from "../../utils/toast";
 
-export default function UnifiedProfileCard({ title = "Personal Information", subtitle = "Manage your personal profile and account credentials." }) {
+export default function UnifiedProfileCard({
+  title = "Personal Information",
+  subtitle = "Manage your personal profile and account credentials.",
+  isPasswordModalOpen: externalIsPasswordModalOpen,
+  onPasswordModalClose: externalOnPasswordModalClose,
+  onOpenPasswordModal: externalOnOpenPasswordModal,
+}) {
   const user = useAuthStore((state) => state.user);
   const updateUser = useAuthStore((state) => state.updateUser);
   const revalidateSession = useAuthStore((state) => state.revalidateSession);
@@ -22,9 +29,19 @@ export default function UnifiedProfileCard({ title = "Personal Information", sub
   const [isUploading, setIsUploading] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
+  const [internalPasswordModalOpen, setInternalPasswordModalOpen] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
   const hasRetriedRef = useRef(false);
   const fileInputRef = useRef(null);
+
+  const isPasswordModalOpen =
+    externalIsPasswordModalOpen !== undefined
+      ? externalIsPasswordModalOpen
+      : internalPasswordModalOpen;
+  const openPasswordModal =
+    externalOnOpenPasswordModal || (() => setInternalPasswordModalOpen(true));
+  const closePasswordModal =
+    externalOnPasswordModalClose || (() => setInternalPasswordModalOpen(false));
 
   // Sync initial form values from authStore user
   useEffect(() => {
@@ -307,6 +324,30 @@ export default function UnifiedProfileCard({ title = "Personal Information", sub
           </p>
         </div>
 
+        {/* Password Field with Change Button */}
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-semibold text-slate-700">Password</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              disabled
+              value="••••••••••••"
+              aria-label="Password hidden"
+              className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-500 tracking-widest cursor-not-allowed select-none"
+            />
+            <button
+              type="button"
+              onClick={openPasswordModal}
+              className="shrink-0 px-4 py-2.5 rounded-xl border border-slate-300 hover:border-slate-400 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 transition-colors cursor-pointer shadow-xs"
+            >
+              Change Password
+            </button>
+          </div>
+          <p className="text-[11px] text-slate-500">
+            For security, use at least 8 characters with uppercase, lowercase, numbers, and symbols.
+          </p>
+        </div>
+
         {/* Phone Field */}
         <div className="flex flex-col gap-1.5">
           <label className="text-xs font-semibold text-slate-700">Phone Number</label>
@@ -364,6 +405,12 @@ export default function UnifiedProfileCard({ title = "Personal Information", sub
         onSuccess={(updated) => {
           if (updated) updateUser(updated);
         }}
+      />
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={isPasswordModalOpen}
+        onClose={closePasswordModal}
       />
     </div>
   );

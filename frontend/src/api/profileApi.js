@@ -73,3 +73,12 @@ export const removeAvatar = async () => {
   const response = await apiClient.delete("/profile/avatar");
   return response.data;
 };
+
+/**
+ * Update user password (requires current password verification).
+ * @param {{ current_password: string, new_password: string }} data
+ */
+export const updatePassword = async (data) => {
+  const response = await apiClient.put("/profile/password", data);
+  return response.data;
+};

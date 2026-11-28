@@ -18,14 +18,16 @@ import (
 
 	"github.com/adhithyan443/EventHub/backend/internal/domain"
 	appErrors "github.com/adhithyan443/EventHub/backend/internal/errors"
+	"github.com/adhithyan443/EventHub/backend/internal/usecase/auth"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	maxOTPAttempts      = 5
-	otpExpiryDuration   = 10 * time.Minute
-	resendCooldownTime  = 60 * time.Second
-	maxAvatarFileSize   = 5 * 1024 * 1024 // 5 MB
+	maxOTPAttempts     = 5
+	otpExpiryDuration  = 10 * time.Minute
+	resendCooldownTime = 60 * time.Second
+	maxAvatarFileSize  = 5 * 1024 * 1024 // 5 MB
 )
 
 var (
@@ -48,6 +50,11 @@ type ProfileResponse struct {
 type UpdateProfileInput struct {
 	FullName string `json:"full_name"`
 	Phone    string `json:"phone"`
+}
+
+type UpdatePasswordInput struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
 }
 
 type EmailChangeRequestResponse struct {
@@ -190,6 +197,70 @@ func (u *ProfileUsecase) UpdateProfile(ctx context.Context, userID uuid.UUID, in
 		CreatedAt:    user.CreatedAt,
 		UpdatedAt:    user.UpdatedAt,
 	}, nil
+}
+
+func (u *ProfileUsecase) UpdatePassword(ctx context.Context, userID uuid.UUID, input UpdatePasswordInput) error {
+	user, err := u.userRepo.FindByID(userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrUserNotFound) {
+			return appErrors.NewNotFoundError("user not found")
+		}
+		u.logger.Error("update_password_lookup_failed", "user_id", userID, "error", err)
+		return err
+	}
+
+	if user.Status != "ACTIVE" {
+		u.logger.Warn("update_password_failed", "user_id", userID, "reason", "account_inactive")
+		return appErrors.NewUnauthorizedError("user account is not active")
+	}
+
+	if strings.TrimSpace(user.PasswordHash) == "" {
+		u.logger.Warn("update_password_failed", "user_id", userID, "reason", "oauth_user_no_password")
+		return appErrors.NewValidationError("accounts created with Google OAuth do not have an existing password; please use Forgot Password on the login page to set one")
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.CurrentPassword)); err != nil {
+		u.logger.Warn("update_password_failed", "user_id", userID, "reason", "invalid_current_password")
+		return appErrors.NewUnauthorizedError("current password is incorrect")
+	}
+
+	if input.CurrentPassword == input.NewPassword {
+		u.logger.Warn("update_password_failed", "user_id", userID, "reason", "same_password")
+		return appErrors.NewValidationError("new password cannot be the same as the current password")
+	}
+
+	if !auth.ValidatePassword(input.NewPassword) {
+		u.logger.Warn("update_password_failed", "user_id", userID, "reason", "invalid_new_password")
+		return appErrors.NewValidationError("new password must contain at least 8 characters, maximum 72 characters, and include uppercase, lowercase, digit, and special characters")
+	}
+
+	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		u.logger.Error("update_password_hash_failed", "user_id", userID, "error", err)
+		return appErrors.NewInternalError("failed to process password")
+	}
+
+	user.PasswordHash = string(newHash)
+	user.UpdatedAt = time.Now()
+
+	err = u.txManager.WithinTransaction(func(tx domain.TransactionRepositories) error {
+		if err := tx.UserRepository().Update(user); err != nil {
+			return err
+		}
+
+		if err := tx.RefreshTokenRepository().RevokeAllByUserID(userID); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		u.logger.Error("update_password_transaction_failed", "user_id", userID, "error", err)
+		return appErrors.NewInternalError("failed to update password")
+	}
+
+	u.logger.Info("password_updated_successfully", "user_id", userID)
+	return nil
 }
 
 func (u *ProfileUsecase) RequestEmailChange(ctx context.Context, userID uuid.UUID, newEmail string) (*EmailChangeRequestResponse, error) {

@@ -6,7 +6,7 @@ const settingsRows = [
     { label: "Help & Support", icon: HelpIcon },
 ];
 
-export default function AccountSettingsCard({ onLogout }) {
+export default function AccountSettingsCard({ onLogout, onChangePassword }) {
     return (
         <div className="bg-white rounded-2xl border border-slate-200/80 p-6 flex flex-col">
             <h2 className="font-display text-xl font-bold text-slate-900 mb-2">Account Settings</h2>
@@ -15,7 +15,9 @@ export default function AccountSettingsCard({ onLogout }) {
                 {settingsRows.map(({ label, icon: Icon }) => (
                     <button
                         key={label}
-                        className="flex items-center justify-between py-3.5 text-sm text-slate-700 hover:text-primary transition-colors text-left"
+                        type="button"
+                        onClick={label === "Privacy & Security" ? onChangePassword : undefined}
+                        className="flex items-center justify-between py-3.5 text-sm text-slate-700 hover:text-primary transition-colors text-left cursor-pointer"
                     >
                         <span className="flex items-center gap-3 text-slate-700">
                             <span className="text-slate-500"><Icon /></span>

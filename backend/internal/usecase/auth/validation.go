@@ -36,15 +36,24 @@ func validatePhone(phone string) bool {
 	return regexp.MustCompile(`^[6-9][0-9]{9}$`).MatchString(phone)
 }
 
+var (
+	hasUpperRegex   = regexp.MustCompile(`[A-Z]`)
+	hasLowerRegex   = regexp.MustCompile(`[a-z]`)
+	hasNumberRegex  = regexp.MustCompile(`[0-9]`)
+	hasSpecialRegex = regexp.MustCompile(`[^A-Za-z0-9]`)
+)
+
 func validatePassword(password string) bool {
+	return ValidatePassword(password)
+}
+
+func ValidatePassword(password string) bool {
 	if len(password) < 8 || len(password) > 72 {
 		return false
 	}
 
-	hasUpper := regexp.MustCompile(`[A-Z]`).MatchString(password)
-	hasLower := regexp.MustCompile(`[a-z]`).MatchString(password)
-	hasNumber := regexp.MustCompile(`[0-9]`).MatchString(password)
-	hasSpecial := regexp.MustCompile(`[^A-Za-z0-9]`).MatchString(password)
-
-	return hasUpper && hasLower && hasNumber && hasSpecial
+	return hasUpperRegex.MatchString(password) &&
+		hasLowerRegex.MatchString(password) &&
+		hasNumberRegex.MatchString(password) &&
+		hasSpecialRegex.MatchString(password)
 }

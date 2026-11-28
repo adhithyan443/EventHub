@@ -5,6 +5,7 @@ test("profileApi: exports all unified profile management functions", async () =>
   const {
     getProfile,
     updateProfile,
+    updatePassword,
     requestEmailChange,
     resendEmailChangeOTP,
     verifyEmailChange,
@@ -14,6 +15,7 @@ test("profileApi: exports all unified profile management functions", async () =>
 
   assert.strictEqual(typeof getProfile, "function");
   assert.strictEqual(typeof updateProfile, "function");
+  assert.strictEqual(typeof updatePassword, "function");
   assert.strictEqual(typeof requestEmailChange, "function");
   assert.strictEqual(typeof resendEmailChangeOTP, "function");
   assert.strictEqual(typeof verifyEmailChange, "function");
@@ -151,4 +153,115 @@ test("Unified profile role badges across CUSTOMER, ORGANIZER, and ADMIN", () => 
     assert.ok(roleBadgeStyles[role], `Style defined for role ${role}`);
     assert.strictEqual(typeof roleBadgeStyles[role], "string");
   }
+});
+
+test("Change Password validation logic: complexity, confirmation matching, and distinct password rules", async () => {
+  const { validatePassword } = await import("../../utils/validation.js");
+
+  const validateChangePasswordForm = ({ currentPassword, newPassword, confirmPassword }) => {
+    const errors = {};
+    if (!currentPassword) errors.currentPassword = "Current password is required";
+    if (!newPassword) {
+      errors.newPassword = "New password is required";
+    } else {
+      const err = validatePassword(newPassword);
+      if (err) errors.newPassword = err;
+    }
+    if (!confirmPassword) {
+      errors.confirmPassword = "Please confirm your new password";
+    } else if (newPassword && newPassword !== confirmPassword) {
+      errors.confirmPassword = "Passwords do not match";
+    }
+    if (currentPassword && newPassword && currentPassword === newPassword) {
+      errors.newPassword = "New password cannot be the same as your current password";
+    }
+    return errors;
+  };
+
+  // Valid form
+  const validResult = validateChangePasswordForm({
+    currentPassword: "OldPassword123!",
+    newPassword: "NewSecurePassword456!",
+    confirmPassword: "NewSecurePassword456!",
+  });
+  assert.strictEqual(Object.keys(validResult).length, 0);
+
+  // Missing current password
+  const missingCurrent = validateChangePasswordForm({
+    currentPassword: "",
+    newPassword: "NewSecurePassword456!",
+    confirmPassword: "NewSecurePassword456!",
+  });
+  assert.strictEqual(missingCurrent.currentPassword, "Current password is required");
+
+  // Missing new password
+  const missingNew = validateChangePasswordForm({
+    currentPassword: "OldPassword123!",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  assert.strictEqual(missingNew.newPassword, "New password is required");
+
+  // Weak new password
+  const weakNew = validateChangePasswordForm({
+    currentPassword: "OldPassword123!",
+    newPassword: "weakpassword",
+    confirmPassword: "weakpassword",
+  });
+  assert.ok(weakNew.newPassword);
+
+  // Mismatch confirm password
+  const mismatchConfirm = validateChangePasswordForm({
+    currentPassword: "OldPassword123!",
+    newPassword: "NewSecurePassword456!",
+    confirmPassword: "DifferentPassword456!",
+  });
+  assert.strictEqual(mismatchConfirm.confirmPassword, "Passwords do not match");
+
+  // Identical current and new password rejected
+  const samePassword = validateChangePasswordForm({
+    currentPassword: "SamePassword123!",
+    newPassword: "SamePassword123!",
+    confirmPassword: "SamePassword123!",
+  });
+  assert.strictEqual(
+    samePassword.newPassword,
+    "New password cannot be the same as your current password"
+  );
+});
+
+test("Change Password success flow: clears authentication state and stored tokens", async () => {
+  const storageMap = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storageMap.get(key) || null,
+    setItem: (key, val) => storageMap.set(key, String(val)),
+    removeItem: (key) => storageMap.delete(key),
+    clear: () => storageMap.clear(),
+  };
+
+  const { default: useAuthStore, STORAGE_KEYS } = await import("../../store/authStore.js");
+
+  // Simulate logged-in user
+  useAuthStore.getState().setAuth(
+    { id: "user-123", email: "test@example.com", role: "CUSTOMER" },
+    "valid-access-token",
+    "valid-refresh-token"
+  );
+
+  assert.strictEqual(useAuthStore.getState().isAuthenticated, true);
+  assert.ok(localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN));
+  assert.ok(localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN));
+  assert.ok(localStorage.getItem(STORAGE_KEYS.USER));
+
+  // Execute clearAuth as triggered on successful password update
+  useAuthStore.getState().clearAuth();
+
+  assert.strictEqual(useAuthStore.getState().isAuthenticated, false);
+  assert.strictEqual(useAuthStore.getState().user, null);
+  assert.strictEqual(useAuthStore.getState().accessToken, null);
+  assert.strictEqual(useAuthStore.getState().refreshToken, null);
+
+  assert.strictEqual(localStorage.getItem(STORAGE_KEYS.ACCESS_TOKEN), null);
+  assert.strictEqual(localStorage.getItem(STORAGE_KEYS.REFRESH_TOKEN), null);
+  assert.strictEqual(localStorage.getItem(STORAGE_KEYS.USER), null);
 });
